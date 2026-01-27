@@ -1,0 +1,15 @@
+# Rust
+target/
+**/target/
+Cargo.lock
+
+# Local workspace blobs (do NOT commit)
+images/
+uefi/
+build/
+logs/
+
+# Editor/OS
+.DS_Store
+*.swp
+*.swo
