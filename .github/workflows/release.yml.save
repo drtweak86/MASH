@@ -48,13 +48,4 @@ jobs:
 
           # Stable "latest" filename (lives inside the SAME release)
           (cd dist && cp mash-installer-${{ github.ref_name }}-linux-aarch64.tar.gz mash-installer-latest-linux-aarch64.tar.gz)
-          (cd dist && sha256sum mash-installer-latest-linux-aarch64.tar.gz > mash-installer-latest-linux-aarch64.tar.gz.sha256)
-
-      - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/mash-installer-${{ github.ref_name }}-linux-aarch64.tar.gz
-            dist/mash-installer-${{ github.ref_name }}-linux-aarch64.tar.gz.sha256
-            dist/mash-installer-latest-linux-aarch64.tar.gz
-            dist/mash-installer-latest-linux-aarch64.tar.gz.sha256
+          (cd dist && sha2
