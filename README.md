@@ -5,3 +5,9 @@ A Rust-based “Kung Fu master” that orchestrates tools (rsync/parted/losetup/
 ## Quick start (Pi OS)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Drtweak/MASH/main/install.sh | bash
+
+# 🦀 MASH Installer
+
+Version: **0.2.0**
+
+A Rust-powered installer for Fedora-on-Pi with guided “Dojo” configuration.
