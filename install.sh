@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# set -u safety (must exist before any use)
+ARCH="${ARCH:-}"
+VERSION="${VERSION:-}"
 
-# Defaults for set -u safety (populated in main)
-ARCH=""
-VERSION=""
+
 
 
 # ==========================================================
@@ -32,7 +33,6 @@ INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 TEMP_DIR="$(mktemp -d /tmp/mash-install-XXXXXX)"
 
 # Global arch (used by install_binaries)
-ARCH=""
 
 log_info()    { echo -e "${BLUE}[INFO]${NC} $*" >&2; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $*" >&2; }
@@ -53,14 +53,15 @@ check_root() {
 }
 
 detect_arch() {
-  local arch
-  arch="$(uname -m)"
-  case "$ARCH" in
+  local m
+  m="1000 4 20 24 27 29 44 46 60 100 102 108 986 988 989 992 996 1000uname -m)"
+  case "" in
     aarch64|arm64) echo "aarch64-unknown-linux-gnu" ;;
     x86_64|amd64)  echo "x86_64-unknown-linux-gnu" ;;
-    *) log_error "Unsupported architecture: $ARCH (supported: aarch64, x86_64)"; exit 1 ;;
+    *) log_error "Unsupported architecture:  (supported: aarch64, x86_64)"; exit 1 ;;
   esac
 }
+
 
 # Lightweight GitHub API helper
 gh_api() {
