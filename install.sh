@@ -332,10 +332,10 @@ EOF
   log_info "Latest version: ${version}"
 
   log_info "Downloading MASH Installer ${version} for ${arch}..."
-  archive="$(download_release_asset "$version" "$arch")"
+  archive="$(download_release_asset "$version" "$ARCH")"
 
   log_info "Extracting..."
-  extract_archive "$archive"
+  extract_archive "$ARCHive"
 
   log_info "Installing..."
   install_binaries
