@@ -98,47 +98,6 @@ jobs:
         sudo apt-get install -y qt6-base-dev qt6-base-dev-tools cmake build-essential
     
     - name: Configure CMake
-      working-directory: qt-gui
-      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
-    
-    - name: Build
-      working-directory: qt-gui
-      run: cmake --build build --config Release
-    
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: mash-installer-qt
-        path: qt-gui/build/mash-installer-qt
-        retention-days: 30
-
-  create-release:
-    name: Create Release
-    needs: [build-rust, build-qt]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Download all artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-    
-    - name: Create release archive
-      run: |
-        cd artifacts
-        tar -czf ../mash-installer-${{ github.ref_name }}.tar.gz \
-          mash-installer-aarch64-unknown-linux-gnu/mash-installer-aarch64-unknown-linux-gnu \
-          mash-installer-x86_64-unknown-linux-gnu/mash-installer-x86_64-unknown-linux-gnu \
-          mash-installer-qt/mash-installer-qt
-        cd ..
-    
-    - name: Generate checksums
-      run: |
-        sha256sum mash-installer-${{ github.ref_name }}.tar.gz > checksums.txt
-        cd artifacts
         find . -type f -exec sha256sum {} \; >> ../checksums.txt
     
     - name: Create Release
