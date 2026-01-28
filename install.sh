@@ -319,7 +319,7 @@ local ARCH version archive
   archive="$(download_release_asset "$version" "$ARCH")"
 
   log_info "Extracting..."
-  extract_archive "$ARCHive"
+  extract_archive "$archive"
 
   log_info "Installing..."
   install_binaries
