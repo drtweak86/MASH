@@ -946,9 +946,20 @@ mod tests {
     #[test]
     fn test_partition_path() {
         let ctx = FlashContext {
-            image: PathBuf::new(), disk: "/dev/sda".to_string(), uefi_dir: PathBuf::new(),
-            dry_run: false, auto_unmount: false, locale: None, early_ssh: false,
-            progress_tx: None, work_dir: PathBuf::new(), loop_device: None,
+            image: PathBuf::new(),
+            disk: "/dev/sda".to_string(),
+            scheme: PartitionScheme::Mbr,
+            uefi_dir: PathBuf::new(),
+            dry_run: false,
+            auto_unmount: false,
+            locale: None,
+            early_ssh: false,
+            progress_tx: None,
+            work_dir: PathBuf::new(),
+            loop_device: None,
+            efi_size: "512M".to_string(),
+            boot_size: "1G".to_string(),
+            root_end: "100%".to_string(),
         };
         assert_eq!(ctx.partition_path(1), "/dev/sda1");
         assert_eq!(ctx.partition_path(4), "/dev/sda4");
