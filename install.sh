@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # MASH Installer - One-Command Install Script
-# Usage: curl -fsSL https://raw.githubusercontent.com/drtweak86/mash-installer/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/drtweak86/MASH/main/install.sh | bash
 
 set -e
 
@@ -13,7 +13,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-REPO="drtweak86/mash-installer"  # Update this!
+REPO="drtweak86/MASH"  # Update this!
 INSTALL_DIR="/usr/local/bin"
 TEMP_DIR="/tmp/mash-install-$$"
 
