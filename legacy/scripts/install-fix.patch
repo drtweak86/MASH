@@ -1,0 +1,132 @@
+diff --git a/install.sh b/install.sh
+--- a/install.sh
++++ b/install.sh
+@@ -103,7 +103,8 @@ get_asset_url() {
+     local arch="$2"
+     local api_url="https://api.github.com/repos/$REPO/releases/tags/$version"
+ 
+-    log_info "Querying release metadata for $version..."
++    # Query metadata (log to stderr to not interfere with return value)
++    log_info "Querying release metadata for $version..." >&2
+     local json
+     json="$(gh_api "$api_url")"
+ 
+@@ -223,20 +224,38 @@ download_and_install() {
+             ;;
+     esac
+ 
+-    # Install CLI binary (expects executable named "MASH" somewhere in archive)
++    # Install CLI binary
++    # The tarball has structure: mash-installer-ARCH/mash-installer-ARCH
+     local cli_binary
+-    cli_binary="$(find . -type f -name 'MASH' -perm /111 -print -quit 2>/dev/null || true)"
++    
++    # Look for architecture-specific binary in subdirectory
++    if [[ -d "mash-installer-${arch}" ]]; then
++        cli_binary="$(find "mash-installer-${arch}" -type f -executable -print -quit 2>/dev/null || true)"
++    fi
++    
++    # Fallback: search for any executable named mash-installer*
+     if [[ -z "$cli_binary" ]]; then
+-        # fallback: allow "mash-installer" too
+-        cli_binary="$(find . -type f -name 'mash-installer' -perm /111 -print -quit 2>/dev/null || true)"
++        cli_binary="$(find . -type f -name 'mash-installer*' -executable -print -quit 2>/dev/null || true)"
++    fi
++    
++    # Fallback: look for MASH or mash-installer anywhere
++    if [[ -z "$cli_binary" ]]; then
++        cli_binary="$(find . -type f \( -name 'MASH' -o -name 'mash-installer' \) -executable -print -quit 2>/dev/null || true)"
+     fi
+ 
+     if [[ -n "$cli_binary" ]]; then
+         log_info "Installing CLI from $cli_binary..."
+-        cp "$cli_binary" "$INSTALL_DIR/MASH"
+-        chmod +x "$INSTALL_DIR/MASH"
+-        log_success "CLI installed to $INSTALL_DIR/MASH"
++        cp "$cli_binary" "$INSTALL_DIR/mash-installer"
++        chmod +x "$INSTALL_DIR/mash-installer"
++        log_success "CLI installed to $INSTALL_DIR/mash-installer"
+     else
+         log_error "CLI binary not found in extracted files"
+@@ -246,17 +265,25 @@ download_and_install() {
+         exit 1
+     fi
+ 
+-    # Optional Qt GUI: looks for an executable named "MASH-qt"
++    # Optional Qt GUI
+     local qt_binary
+-    qt_binary="$(find . -type f -name 'MASH-qt' -perm /111 -print -quit 2>/dev/null || true)"
++    
++    # Look in qt subdirectory first
++    if [[ -d "mash-installer-qt" ]]; then
++        qt_binary="$(find "mash-installer-qt" -type f -executable -print -quit 2>/dev/null || true)"
++    fi
++    
++    # Fallback: search anywhere
++    if [[ -z "$qt_binary" ]]; then
++        qt_binary="$(find . -type f -name '*qt*' -executable -print -quit 2>/dev/null || true)"
++    fi
++    
+     if [[ -n "$qt_binary" ]]; then
+         log_info "Installing Qt GUI from $qt_binary..."
+-        cp "$qt_binary" "$INSTALL_DIR/MASH-qt"
+-        chmod +x "$INSTALL_DIR/MASH-qt"
+-        log_success "Qt GUI installed to $INSTALL_DIR/MASH-qt"
++        cp "$qt_binary" "$INSTALL_DIR/mash-installer-qt"
++        chmod +x "$INSTALL_DIR/mash-installer-qt"
++        log_success "Qt GUI installed to $INSTALL_DIR/mash-installer-qt"
+     else
+         log_warning "Qt GUI not found in archive (optional component)"
+     fi
+@@ -259,9 +286,9 @@ download_and_install() {
+     rm -rf "$TEMP_DIR"
+ }
+ 
+-create_desktop_entry() { local desktop_file="/usr/share/applications/MASH.desktop"
++create_desktop_entry() { local desktop_file="/usr/share/applications/mash-installer.desktop"
+ 
+-    if [ -f "$INSTALL_DIR/MASH-qt" ]; then
++    if [ -f "$INSTALL_DIR/mash-installer-qt" ]; then
+         log_info "Creating desktop entry..."
+ 
+         cat > "$desktop_file" <<'EOF'
+@@ -270,7 +297,7 @@ Version=1.0
+ Type=Application
+ Name=MASH Installer
+ Comment=Install Fedora KDE on Raspberry Pi 4
+-Exec=pkexec /usr/local/bin/MASH-qt
++Exec=pkexec /usr/local/bin/mash-installer-qt
+ Icon=drive-harddisk
+ Terminal=false
+ Categories=System;Settings;
+@@ -313,22 +340,22 @@ ${GREEN}╔════════════════════════════════════════════════════════════╗
+ 
+ ${BLUE}CLI Usage:${NC}
+   # Check system requirements
+-  MASH preflight
++  mash-installer preflight
+ 
+   # Install (with confirmation)
+-  sudo MASH flash \\
++  sudo mash-installer flash \\
+     --image /path/to/fedora-kde.raw \\
+     --disk /dev/sdX \\
+     --uefi-dir /path/to/uefi \\
+     --auto-unmount \\
+     --yes-i-know
+ 
+   # Dry run (test without changes)
+-  sudo MASH flash \\
++  sudo mash-installer flash \\
+     --image /path/to/fedora-kde.raw \\
+     --disk /dev/sdX \\
+     --uefi-dir /path/to/uefi \\
+     --dry-run
+ 
+ ${BLUE}GUI Usage:${NC}
+-  sudo MASH-qt
++  sudo mash-installer-qt
+ 
+ ${BLUE}Help:${NC}
+-  MASH --help
++  mash-installer --help
