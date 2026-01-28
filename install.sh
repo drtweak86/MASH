@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 
 # MASH Installer - One-Command Install Script
-# Usage: curl -fsSL https://raw.githubusercontent.com/drtweak86/MASH/main/install.sh | bash
-# Optional: export GITHUB_TOKEN=ghp_...   # to increase API rate limits / access private releases
-# Optional: export MASH_RELEASE=v1.0.0    # to pin a specific release tag
+# Usage:
+#   curl -sSL https://raw.githubusercontent.com/drtweak86/MASH/main/install.sh | sudo bash
+#
+# Optional env:
+#   REPO="drtweak86/MASH"        # override repo if you fork
+#   MASH_RELEASE="v1.0.0"        # pin a tag (else latest)
+#   GITHUB_TOKEN="ghp_..."       # optional (rate limits/private)
+#
+# NOTE: We only touch this header section. Everything below stays your way. 😆🦀🥋
 
 set -euo pipefail
 
@@ -15,7 +21,8 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-REPO="drtweak86/MASH"  # Update this if repo moves
+REPO_DEFAULT="drtweak86/MASH"
+REPO="${REPO:-$REPO_DEFAULT}"
 INSTALL_DIR="/usr/local/bin"
 TEMP_DIR="/tmp/mash-install-$$"
 
@@ -28,14 +35,18 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 check_root() {
     if [ "$EUID" -ne 0 ]; then
         log_error "This script must be run as root"
-        log_info "Please run: curl -L <url> | sudo bash"
+        log_info "Please run: curl -sSL <url> | sudo bash"
         exit 1
     fi
 }
 
+need_cmd() {
+    command -v "$1" >/dev/null 2>&1 || { log_error "Missing required command: $1"; exit 1; }
+}
+
 detect_architecture() {
     local arch
-    arch=$(uname -m)
+    arch="$(uname -m)"
     case "$arch" in
         aarch64|arm64) echo "aarch64-unknown-linux-gnu" ;;
         x86_64|amd64)  echo "x86_64-unknown-linux-gnu" ;;
@@ -47,132 +58,69 @@ detect_architecture() {
     esac
 }
 
-# Return a list of tokens to try matching against asset names for a given canonical arch
-arch_tokens() {
-    local arch="$1"
-    case "$arch" in
-        aarch64-unknown-linux-gnu)
-            # variants that releases might use
-            echo "aarch64 arm64 linux-aarch64 linux-arm64 raspberrypi armv8"
-            ;;
-        x86_64-unknown-linux-gnu)
-            echo "x86_64 amd64 linux-x86_64 linux-amd64"
-            ;;
-        *)
-            echo ""
-            ;;
-    esac
-}
-
-# Get latest release tag (or use MASH_RELEASE env var)
-get_latest_version() {
-    if [ -n "${MASH_RELEASE:-}" ]; then
-        echo "${MASH_RELEASE}"
-        return
+gh_api() {
+    # Accept either "/repos/OWNER/REPO/..." or full URL.
+    local url="$1"
+    if [[ "$url" == /* ]]; then
+        url="https://api.github.com${url}"
     fi
 
-    local json
-    json=$(gh_api "/repos/$REPO/releases/latest")
-    local version
-    version=$(echo "$json" | grep -E '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        curl -sSL -H "Authorization: token ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" "$url"
+    else
+        curl -sSL -H "Accept: application/vnd.github+json" "$url"
+    fi
+}
 
-    if [ -z "$version" ]; then
-        log_error "Failed to fetch latest version from GitHub API"
+get_latest_version() {
+    if [[ -n "${MASH_RELEASE:-}" ]]; then
+        echo "${MASH_RELEASE}"
+        return 0
+    fi
+
+    local json version
+    json="$(gh_api "/repos/${REPO}/releases/latest")"
+    version="$(echo "$json" | grep -E '"tag_name"\s*:' | head -n1 | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+
+    if [[ -z "${version:-}" ]]; then
+        log_error "Failed to fetch latest version"
         exit 1
     fi
 
     echo "$version"
 }
 
-# Lightweight GitHub API helper that uses GITHUB_TOKEN if provided
-gh_api() {
-    local url="$1"
-
-    # Accept either:
-    #   "/repos/OWNER/REPO/..."  (path)
-    # or
-    #   "https://api.github.com/repos/OWNER/REPO/..." (full URL)
-    if [[ "$url" == /* ]]; then
-        url="https://api.github.com${url}"
-    fi
-
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
-        curl -sSL \
-          -H "Authorization: token ${GITHUB_TOKEN}" \
-          -H "Accept: application/vnd.github.v3+json" \
-          "$url"
-    else
-        curl -sSL \
-          -H "Accept: application/vnd.github.v3+json" \
-          "$url"
-    fi
-}
-
-# Find the best matching browser_download_url for the release tag + arch
-get_asset_url() {
+# Finds the correct tarball asset URL from the GitHub release,
+# so we don't hardcode filenames (your assets are like mash-installer-v1.0.0.tar.gz).
+get_release_tarball_url() {
     local version="$1"
-    local arch="$2"
-    local api_url="https://api.github.com/repos/$REPO/releases/tags/$version"
-
-    log_info "Querying release metadata for $version..."
+    local api_url="https://api.github.com/repos/${REPO}/releases/tags/${version}"
     local json
-    json=$(gh_api "$api_url")
-    if [ -z "$json" ]; then
-        log_error "Failed to fetch release info for $version"
+    json="$(gh_api "$api_url")"
+
+    # Prefer mash-installer-*.tar.gz
+    local url
+    url="$(echo "$json" \
+      | grep -E '"name"\s*:|"browser_download_url"\s*:' \
+      | sed -E 's/.*"([^"]+)".*/\1/' \
+      | paste - - \
+      | awk -F'|' '
+          BEGIN{best=""}
+          {
+            name=$1; u=$2;
+            if (name ~ /^mash-installer-.*\.tar\.gz$/) { print u; exit }
+            if (best=="" && name ~ /\.tar\.gz$/) best=u
+          }
+          END{ if (best!="") print best }
+      ' | head -n1)"
+
+    if [[ -z "${url:-}" ]]; then
+        log_error "No .tar.gz asset found for release ${version}"
+        log_info "Check the release assets on GitHub for ${REPO} / ${version}"
         exit 1
     fi
 
-    # Extract all available download urls and asset names
-    mapfile -t assets < <(echo "$json" | grep -E '"name":|"browser_download_url":' | sed -E 's/.*"([^"]+)".*/\1/' | paste - - | awk '{print $1 "|" $2}')
-
-    if [ "${#assets[@]}" -eq 0 ]; then
-        log_error "No assets found for release $version"
-        exit 1
-    fi
-
-    log_info "Found ${#assets[@]} asset(s) for $version"
-
-    # Build candidate tokens
-    local tokens
-    tokens=$(arch_tokens "$arch")
-    # also try the short tag and 'MASH' + 'mash' and 'linux'
-    tokens="$tokens MASH mash linux"
-
-    # Helper: return first asset URL matching any token and archive type
-    local token
-    local name url
-    local prefer_ext_regex='\.(tar\.gz|tgz|zip|tar)$'
-    for token in $tokens; do
-        for pair in "${assets[@]}"; do
-            name="${pair%%|*}"
-            url="${pair##*|}"
-            # check token in name (case insensitive) and extension looks like archive or executable tarball
-            if echo "$name" | grep -iq "$token" && echo "$name" | grep -Eiq "$prefer_ext_regex"; then
-                echo "$url"
-                return 0
-            fi
-        done
-    done
-
-    # If none matched above, try any MASH tar/zip asset
-    for pair in "${assets[@]}"; do
-        name="${pair%%|*}"
-        url="${pair##*|}"
-        if echo "$name" | grep -Eiq 'MASH' && echo "$name" | grep -Eiq "$prefer_ext_regex"; then
-            echo "$url"
-            return 0
-        fi
-    done
-
-    # No suitable candidate: print available assets for debugging and fail
-    log_error "No release asset could be matched for arch '$arch' and version '$version'. Available assets:"
-    for pair in "${assets[@]}"; do
-        name="${pair%%|*}"
-        url="${pair##*|}"
-        echo "  - $name -> $url"
-    done
-
-    exit 1
+    echo "$url"
 }
 
 download_and_install() {
