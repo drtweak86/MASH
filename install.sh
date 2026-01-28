@@ -54,11 +54,14 @@ check_root() {
 
 detect_arch() {
   local m
-  m="1000 4 20 24 27 29 44 46 60 100 102 108 986 988 989 992 996 1000uname -m)"
-  case "" in
+  m="$(uname -m)"
+  case "$m" in
     aarch64|arm64) echo "aarch64-unknown-linux-gnu" ;;
     x86_64|amd64)  echo "x86_64-unknown-linux-gnu" ;;
-    *) log_error "Unsupported architecture:  (supported: aarch64, x86_64)"; exit 1 ;;
+    *)
+      log_error "Unsupported architecture: $m (supported: aarch64, x86_64)"
+      exit 1
+      ;;
   esac
 }
 
@@ -122,60 +125,35 @@ try_known_urls() {
 # Auto-discover the correct asset URL from release JSON (fallback).
 get_asset_url_from_api() {
   local version="$1"
-  local arch="$2"
-  local api_url="https://api.github.com/repos/${REPO}/releases/tags/${version}"
-  log_info "Querying release metadata for ${version}..."
+  local arch="$2"  # currently unused (archive is not arch-suffixed)
+  local api_url="https://api.github.com/repos/$REPO/releases/tags/$version"
+
+  log_info "Querying release metadata for $version..." >&2
   local json
   json="$(gh_api "$api_url")"
 
-  local assets=()
-  local last_name=""
-  while IFS= read -r line; do
-    if echo "$line" | grep -q '"name"'; then
-      last_name="$(echo "$line" | sed -E 's/.*"name"\s*:\s*"([^"]+)".*/\1/')"
-    elif echo "$line" | grep -q '"browser_download_url"'; then
-      local u
-      u="$(echo "$line" | sed -E 's/.*"browser_download_url"\s*:\s*"([^"]+)".*/\1/')"
-      if [[ -n "$last_name" && -n "$u" ]]; then
-        assets+=("${last_name}|${u}")
-        last_name=""
-      fi
-    fi
-  done < <(printf '%s\n' "$json" | grep -E '"name"\s*:|"browser_download_url"\s*:')
+  # Extract download URLs (one per line)
+  local urls
+  urls="$(echo "$json" | grep -oE '"browser_download_url"\s*:\s*"[^"]+"' | sed -E 's/.*"([^"]+)".*/\1/')"
 
-  if [[ "${#assets[@]}" -eq 0 ]]; then
-    log_error "No assets found for release ${version}."
+  # Prefer the main tarball, never the .sha256
+  local u
+  u="$(echo "$urls" | grep -E "mash-installer-${version}\.tar\.gz$" | head -n1 || true)"
+  if [[ -z "${u:-}" ]]; then
+    u="$(echo "$urls" | grep -E "mash-installer-.*${version}.*\.tar\.gz$" | grep -v '\.sha256$' | head -n1 || true)"
+  fi
+  if [[ -z "${u:-}" ]]; then
+    u="$(echo "$urls" | grep -E "mash-installer.*\.tar\.gz$" | grep -v '\.sha256$' | head -n1 || true)"
+  fi
+
+  if [[ -z "${u:-}" ]]; then
+    log_error "No suitable mash-installer .tar.gz asset found for ${version}" >&2
+    log_info "Available assets:" >&2
+    echo "$urls" >&2
     exit 1
   fi
 
-  # Prefer exact match to your main naming style.
-  local name url
-  for pair in "${assets[@]}"; do
-    name="${pair%%|*}"
-    url="${pair##*|}"
-    if [[ "$name" == "mash-installer-${version}.tar.gz" || "$name" == "mash-installer-${version}.tgz" ]]; then
-      echo "$url"
-      return 0
-    fi
-  done
-
-  # Otherwise: pick the first tar.gz/tgz that contains "mash-installer"
-  for pair in "${assets[@]}"; do
-    name="${pair%%|*}"
-    url="${pair##*|}"
-    if echo "$name" | grep -Eiq '^mash-installer.*\.(tar\.gz|tgz)$'; then
-      echo "$url"
-      return 0
-    fi
-  done
-
-  log_error "Could not pick a suitable asset from release ${version}. Assets available:"
-  for pair in "${assets[@]}"; do
-    name="${pair%%|*}"
-    url="${pair##*|}"
-    echo "  - $name -> $url" >&2
-  done
-  exit 1
+  echo "$u"
 }
 
 download_release_asset() {
