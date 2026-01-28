@@ -1,0 +1,244 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-rust:
+    name: Build Rust Installer
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - aarch64-unknown-linux-gnu  # For RPi 4
+          - x86_64-unknown-linux-gnu   # For x86 hosts
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: stable
+        target: ${{ matrix.target }}
+    
+    - name: Install cross-compilation tools
+      if: matrix.target == 'aarch64-unknown-linux-gnu'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+    
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/registry
+        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+    
+    - name: Cache cargo index
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/git
+        key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+    
+    - name: Cache cargo build
+      uses: actions/cache@v4
+      with:
+        path: mash-installer/target
+        key: ${{ runner.os }}-cargo-build-target-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+    
+    - name: Build
+      working-directory: mash-installer
+      run: |
+        if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+          export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
+        fi
+        cargo build --release --target ${{ matrix.target }}
+    
+    - name: Strip binary
+      run: |
+        if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+          aarch64-linux-gnu-strip mash-installer/target/${{ matrix.target }}/release/mash-installer
+        else
+          strip mash-installer/target/${{ matrix.target }}/release/mash-installer
+        fi
+    
+    - name: Create artifact
+      run: |
+        mkdir -p artifacts
+        cp mash-installer/target/${{ matrix.target }}/release/mash-installer artifacts/mash-installer-${{ matrix.target }}
+        chmod +x artifacts/mash-installer-${{ matrix.target }}
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: mash-installer-${{ matrix.target }}
+        path: artifacts/mash-installer-${{ matrix.target }}
+        retention-days: 30
+
+  build-qt:
+    name: Build Qt GUI
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Qt
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y qt6-base-dev qt6-base-dev-tools cmake build-essential
+    
+    - name: Configure CMake
+      working-directory: qt-gui
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+    
+    - name: Build
+      working-directory: qt-gui
+      run: cmake --build build --config Release
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: mash-installer-qt
+        path: qt-gui/build/mash-installer-qt
+        retention-days: 30
+
+  create-release:
+    name: Create Release
+    needs: [build-rust, build-qt]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+    
+    - name: Create release archive
+      run: |
+        cd artifacts
+        tar -czf ../mash-installer-${{ github.ref_name }}.tar.gz \
+          mash-installer-aarch64-unknown-linux-gnu/mash-installer-aarch64-unknown-linux-gnu \
+          mash-installer-x86_64-unknown-linux-gnu/mash-installer-x86_64-unknown-linux-gnu \
+          mash-installer-qt/mash-installer-qt
+        cd ..
+    
+    - name: Generate checksums
+      run: |
+        sha256sum mash-installer-${{ github.ref_name }}.tar.gz > checksums.txt
+        cd artifacts
+        find . -type f -exec sha256sum {} \; >> ../checksums.txt
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          mash-installer-${{ github.ref_name }}.tar.gz
+          checksums.txt
+        body: |
+          # MASH Installer ${{ github.ref_name }}
+          
+          ## Installation
+          
+          ### One-Command Install (Recommended)
+          ```bash
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
+          ```
+          
+          ### Manual Install
+          ```bash
+          # Download and extract
+          wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mash-installer-${{ github.ref_name }}.tar.gz
+          tar -xzf mash-installer-${{ github.ref_name }}.tar.gz
+          
+          # For Raspberry Pi 4 (aarch64)
+          sudo cp mash-installer-aarch64-unknown-linux-gnu /usr/local/bin/mash-installer
+          
+          # For x86_64 hosts
+          sudo cp mash-installer-x86_64-unknown-linux-gnu /usr/local/bin/mash-installer
+          
+          # Qt GUI (optional)
+          sudo cp mash-installer-qt /usr/local/bin/
+          
+          sudo chmod +x /usr/local/bin/mash-installer
+          ```
+          
+          ## Usage
+          
+          ### CLI
+          ```bash
+          # Check system
+          mash-installer preflight
+          
+          # Install (with confirmation prompts)
+          sudo mash-installer flash \
+            --image /path/to/fedora-kde.raw \
+            --disk /dev/sdX \
+            --uefi-dir /path/to/uefi \
+            --auto-unmount \
+            --yes-i-know
+          ```
+          
+          ### GUI
+          ```bash
+          sudo mash-installer-qt
+          ```
+          
+          ## What's New
+          - Automated builds for ARM64 and x86_64
+          - Qt GUI installer
+          - Improved UEFI boot configuration
+          - Better error handling and logging
+          
+          ## Checksums
+          See `checksums.txt` for SHA256 checksums of all files.
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Trigger on version bump
+  auto-release:
+    name: Auto Release on Version Bump
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Check version change
+      id: version
+      run: |
+        CURRENT_VERSION=$(grep '^version = ' mash-installer/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+        echo "current=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+        
+        # Check if tag exists
+        if git rev-parse "v$CURRENT_VERSION" >/dev/null 2>&1; then
+          echo "exists=true" >> $GITHUB_OUTPUT
+        else
+          echo "exists=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Create and push tag
+      if: steps.version.outputs.exists == 'false'
+      run: |
+        git config user.name github-actions
+        git config user.email github-actions@github.com
+        git tag -a "v${{ steps.version.outputs.current }}" -m "Release v${{ steps.version.outputs.current }}"
+        git push origin "v${{ steps.version.outputs.current }}"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

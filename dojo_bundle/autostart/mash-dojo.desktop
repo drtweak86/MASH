@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=MASH Dojo 🥋
+Comment=Initial setup dojo menu (run once)
+Exec=/usr/local/bin/mash-dojo-launch
+Terminal=false
+X-GNOME-Autostart-enabled=true
+OnlyShowIn=KDE;
