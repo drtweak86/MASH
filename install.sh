@@ -26,6 +26,9 @@ REPO="${REPO:-$REPO_DEFAULT}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 TEMP_DIR="$(mktemp -d /tmp/mash-install-XXXXXX)"
 
+# Global arch (used by install_binaries)
+ARCH=""
+
 log_info()    { echo -e "${BLUE}[INFO]${NC} $*" >&2; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $*" >&2; }
 log_warning() { echo -e "${YELLOW}[WARNING]${NC} $*" >&2; }
@@ -322,7 +325,7 @@ EOF
   echo -e "${NC}"
 
   local arch version archive
-  arch="$(detect_arch)"
+    ARCH="$(detect_arch)"
   log_info "Detected architecture: ${arch}"
 
   version="$(get_latest_version)"
