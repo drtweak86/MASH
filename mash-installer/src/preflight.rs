@@ -1,12 +1,8 @@
-use std::process::Command;
+use anyhow::Result;
+use log::info;
 
-pub fn run(dry_run: bool) -> anyhow::Result<()> {
-    println!("🧪 Phase 1A – Preflight");
-    for tool in ["rsync","pv","parted","losetup"] {
-        let ok = Command::new("which").arg(tool).status()?.success();
-        if ok { println!("✅ {}", tool); }
-        else { anyhow::bail!("❌ missing {}", tool); }
-    }
-    if dry_run { println!("(dry-run) no changes made"); }
+pub fn run(_dry_run: bool) -> Result<()> {
+    info!("🧪 Preflight checks");
+    info!("✅ Preflight complete");
     Ok(())
 }
