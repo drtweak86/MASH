@@ -37,7 +37,7 @@ log_error() {
 check_root() {
     if [ "$EUID" -ne 0 ]; then
         log_error "This script must be run as root"
-        log_info "Please run: curl -fsSL <url> | sudo bash"
+        log_info "Please run: curl -L <url> | sudo bash"
         exit 1
     fi
 }
@@ -60,7 +60,7 @@ detect_architecture() {
 }
 
 get_latest_version() {
-    local version=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | \
+    local version=$(curl -L "https://api.github.com/repos/$REPO/releases/latest" | \
                     grep '"tag_name":' | \
                     sed -E 's/.*"([^"]+)".*/\1/')
     
