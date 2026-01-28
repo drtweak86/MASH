@@ -17,8 +17,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::Sender;
 
-use crate::errors::MashError;
 use crate::cli::PartitionScheme;
+use crate::errors::MashError;
 use crate::locale::LocaleConfig;
 use crate::tui::progress::{Phase, ProgressUpdate};
 
@@ -64,10 +64,19 @@ impl MountPoints {
 
     fn create_all(&self) -> Result<()> {
         for dir in [
-            &self.src_efi, &self.src_boot, &self.src_root_top,
-            &self.src_root_subvol, &self.src_home_subvol, &self.src_var_subvol,
-            &self.dst_efi, &self.dst_boot, &self.dst_data, &self.dst_root_top,
-            &self.dst_root_subvol, &self.dst_home_subvol, &self.dst_var_subvol,
+            &self.src_efi,
+            &self.src_boot,
+            &self.src_root_top,
+            &self.src_root_subvol,
+            &self.src_home_subvol,
+            &self.src_var_subvol,
+            &self.dst_efi,
+            &self.dst_boot,
+            &self.dst_data,
+            &self.dst_root_top,
+            &self.dst_root_subvol,
+            &self.dst_home_subvol,
+            &self.dst_var_subvol,
         ] {
             fs::create_dir_all(dir)
                 .with_context(|| format!("Failed to create mount point: {}", dir.display()))?;
@@ -139,7 +148,7 @@ pub fn run(
     disk: &str,
     scheme: PartitionScheme,
     uefi_dir: &Path,
-dry_run: bool,
+    dry_run: bool,
     auto_unmount: bool,
     yes_i_know: bool,
     locale: Option<LocaleConfig>,
@@ -149,9 +158,19 @@ dry_run: bool,
     root_end: &str,
 ) -> Result<()> {
     run_with_progress(
-        image, disk, scheme, uefi_dir, dry_run, auto_unmount, yes_i_know,
-        locale, early_ssh, None,
-        efi_size, boot_size, root_end,
+        image,
+        disk,
+        scheme,
+        uefi_dir,
+        dry_run,
+        auto_unmount,
+        yes_i_know,
+        locale,
+        early_ssh,
+        None,
+        efi_size,
+        boot_size,
+        root_end,
     )
 }
 
@@ -161,7 +180,7 @@ pub fn run_with_progress(
     disk: &str,
     scheme: PartitionScheme,
     uefi_dir: &Path,
-dry_run: bool,
+    dry_run: bool,
     auto_unmount: bool,
     yes_i_know: bool,
     locale: Option<LocaleConfig>,
@@ -230,7 +249,7 @@ dry_run: bool,
     };
 
     // If the image is an .xz file, decompress it
-    if ctx.image.extension().map_or(false, |ext| ext == "xz") {
+    if ctx.image.extension().is_some_and(|ext| ext == "xz") {
         let decompressed_image = decompress_xz_image(&ctx, &ctx.image)?;
         ctx.image = decompressed_image;
     }
@@ -285,12 +304,27 @@ fn run_installation(ctx: &mut FlashContext) -> Result<()> {
 
     // Phase 3: Copy root filesystem (btrfs subvol: root)
     ctx.start_phase(Phase::CopyRoot);
-    rsync_with_progress(ctx, &mounts.src_root_subvol, &mounts.dst_root_subvol, "root subvol")?;
+    rsync_with_progress(
+        ctx,
+        &mounts.src_root_subvol,
+        &mounts.dst_root_subvol,
+        "root subvol",
+    )?;
     if subvols.has_home {
-        rsync_with_progress(ctx, &mounts.src_home_subvol, &mounts.dst_home_subvol, "home subvol")?;
+        rsync_with_progress(
+            ctx,
+            &mounts.src_home_subvol,
+            &mounts.dst_home_subvol,
+            "home subvol",
+        )?;
     }
     if subvols.has_var {
-        rsync_with_progress(ctx, &mounts.src_var_subvol, &mounts.dst_var_subvol, "var subvol")?;
+        rsync_with_progress(
+            ctx,
+            &mounts.src_var_subvol,
+            &mounts.dst_var_subvol,
+            "var subvol",
+        )?;
     }
     ctx.complete_phase(Phase::CopyRoot);
 
@@ -371,13 +405,14 @@ fn unmount_disk_partitions(disk: &str, auto_unmount: bool) -> Result<()> {
             info!("🔌 Unmounting {}", mp);
             let _ = Command::new("umount").args(["-R", mp]).status();
         } else {
-            bail!("Partition mounted at {}. Use --auto-unmount or unmount manually.", mp);
+            bail!(
+                "Partition mounted at {}. Use --auto-unmount or unmount manually.",
+                mp
+            );
         }
     }
     Ok(())
 }
-
-/// Partition disk with GPT using parted
 
 /// Partition disk with MBR (msdos) using parted
 fn partition_disk_mbr(ctx: &FlashContext) -> Result<()> {
@@ -389,28 +424,63 @@ fn partition_disk_mbr(ctx: &FlashContext) -> Result<()> {
 
     let efi_start = "4MiB";
     let efi_end = ctx.efi_size.clone();
-    let boot_end = format!("{}MiB", parse_size_to_mib(&ctx.efi_size)? + parse_size_to_mib(&ctx.boot_size)?);
+    let boot_end = format!(
+        "{}MiB",
+        parse_size_to_mib(&ctx.efi_size)? + parse_size_to_mib(&ctx.boot_size)?
+    );
 
     // Create msdos partition table
     run_command("parted", &["-s", &ctx.disk, "mklabel", "msdos"])?;
 
     // p1: EFI (fat32) — mark bootable for broad Pi UEFI compatibility
-    run_command("parted", &["-s", "-a", "optimal", &ctx.disk,
-        "mkpart", "primary", "fat32", efi_start, &efi_end])?;
+    run_command(
+        "parted",
+        &[
+            "-s", "-a", "optimal", &ctx.disk, "mkpart", "primary", "fat32", efi_start, &efi_end,
+        ],
+    )?;
     // On msdos, "esp" isn't always supported; boot flag is the reliable choice.
     let _ = run_command("parted", &["-s", &ctx.disk, "set", "1", "boot", "on"]);
 
     // p2: BOOT (ext4)
-    run_command("parted", &["-s", "-a", "optimal", &ctx.disk,
-        "mkpart", "primary", "ext4", &efi_end, &boot_end])?;
+    run_command(
+        "parted",
+        &[
+            "-s", "-a", "optimal", &ctx.disk, "mkpart", "primary", "ext4", &efi_end, &boot_end,
+        ],
+    )?;
 
     // p3: ROOT (btrfs) — keep filesystem consistent with pipeline; only the table differs.
-    run_command("parted", &["-s", "-a", "optimal", &ctx.disk,
-        "mkpart", "primary", "btrfs", &boot_end, &ctx.root_end])?;
+    run_command(
+        "parted",
+        &[
+            "-s",
+            "-a",
+            "optimal",
+            &ctx.disk,
+            "mkpart",
+            "primary",
+            "btrfs",
+            &boot_end,
+            &ctx.root_end,
+        ],
+    )?;
 
     // p4: DATA (btrfs)
-    run_command("parted", &["-s", "-a", "optimal", &ctx.disk,
-        "mkpart", "primary", "btrfs", &ctx.root_end, "100%"])?;
+    run_command(
+        "parted",
+        &[
+            "-s",
+            "-a",
+            "optimal",
+            &ctx.disk,
+            "mkpart",
+            "primary",
+            "btrfs",
+            &ctx.root_end,
+            "100%",
+        ],
+    )?;
 
     run_command("parted", &["-s", &ctx.disk, "print"])?;
     udev_settle();
@@ -429,27 +499,62 @@ fn partition_disk_gpt(ctx: &FlashContext) -> Result<()> {
     // Calculate partition boundaries
     let efi_start = "4MiB";
     let efi_end = ctx.efi_size.clone(); // Use value from context
-    let boot_end = format!("{}MiB", parse_size_to_mib(&ctx.efi_size)? + parse_size_to_mib(&ctx.boot_size)?); // Calculate based on ctx values
+    let boot_end = format!(
+        "{}MiB",
+        parse_size_to_mib(&ctx.efi_size)? + parse_size_to_mib(&ctx.boot_size)?
+    ); // Calculate based on ctx values
 
     // Create GPT partition table
     run_command("parted", &["-s", &ctx.disk, "mklabel", "gpt"])?;
 
     // p1: EFI (fat32) with esp flag
-    run_command("parted", &["-s", "-a", "optimal", &ctx.disk,
-        "mkpart", "primary", "fat32", efi_start, &efi_end])?;
+    run_command(
+        "parted",
+        &[
+            "-s", "-a", "optimal", &ctx.disk, "mkpart", "primary", "fat32", efi_start, &efi_end,
+        ],
+    )?;
     run_command("parted", &["-s", &ctx.disk, "set", "1", "esp", "on"])?;
 
     // p2: BOOT (ext4)
-    run_command("parted", &["-s", "-a", "optimal", &ctx.disk,
-        "mkpart", "primary", "ext4", &efi_end, &boot_end])?;
+    run_command(
+        "parted",
+        &[
+            "-s", "-a", "optimal", &ctx.disk, "mkpart", "primary", "ext4", &efi_end, &boot_end,
+        ],
+    )?;
 
     // p3: ROOT (btrfs) - from boot_end to ROOT_END
-    run_command("parted", &["-s", "-a", "optimal", &ctx.disk,
-        "mkpart", "primary", "btrfs", &boot_end, &ctx.root_end])?; // Use value from context
+    run_command(
+        "parted",
+        &[
+            "-s",
+            "-a",
+            "optimal",
+            &ctx.disk,
+            "mkpart",
+            "primary",
+            "btrfs",
+            &boot_end,
+            &ctx.root_end,
+        ],
+    )?; // Use value from context
 
     // p4: DATA (btrfs) - from ROOT_END to 100%
-    run_command("parted", &["-s", "-a", "optimal", &ctx.disk,
-        "mkpart", "primary", "btrfs", &ctx.root_end, "100%"])?; // Use value from context
+    run_command(
+        "parted",
+        &[
+            "-s",
+            "-a",
+            "optimal",
+            &ctx.disk,
+            "mkpart",
+            "primary",
+            "btrfs",
+            &ctx.root_end,
+            "100%",
+        ],
+    )?; // Use value from context
 
     // Show result
     run_command("parted", &["-s", &ctx.disk, "print"])?;
@@ -492,7 +597,10 @@ fn setup_image_loop(ctx: &mut FlashContext) -> Result<()> {
         .context("Failed to setup loop device")?;
 
     if !output.status.success() {
-        bail!("losetup failed: {}", String::from_utf8_lossy(&output.stderr));
+        bail!(
+            "losetup failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     let loop_dev = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -504,7 +612,10 @@ fn setup_image_loop(ctx: &mut FlashContext) -> Result<()> {
 }
 
 fn mount_source_partitions(ctx: &FlashContext, mounts: &MountPoints) -> Result<BtrfsSubvols> {
-    let loop_dev = ctx.loop_device.as_ref().ok_or_else(|| anyhow::anyhow!("Loop device not set"))?;
+    let loop_dev = ctx
+        .loop_device
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Loop device not set"))?;
 
     let img_efi = format!("{}p1", loop_dev);
     let img_boot = format!("{}p2", loop_dev);
@@ -515,7 +626,15 @@ fn mount_source_partitions(ctx: &FlashContext, mounts: &MountPoints) -> Result<B
     run_command("mount", &[&img_boot, mounts.src_boot.to_str().unwrap()])?;
 
     // Mount btrfs root (top-level first to detect subvols)
-    run_command("mount", &["-t", "btrfs", &img_root, mounts.src_root_top.to_str().unwrap()])?;
+    run_command(
+        "mount",
+        &[
+            "-t",
+            "btrfs",
+            &img_root,
+            mounts.src_root_top.to_str().unwrap(),
+        ],
+    )?;
 
     // Detect subvolumes
     let subvol_output = Command::new("btrfs")
@@ -531,18 +650,55 @@ fn mount_source_partitions(ctx: &FlashContext, mounts: &MountPoints) -> Result<B
         bail!("Image does not contain btrfs subvol 'root' (unexpected for Fedora RAW)");
     }
 
-    info!("🌳 Detected subvols: root={}, home={}, var={}", has_root, has_home, has_var);
+    info!(
+        "🌳 Detected subvols: root={}, home={}, var={}",
+        has_root, has_home, has_var
+    );
 
     // Mount subvolumes
-    run_command("mount", &["-t", "btrfs", "-o", "subvol=root", &img_root, mounts.src_root_subvol.to_str().unwrap()])?;
+    run_command(
+        "mount",
+        &[
+            "-t",
+            "btrfs",
+            "-o",
+            "subvol=root",
+            &img_root,
+            mounts.src_root_subvol.to_str().unwrap(),
+        ],
+    )?;
     if has_home {
-        run_command("mount", &["-t", "btrfs", "-o", "subvol=home", &img_root, mounts.src_home_subvol.to_str().unwrap()])?;
+        run_command(
+            "mount",
+            &[
+                "-t",
+                "btrfs",
+                "-o",
+                "subvol=home",
+                &img_root,
+                mounts.src_home_subvol.to_str().unwrap(),
+            ],
+        )?;
     }
     if has_var {
-        run_command("mount", &["-t", "btrfs", "-o", "subvol=var", &img_root, mounts.src_var_subvol.to_str().unwrap()])?;
+        run_command(
+            "mount",
+            &[
+                "-t",
+                "btrfs",
+                "-o",
+                "subvol=var",
+                &img_root,
+                mounts.src_var_subvol.to_str().unwrap(),
+            ],
+        )?;
     }
 
-    Ok(BtrfsSubvols { has_root, has_home, has_var })
+    Ok(BtrfsSubvols {
+        has_root,
+        has_home,
+        has_var,
+    })
 }
 
 fn mount_dest_partitions(ctx: &FlashContext, mounts: &MountPoints) -> Result<()> {
@@ -554,30 +710,88 @@ fn mount_dest_partitions(ctx: &FlashContext, mounts: &MountPoints) -> Result<()>
     run_command("mount", &[&p1, mounts.dst_efi.to_str().unwrap()])?;
     run_command("mount", &[&p2, mounts.dst_boot.to_str().unwrap()])?;
     run_command("mount", &[&p4, mounts.dst_data.to_str().unwrap()])?;
-    run_command("mount", &["-t", "btrfs", &p3, mounts.dst_root_top.to_str().unwrap()])?;
+    run_command(
+        "mount",
+        &["-t", "btrfs", &p3, mounts.dst_root_top.to_str().unwrap()],
+    )?;
 
     Ok(())
 }
 
-fn create_dest_subvols(ctx: &FlashContext, mounts: &MountPoints, subvols: &BtrfsSubvols) -> Result<()> {
+fn create_dest_subvols(
+    ctx: &FlashContext,
+    mounts: &MountPoints,
+    subvols: &BtrfsSubvols,
+) -> Result<()> {
     let p3 = ctx.partition_path(3);
 
     // Create subvolumes
-    run_command("btrfs", &["subvolume", "create", mounts.dst_root_top.join("root").to_str().unwrap()])?;
+    run_command(
+        "btrfs",
+        &[
+            "subvolume",
+            "create",
+            mounts.dst_root_top.join("root").to_str().unwrap(),
+        ],
+    )?;
     if subvols.has_home {
-        run_command("btrfs", &["subvolume", "create", mounts.dst_root_top.join("home").to_str().unwrap()])?;
+        run_command(
+            "btrfs",
+            &[
+                "subvolume",
+                "create",
+                mounts.dst_root_top.join("home").to_str().unwrap(),
+            ],
+        )?;
     }
     if subvols.has_var {
-        run_command("btrfs", &["subvolume", "create", mounts.dst_root_top.join("var").to_str().unwrap()])?;
+        run_command(
+            "btrfs",
+            &[
+                "subvolume",
+                "create",
+                mounts.dst_root_top.join("var").to_str().unwrap(),
+            ],
+        )?;
     }
 
     // Mount subvolumes for copying
-    run_command("mount", &["-t", "btrfs", "-o", "subvol=root", &p3, mounts.dst_root_subvol.to_str().unwrap()])?;
+    run_command(
+        "mount",
+        &[
+            "-t",
+            "btrfs",
+            "-o",
+            "subvol=root",
+            &p3,
+            mounts.dst_root_subvol.to_str().unwrap(),
+        ],
+    )?;
     if subvols.has_home {
-        run_command("mount", &["-t", "btrfs", "-o", "subvol=home", &p3, mounts.dst_home_subvol.to_str().unwrap()])?;
+        run_command(
+            "mount",
+            &[
+                "-t",
+                "btrfs",
+                "-o",
+                "subvol=home",
+                &p3,
+                mounts.dst_home_subvol.to_str().unwrap(),
+            ],
+        )?;
     }
     if subvols.has_var {
-        run_command("mount", &["-t", "btrfs", "-o", "subvol=var", &p3, mounts.dst_var_subvol.to_str().unwrap()])?;
+        run_command(
+            "mount",
+            &[
+                "-t",
+                "btrfs",
+                "-o",
+                "subvol=var",
+                &p3,
+                mounts.dst_var_subvol.to_str().unwrap(),
+            ],
+        )?;
     }
 
     Ok(())
@@ -594,7 +808,13 @@ fn rsync_with_progress(ctx: &FlashContext, src: &Path, dst: &Path, label: &str) 
     let dst_str = dst.to_str().unwrap();
 
     let mut child = Command::new("rsync")
-        .args(["-aHAX", "--numeric-ids", "--info=progress2", &src_str, dst_str])
+        .args([
+            "-aHAX",
+            "--numeric-ids",
+            "--info=progress2",
+            &src_str,
+            dst_str,
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -602,7 +822,7 @@ fn rsync_with_progress(ctx: &FlashContext, src: &Path, dst: &Path, label: &str) 
 
     if let Some(stdout) = child.stdout.take() {
         let reader = BufReader::new(stdout);
-        for line in reader.lines().flatten() {
+        for line in reader.lines().map_while(Result::ok) {
             if let Some(progress) = parse_rsync_progress(&line) {
                 ctx.send_progress(ProgressUpdate::RsyncProgress {
                     percent: progress.percent,
@@ -624,11 +844,17 @@ fn rsync_with_progress(ctx: &FlashContext, src: &Path, dst: &Path, label: &str) 
 /// VFAT-safe rsync (no ownership/permissions)
 fn rsync_vfat_safe(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
-    run_command("rsync", &[
-        "-rltD", "--no-owner", "--no-group", "--no-perms",
-        &format!("{}/", src.to_str().unwrap()),
-        dst.to_str().unwrap(),
-    ])
+    run_command(
+        "rsync",
+        &[
+            "-rltD",
+            "--no-owner",
+            "--no-group",
+            "--no-perms",
+            &format!("{}/", src.to_str().unwrap()),
+            dst.to_str().unwrap(),
+        ],
+    )
 }
 
 struct RsyncProgress {
@@ -640,7 +866,10 @@ struct RsyncProgress {
 
 fn parse_rsync_progress(line: &str) -> Option<RsyncProgress> {
     let percent_idx = line.find('%')?;
-    let percent_start = line[..percent_idx].rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
+    let percent_start = line[..percent_idx]
+        .rfind(char::is_whitespace)
+        .map(|i| i + 1)
+        .unwrap_or(0);
     let percent: f64 = line[percent_start..percent_idx].trim().parse().ok()?;
 
     let speed_mbps = if let Some(speed_end) = line.find("/s") {
@@ -657,7 +886,9 @@ fn parse_rsync_progress(line: &str) -> Option<RsyncProgress> {
             (speed_str, 0.000001)
         };
         value.parse::<f64>().unwrap_or(0.0) * mult
-    } else { 0.0 };
+    } else {
+        0.0
+    };
 
     let (files_done, files_total) = if let Some(xfr_start) = line.find("xfr#") {
         let xfr_end = line[xfr_start..].find(',').map(|i| i + xfr_start)?;
@@ -668,10 +899,19 @@ fn parse_rsync_progress(line: &str) -> Option<RsyncProgress> {
             let paren = chk_part.find(')')?;
             let total: u64 = chk_part[slash + 1..paren].parse().ok()?;
             (done, total)
-        } else { (done, done) }
-    } else { (0, 0) };
+        } else {
+            (done, done)
+        }
+    } else {
+        (0, 0)
+    };
 
-    Some(RsyncProgress { percent, speed_mbps, files_done, files_total })
+    Some(RsyncProgress {
+        percent,
+        speed_mbps,
+        files_done,
+        files_total,
+    })
 }
 
 // ============================================================================
@@ -722,7 +962,10 @@ fn patch_bls_entries(entries_dir: &Path, root_uuid: &str) -> Result<()> {
         return Ok(());
     }
 
-    let expected_options = format!("options root=UUID={} rootflags=subvol=root rw rhgb quiet", root_uuid);
+    let expected_options = format!(
+        "options root=UUID={} rootflags=subvol=root rw rhgb quiet",
+        root_uuid
+    );
 
     for entry in fs::read_dir(entries_dir)? {
         let entry = entry?;
@@ -739,7 +982,8 @@ fn patch_bls_entries(entries_dir: &Path, root_uuid: &str) -> Result<()> {
                     }
                 })
                 .collect::<Vec<_>>()
-                .join("\n") + "\n";
+                .join("\n")
+                + "\n";
             fs::write(&path, new_content)?;
             info!("✅ Patched {}", path.display());
         }
@@ -749,7 +993,10 @@ fn patch_bls_entries(entries_dir: &Path, root_uuid: &str) -> Result<()> {
 
 fn configure_locale(ctx: &FlashContext, target_root: &Path) -> Result<()> {
     if let Some(ref locale) = ctx.locale {
-        ctx.status(&format!("🗣️ Configuring locale: {} (keymap: {})", locale.lang, locale.keymap));
+        ctx.status(&format!(
+            "🗣️ Configuring locale: {} (keymap: {})",
+            locale.lang, locale.keymap
+        ));
         crate::locale::patch_locale(target_root, locale, false)?;
     } else {
         ctx.status("🗣️ Using default locale settings");
@@ -777,16 +1024,34 @@ fn generate_fstab(ctx: &FlashContext, target_root: &Path, subvols: &BtrfsSubvols
     let data_uuid = get_partition_uuid(&ctx.partition_path(4))?;
 
     let mut fstab = String::from("# /etc/fstab - Generated by MASH Installer\n");
-    fstab.push_str(&format!("UUID={}  /         btrfs  subvol=root,compress=zstd:1,defaults,noatime  0 0\n", root_uuid));
+    fstab.push_str(&format!(
+        "UUID={}  /         btrfs  subvol=root,compress=zstd:1,defaults,noatime  0 0\n",
+        root_uuid
+    ));
     if subvols.has_home {
-        fstab.push_str(&format!("UUID={}  /home     btrfs  subvol=home,compress=zstd:1,defaults,noatime  0 0\n", root_uuid));
+        fstab.push_str(&format!(
+            "UUID={}  /home     btrfs  subvol=home,compress=zstd:1,defaults,noatime  0 0\n",
+            root_uuid
+        ));
     }
     if subvols.has_var {
-        fstab.push_str(&format!("UUID={}  /var      btrfs  subvol=var,compress=zstd:1,defaults,noatime   0 0\n", root_uuid));
+        fstab.push_str(&format!(
+            "UUID={}  /var      btrfs  subvol=var,compress=zstd:1,defaults,noatime   0 0\n",
+            root_uuid
+        ));
     }
-    fstab.push_str(&format!("UUID={}  /boot     ext4   defaults,noatime  0 2\n", boot_uuid));
-    fstab.push_str(&format!("UUID={}   /boot/efi vfat   umask=0077,shortname=winnt  0 2\n", efi_uuid));
-    fstab.push_str(&format!("UUID={}  /data     btrfs  defaults,noatime  0 0\n", data_uuid));
+    fstab.push_str(&format!(
+        "UUID={}  /boot     ext4   defaults,noatime  0 2\n",
+        boot_uuid
+    ));
+    fstab.push_str(&format!(
+        "UUID={}   /boot/efi vfat   umask=0077,shortname=winnt  0 2\n",
+        efi_uuid
+    ));
+    fstab.push_str(&format!(
+        "UUID={}  /data     btrfs  defaults,noatime  0 0\n",
+        data_uuid
+    ));
 
     let fstab_path = target_root.join("etc/fstab");
     fs::create_dir_all(fstab_path.parent().unwrap())?;
@@ -825,34 +1090,57 @@ fn stage_dojo(ctx: &FlashContext, data_mount: &Path) -> Result<()> {
 }
 
 fn decompress_xz_image(ctx: &FlashContext, xz_image_path: &Path) -> Result<PathBuf> {
-    ctx.status(&format!("Decompressing XZ image: {}...", xz_image_path.display()));
+    ctx.status(&format!(
+        "Decompressing XZ image: {}...",
+        xz_image_path.display()
+    ));
 
     let raw_image_path = xz_image_path.with_extension(""); // Remove .xz extension
 
     // Check if the raw image already exists
     if raw_image_path.exists() {
-        ctx.status(&format!("Raw image already exists: {}", raw_image_path.display()));
+        ctx.status(&format!(
+            "Raw image already exists: {}",
+            raw_image_path.display()
+        ));
         return Ok(raw_image_path);
     }
 
     let mut cmd = Command::new("xz");
     cmd.args(["-dc", xz_image_path.to_str().unwrap()]);
 
-    let mut child = cmd.stdout(Stdio::piped()).spawn().context("Failed to spawn xz process")?;
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .spawn()
+        .context("Failed to spawn xz process")?;
 
-    let mut output_file = std::fs::File::create(&raw_image_path)
-        .with_context(|| format!("Failed to create raw image file: {}", raw_image_path.display()))?;
+    let mut output_file = std::fs::File::create(&raw_image_path).with_context(|| {
+        format!(
+            "Failed to create raw image file: {}",
+            raw_image_path.display()
+        )
+    })?;
 
-    let mut stdout = child.stdout.take().context("Failed to get stdout from xz process")?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .context("Failed to get stdout from xz process")?;
     std::io::copy(&mut stdout, &mut output_file).context("Failed to copy decompressed data")?;
 
     let status = child.wait().context("Failed to wait for xz process")?;
 
     if !status.success() {
-        bail!("xz decompression failed with exit code: {:?}", status.code());
+        bail!(
+            "xz decompression failed with exit code: {:?}",
+            status.code()
+        );
     }
 
-    ctx.status(&format!("Decompression complete: {} -> {}", xz_image_path.display(), raw_image_path.display()));
+    ctx.status(&format!(
+        "Decompression complete: {} -> {}",
+        xz_image_path.display(),
+        raw_image_path.display()
+    ));
     Ok(raw_image_path)
 }
 
@@ -864,17 +1152,23 @@ fn decompress_xz_image(ctx: &FlashContext, xz_image_path: &Path) -> Result<PathB
 fn parse_size_to_mib(s: &str) -> Result<u64> {
     let s_lower = s.to_ascii_lowercase();
     if s_lower.ends_with("mib") {
-        s_lower.trim_end_matches("mib").parse::<u64>()
+        s_lower
+            .trim_end_matches("mib")
+            .parse::<u64>()
             .map_err(|e| anyhow::anyhow!("Invalid MiB format: {} ({})", s, e))
     } else if s_lower.ends_with("gib") {
-        s_lower.trim_end_matches("gib").parse::<u64>()
+        s_lower
+            .trim_end_matches("gib")
+            .parse::<u64>()
             .map_err(|e| anyhow::anyhow!("Invalid GiB format: {} ({})", s, e))
-            .and_then(|g| g.checked_mul(1024).ok_or_else(|| anyhow::anyhow!("Size overflow for GiB: {}", s)))
+            .and_then(|g| {
+                g.checked_mul(1024)
+                    .ok_or_else(|| anyhow::anyhow!("Size overflow for GiB: {}", s))
+            })
     } else {
         bail!("Size must be like 1024MiB or 2GiB, got: {}", s)
     }
 }
-
 
 // ============================================================================
 // Cleanup and Helper Functions
@@ -886,15 +1180,26 @@ fn cleanup(ctx: &FlashContext) {
     // Unmount everything (best effort, reverse order)
     let base = &ctx.work_dir;
     let mount_points = [
-        base.join("dst/root_sub_var"), base.join("dst/root_sub_home"), base.join("dst/root_sub_root"),
-        base.join("dst/root_top"), base.join("dst/data"), base.join("dst/boot"), base.join("dst/efi"),
-        base.join("src/root_sub_var"), base.join("src/root_sub_home"), base.join("src/root_sub_root"),
-        base.join("src/root_top"), base.join("src/boot"), base.join("src/efi"),
+        base.join("dst/root_sub_var"),
+        base.join("dst/root_sub_home"),
+        base.join("dst/root_sub_root"),
+        base.join("dst/root_top"),
+        base.join("dst/data"),
+        base.join("dst/boot"),
+        base.join("dst/efi"),
+        base.join("src/root_sub_var"),
+        base.join("src/root_sub_home"),
+        base.join("src/root_sub_root"),
+        base.join("src/root_top"),
+        base.join("src/boot"),
+        base.join("src/efi"),
     ];
 
     for mp in &mount_points {
         if mp.exists() {
-            let _ = Command::new("umount").args(["-R", mp.to_str().unwrap()]).status();
+            let _ = Command::new("umount")
+                .args(["-R", mp.to_str().unwrap()])
+                .status();
         }
     }
 
@@ -906,7 +1211,11 @@ fn cleanup(ctx: &FlashContext) {
 }
 
 fn normalize_disk(d: &str) -> String {
-    if d.starts_with("/dev/") { d.to_string() } else { format!("/dev/{}", d) }
+    if d.starts_with("/dev/") {
+        d.to_string()
+    } else {
+        format!("/dev/{}", d)
+    }
 }
 
 fn show_lsblk(disk: &str) -> Result<()> {
@@ -921,7 +1230,9 @@ fn show_lsblk(disk: &str) -> Result<()> {
 
 fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
     debug!("Running: {} {}", cmd, args.join(" "));
-    let status = Command::new(cmd).args(args).status()
+    let status = Command::new(cmd)
+        .args(args)
+        .status()
         .with_context(|| format!("Failed to execute {}", cmd))?;
     if !status.success() {
         bail!("{} failed with exit code: {:?}", cmd, status.code());

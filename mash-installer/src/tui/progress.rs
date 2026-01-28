@@ -227,8 +227,8 @@ impl ProgressState {
                 if self.speed_samples.len() > 100 {
                     self.speed_samples.remove(0);
                 }
-                self.average_speed = self.speed_samples.iter().sum::<f64>()
-                    / self.speed_samples.len() as f64;
+                self.average_speed =
+                    self.speed_samples.iter().sum::<f64>() / self.speed_samples.len() as f64;
 
                 self.update_overall_progress();
             }

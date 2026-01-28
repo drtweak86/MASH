@@ -45,10 +45,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 }
 
 fn draw_title_bar(f: &mut Frame, app: &App, area: Rect) {
-    let title = format!(
-        " 🍠 MASH - {} ",
-        app.current_screen.title()
-    );
+    let title = format!(" 🍠 MASH - {} ", app.current_screen.title());
 
     let mode_indicator = if app.options.dry_run || app.dry_run_cli {
         " [🧪 DRY-RUN] "
@@ -57,7 +54,11 @@ fn draw_title_bar(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let title_block = Paragraph::new(format!("{}{}", title, mode_indicator))
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
         .alignment(Alignment::Center)
         .block(
             Block::default()
@@ -103,7 +104,12 @@ fn draw_help_bar(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_welcome(f: &mut Frame, app: &App, area: Rect) {
     // Animated cursor blink
-    let cursor = if (app.animation_tick / 5) % 2 == 0 { "▌" } else { " " };
+    #[allow(clippy::manual_is_multiple_of)]
+    let cursor = if (app.animation_tick / 5) % 2 == 0 {
+        "▌"
+    } else {
+        " "
+    };
 
     let text = vec![
         Line::from(""),
@@ -127,22 +133,17 @@ fn draw_welcome(f: &mut Frame, app: &App, area: Rect) {
         Line::from(""),
         Line::from(""),
         Line::from(vec![
-            Span::styled(
-                "Press ENTER to begin...",
-                Style::default().fg(Color::Green),
-            ),
+            Span::styled("Press ENTER to begin...", Style::default().fg(Color::Green)),
             Span::styled(cursor, Style::default().fg(Color::Green)),
         ]),
     ];
 
-    let paragraph = Paragraph::new(text)
-        .alignment(Alignment::Center)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" 🎉 Welcome ")
-                .border_style(Style::default().fg(Color::Yellow)),
-        );
+    let paragraph = Paragraph::new(text).alignment(Alignment::Center).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" 🎉 Welcome ")
+            .border_style(Style::default().fg(Color::Yellow)),
+    );
 
     f.render_widget(paragraph, area);
 }
@@ -395,7 +396,10 @@ fn draw_options(f: &mut Frame, app: &App, area: Rect) {
     let scheme_label = format!(
         "🧭 Partition scheme: {}{}",
         app.options.partition_scheme,
-        if matches!(app.options.partition_scheme, crate::cli::PartitionScheme::Mbr) {
+        if matches!(
+            app.options.partition_scheme,
+            crate::cli::PartitionScheme::Mbr
+        ) {
             " (recommended)"
         } else {
             ""
@@ -437,15 +441,22 @@ fn draw_options(f: &mut Frame, app: &App, area: Rect) {
                 Style::default()
             };
 
-            let prefix = if i == app.options_focus { "👉 " } else { "   " };
+            let prefix = if i == app.options_focus {
+                "👉 "
+            } else {
+                "   "
+            };
 
             let symbol = match checked_opt {
                 Some(checked) => CheckboxState::from(*checked).symbol().to_string(),
                 None => "🔁".to_string(),
             };
 
-            let text = format!("{}{} {}
-      📝 {}", prefix, symbol, label, desc);
+            let text = format!(
+                "{}{} {}
+      📝 {}",
+                prefix, symbol, label, desc
+            );
             ListItem::new(text).style(style)
         })
         .collect();
@@ -464,7 +475,7 @@ fn draw_confirmation(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(10),  // Summary
+            Constraint::Min(10),   // Summary
             Constraint::Length(5), // Input
             Constraint::Length(3), // Error
         ])
@@ -484,19 +495,24 @@ fn draw_confirmation(f: &mut Frame, app: &App, area: Rect) {
     let summary_text = vec![
         Line::from(Span::styled(
             "⚠️  DANGER ZONE ⚠️",
-            Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(format!("💾 Target Disk: {}", disk_display)),
         Line::from(format!("📀 Image: {}", app.image_input.value())),
         Line::from(format!("🔧 UEFI Dir: {}", app.uefi_input.value())),
         Line::from(format!("🌍 Locale: {}", locale_display)),
-        Line::from(format!("🧭 Partition Scheme: {}", app.options.partition_scheme)),
+        Line::from(format!(
+            "🧭 Partition Scheme: {}",
+            app.options.partition_scheme
+        )),
         Line::from(format!(
             "🔐 Early SSH: {}",
-            if app.options.early_ssh { "✅ Yes" } else { "❌ No" }
+            if app.options.early_ssh {
+                "✅ Yes"
+            } else {
+                "❌ No"
+            }
         )),
         Line::from(format!(
             "🧪 Dry-run: {}",
@@ -566,9 +582,9 @@ fn draw_progress(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Overall progress bar
-            Constraint::Min(12),    // Analytics + Phases (split horizontally)
-            Constraint::Length(3),  // Status
+            Constraint::Length(3), // Overall progress bar
+            Constraint::Min(12),   // Analytics + Phases (split horizontally)
+            Constraint::Length(3), // Status
         ])
         .margin(1)
         .split(area);
@@ -634,10 +650,7 @@ fn draw_progress(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .title(format!(
             " 🔥 Installing - Phase {}/{} ",
-            app.progress
-                .current_phase
-                .map(|p| p.number())
-                .unwrap_or(0),
+            app.progress.current_phase.map(|p| p.number()).unwrap_or(0),
             Phase::total()
         ))
         .border_style(Style::default().fg(Color::Yellow));
@@ -659,20 +672,14 @@ fn draw_analytics_panel(f: &mut Frame, app: &App, area: Rect) {
             "📈 Average:   {:.1} MB/s",
             app.progress.average_speed
         )),
-        Line::from(format!(
-            "🚀 Peak:      {:.1} MB/s",
-            app.progress.peak_speed
-        )),
+        Line::from(format!("🚀 Peak:      {:.1} MB/s", app.progress.peak_speed)),
         Line::from(""),
         Line::from(Span::styled(
             "⏱️ Time",
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from("─────────────────────"),
-        Line::from(format!(
-            "⏳ Elapsed:   {}",
-            app.progress.elapsed_string()
-        )),
+        Line::from(format!("⏳ Elapsed:   {}", app.progress.elapsed_string())),
         Line::from(format!("🎯 ETA:       {}", app.progress.eta_string())),
         Line::from(format!(
             "📍 Phase:     {}",
@@ -690,13 +697,12 @@ fn draw_analytics_panel(f: &mut Frame, app: &App, area: Rect) {
         )),
     ];
 
-    let analytics = Paragraph::new(analytics_lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" 📊 Analytics ")
-                .border_style(Style::default().fg(Color::Cyan)),
-        );
+    let analytics = Paragraph::new(analytics_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" 📊 Analytics ")
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
 
     f.render_widget(analytics, area);
 }
@@ -778,20 +784,14 @@ fn draw_complete(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(Color::Green),
         )
     } else {
-        let error_msg = app
-            .install_error
-            .as_ref()
-            .map(|e| e.as_str())
-            .unwrap_or("Unknown error");
+        let error_msg = app.install_error.as_deref().unwrap_or("Unknown error");
         (
             " ❌ Installation Failed ".to_string(),
             vec![
                 Line::from(""),
                 Line::from(Span::styled(
                     "😢 Installation failed!",
-                    Style::default()
-                        .fg(Color::Red)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
                 Line::from(format!("❌ Error: {}", error_msg)),
@@ -807,14 +807,12 @@ fn draw_complete(f: &mut Frame, app: &App, area: Rect) {
         )
     };
 
-    let paragraph = Paragraph::new(text)
-        .alignment(Alignment::Center)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(style),
-        );
+    let paragraph = Paragraph::new(text).alignment(Alignment::Center).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(style),
+    );
 
     f.render_widget(paragraph, area);
 }

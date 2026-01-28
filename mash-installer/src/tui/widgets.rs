@@ -130,7 +130,12 @@ fn base_disk(dev: &str) -> String {
         return s;
     }
     // Handle standard: /dev/sda1 -> /dev/sda
-    while s.chars().last().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+    while s
+        .chars()
+        .last()
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false)
+    {
         s.pop();
     }
     s

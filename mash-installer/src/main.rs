@@ -3,17 +3,20 @@
 //! A friendly TUI wizard for installing Fedora KDE on Raspberry Pi 4 with UEFI boot.
 //! Run without arguments to launch the interactive TUI wizard.
 
-use clap::Parser;
+#![allow(dead_code)] // Future use
+#![allow(clippy::too_many_arguments)] // Installer config has many params
+
 use anyhow::Context;
+use clap::Parser;
 
 mod cli;
+mod download;
 mod errors;
 mod flash;
 mod locale;
 mod logging;
 mod preflight;
 mod tui;
-mod download;
 
 fn main() -> anyhow::Result<()> {
     logging::init();
@@ -74,17 +77,22 @@ fn main() -> anyhow::Result<()> {
                 )?);
             }
 
-            let parsed_locale = if let Some(l_str) = _locale.as_ref() { // Use .as_ref() to get &String
+            let parsed_locale = if let Some(l_str) = _locale.as_ref() {
+                // Use .as_ref() to get &String
                 Some(locale::LocaleConfig::parse_from_str(l_str)?)
             } else {
                 None
             };
 
             flash::run(
-                final_image_path.as_ref().context("Image path is required (provide --image or use --download-image)")?,
+                final_image_path
+                    .as_ref()
+                    .context("Image path is required (provide --image or use --download-image)")?,
                 disk,
                 *scheme,
-                final_uefi_dir.as_ref().context("UEFI directory is required (provide --uefi-dir or use --download-uefi)")?,
+                final_uefi_dir.as_ref().context(
+                    "UEFI directory is required (provide --uefi-dir or use --download-uefi)",
+                )?,
                 cli.dry_run,
                 *auto_unmount,
                 *yes_i_know,

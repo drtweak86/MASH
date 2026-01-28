@@ -106,12 +106,12 @@ pub fn run(cli: &Cli, watch: bool, dry_run: bool) -> Result<()> {
                 });
 
                 // Run progress display loop
-                run_progress_loop(&mut terminal, &mut app);
+                let _ = run_progress_loop(&mut terminal, &mut app);
 
                 // Wait for flash to complete
-                let flash_result = flash_handle.join().map_err(|_| {
-                    anyhow::anyhow!("Flash thread panicked")
-                })?;
+                let flash_result = flash_handle
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("Flash thread panicked"))?;
 
                 // Restore terminal
                 disable_raw_mode()?;
@@ -182,22 +182,19 @@ fn run_progress_loop(
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 // Global quit: Ctrl+C
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && key.code == KeyCode::Char('c')
-                {
+                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
                     // TODO: Signal flash to abort
                     log::warn!("Installation abort requested");
                     return Ok(());
                 }
 
                 // If complete, allow exit
-                if app.progress.is_complete {
-                    if key.code == KeyCode::Enter
+                if app.progress.is_complete
+                    && (key.code == KeyCode::Enter
                         || key.code == KeyCode::Esc
-                        || key.code == KeyCode::Char('q')
-                    {
-                        return Ok(());
-                    }
+                        || key.code == KeyCode::Char('q'))
+                {
+                    return Ok(());
                 }
             }
         }

@@ -31,10 +31,20 @@ impl LocaleConfig {
         let keymap = parts[1];
 
         // Find matching locale in LOCALES
-        LOCALES.iter()
+        LOCALES
+            .iter()
             .find(|lc| lc.lang == lang && lc.keymap == keymap)
             .cloned() // Clone to get an owned LocaleConfig
-            .ok_or_else(|| anyhow::anyhow!("Unsupported locale: '{}'. Available: {:?}", s, LOCALES.iter().map(|lc| format!("{}:{}", lc.lang, lc.keymap)).collect::<Vec<_>>()))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Unsupported locale: '{}'. Available: {:?}",
+                    s,
+                    LOCALES
+                        .iter()
+                        .map(|lc| format!("{}:{}", lc.lang, lc.keymap))
+                        .collect::<Vec<_>>()
+                )
+            })
     }
 }
 
@@ -79,7 +89,11 @@ pub fn patch_locale(root_mount: &Path, locale: &LocaleConfig, dry_run: bool) -> 
     let locale_conf = root_mount.join("etc/locale.conf");
     let locale_content = format!("LANG={}\n", locale.lang);
     if dry_run {
-        log::info!("(dry-run) would write to {}: {}", locale_conf.display(), locale_content.trim());
+        log::info!(
+            "(dry-run) would write to {}: {}",
+            locale_conf.display(),
+            locale_content.trim()
+        );
     } else {
         // Ensure parent directory exists
         if let Some(parent) = locale_conf.parent() {

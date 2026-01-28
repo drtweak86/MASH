@@ -5,7 +5,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum PartitionScheme {
     /// MBR (msdos) partition table — recommended for maximum Raspberry Pi UEFI compatibility
@@ -48,6 +47,7 @@ pub struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// 🔍 Run preflight checks (verify system requirements)
     Preflight,

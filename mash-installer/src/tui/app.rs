@@ -306,7 +306,8 @@ impl App {
                         self.current_screen = Screen::UefiDirectory;
                     } else if path.is_dir() {
                         // If it's a directory, look for .raw files
-                        self.image_error = Some("Please select a .raw file, not a directory".into());
+                        self.image_error =
+                            Some("Please select a .raw file, not a directory".into());
                     } else {
                         self.image_error = Some(format!("File not found: {}", path.display()));
                     }
