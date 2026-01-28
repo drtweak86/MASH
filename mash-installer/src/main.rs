@@ -83,7 +83,7 @@ fn main() -> anyhow::Result<()> {
             flash::run(
                 final_image_path.as_ref().context("Image path is required (provide --image or use --download-image)")?,
                 disk,
-                scheme,
+                *scheme,
                 final_uefi_dir.as_ref().context("UEFI directory is required (provide --uefi-dir or use --download-uefi)")?,
                 cli.dry_run,
                 *auto_unmount,

@@ -100,6 +100,7 @@ impl Default for InstallOptions {
 pub struct FlashConfig {
     pub image: PathBuf,
     pub disk: String,
+    pub scheme: PartitionScheme,
     pub uefi_dir: PathBuf,
     pub dry_run: bool,
     pub auto_unmount: bool,

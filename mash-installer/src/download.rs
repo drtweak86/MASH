@@ -132,4 +132,3 @@ pub fn download_fedora_image(
     info!("Decompressed Fedora image to {}", raw_path.display());
     Ok(raw_path)
 }
-}

@@ -215,6 +215,7 @@ dry_run: bool,
     let mut ctx = FlashContext {
         image: image.to_path_buf(),
         disk: disk.clone(),
+        scheme,
         uefi_dir: uefi_dir.to_path_buf(),
         dry_run,
         auto_unmount,
