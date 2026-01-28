@@ -95,7 +95,7 @@ The Dojo is a post-install automation system that runs after first boot:
 ### One-Command Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/drtweak86/mash-installer/main/install.sh | sudo bash
+curl -L https://raw.githubusercontent.com/drtweak86/MASH/main/install.sh | sudo bash
 ```
 
 ### Usage
