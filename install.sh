@@ -75,39 +75,39 @@ get_latest_version() {
 download_and_install() {
     local version=$1
     local arch=$2
-    local download_url="https://github.com/$REPO/releases/download/$version/mash-installer-$version.tar.gz"
+    local download_url="https://github.com/$REPO/releases/download/$version/MASH-$version.tar.gz"
     
     log_info "Downloading MASH Installer $version for $arch..."
     
     mkdir -p "$TEMP_DIR"
     cd "$TEMP_DIR"
     
-    if ! curl -fsSL -o mash-installer.tar.gz "$download_url"; then
+    if ! curl -fsSL -o MASH.tar.gz "$download_url"; then
         log_error "Failed to download installer"
         exit 1
     fi
     
     log_info "Extracting archive..."
-    tar -xzf mash-installer.tar.gz
+    tar -xzf MASH.tar.gz
     
     # Install CLI binary
-    local cli_binary="mash-installer-$arch/mash-installer-$arch"
+    local cli_binary="MASH-$arch/MASH-$arch"
     if [ -f "$cli_binary" ]; then
         log_info "Installing CLI binary..."
-        cp "$cli_binary" "$INSTALL_DIR/mash-installer"
-        chmod +x "$INSTALL_DIR/mash-installer"
-        log_success "CLI installed to $INSTALL_DIR/mash-installer"
+        cp "$cli_binary" "$INSTALL_DIR/MASH"
+        chmod +x "$INSTALL_DIR/MASH"
+        log_success "CLI installed to $INSTALL_DIR/MASH"
     else
         log_error "CLI binary not found in archive"
         exit 1
     fi
     
     # Install Qt GUI (optional)
-    if [ -f "mash-installer-qt/mash-installer-qt" ]; then
+    if [ -f "MASH-qt/MASH-qt" ]; then
         log_info "Installing Qt GUI..."
-        cp "mash-installer-qt/mash-installer-qt" "$INSTALL_DIR/mash-installer-qt"
-        chmod +x "$INSTALL_DIR/mash-installer-qt"
-        log_success "Qt GUI installed to $INSTALL_DIR/mash-installer-qt"
+        cp "MASH-qt/MASH-qt" "$INSTALL_DIR/MASH-qt"
+        chmod +x "$INSTALL_DIR/MASH-qt"
+        log_success "Qt GUI installed to $INSTALL_DIR/MASH-qt"
     else
         log_warning "Qt GUI not found in archive (optional component)"
     fi
@@ -118,9 +118,9 @@ download_and_install() {
 }
 
 create_desktop_entry() {
-    local desktop_file="/usr/share/applications/mash-installer.desktop"
+    local desktop_file="/usr/share/applications/MASH.desktop"
     
-    if [ -f "$INSTALL_DIR/mash-installer-qt" ]; then
+    if [ -f "$INSTALL_DIR/MASH-qt" ]; then
         log_info "Creating desktop entry..."
         
         cat > "$desktop_file" <<'EOF'
@@ -129,7 +129,7 @@ Version=1.0
 Type=Application
 Name=MASH Installer
 Comment=Install Fedora KDE on Raspberry Pi 4
-Exec=pkexec /usr/local/bin/mash-installer-qt
+Exec=pkexec /usr/local/bin/MASH-qt
 Icon=drive-harddisk
 Terminal=false
 Categories=System;Settings;
@@ -152,10 +152,10 @@ ${GREEN}╔═══════════════════════
 
 ${BLUE}CLI Usage:${NC}
   # Check system requirements
-  mash-installer preflight
+  MASH preflight
 
   # Install (with confirmation)
-  sudo mash-installer flash \\
+  sudo MASH flash \\
     --image /path/to/fedora-kde.raw \\
     --disk /dev/sdX \\
     --uefi-dir /path/to/uefi \\
@@ -163,17 +163,17 @@ ${BLUE}CLI Usage:${NC}
     --yes-i-know
 
   # Dry run (test without changes)
-  sudo mash-installer flash \\
+  sudo MASH flash \\
     --image /path/to/fedora-kde.raw \\
     --disk /dev/sdX \\
     --uefi-dir /path/to/uefi \\
     --dry-run
 
 ${BLUE}GUI Usage:${NC}
-  sudo mash-installer-qt
+  sudo MASH-qt
 
 ${BLUE}Help:${NC}
-  mash-installer --help
+  MASH --help
 
 ${YELLOW}⚠️  WARNING:${NC}
   This installer will COMPLETELY ERASE the target disk!
