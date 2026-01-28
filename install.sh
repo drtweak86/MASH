@@ -221,41 +221,18 @@ download_and_install() {
     esac
 
     # Install CLI binary
-    # The tarball has structure: mash-installer-ARCH/mash-installer-ARCH
     local cli_binary
-    
-    # Look for architecture-specific binary in subdirectory
     if [[ -d "mash-installer-${arch}" ]]; then
         cli_binary="$(find "mash-installer-${arch}" -type f -executable -print -quit 2>/dev/null || true)"
     fi
-    
     if [[ -z "$cli_binary" ]]; then
         cli_binary="$(find . -type f -name "mash-installer*" -executable -print -quit 2>/dev/null || true)"
     fi
-    
     if [[ -n "$cli_binary" ]]; then
         log_info "Installing CLI from $cli_binary..."
         cp "$cli_binary" "$INSTALL_DIR/mash-installer"
         chmod +x "$INSTALL_DIR/mash-installer"
         log_success "CLI installed to $INSTALL_DIR/mash-installer"
-    else
-        log_error "CLI binary not found in extracted files"
-        log_info "Extracted files (top-level):"
-        find . -maxdepth 3 -type f -print
-        exit 1
-    fi
-    local cli_binary
-    cli_binary="$(find . -type f -name 'MASH' -perm /111 -print -quit 2>/dev/null || true)"
-    if [[ -z "$cli_binary" ]]; then
-        # fallback: allow "mash-installer" too
-        cli_binary="$(find . -type f -name 'mash-installer' -perm /111 -print -quit 2>/dev/null || true)"
-    fi
-
-    if [[ -n "$cli_binary" ]]; then
-        log_info "Installing CLI from $cli_binary..."
-        cp "$cli_binary" "$INSTALL_DIR/MASH"
-        chmod +x "$INSTALL_DIR/MASH"
-        log_success "CLI installed to $INSTALL_DIR/MASH"
     else
         log_error "CLI binary not found in extracted files"
         log_info "Extracted files (top-level):"
