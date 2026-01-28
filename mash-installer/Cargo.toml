@@ -1,6 +1,6 @@
 [package]
 name = "mash"
-version = "1.1.18"
+version = "1.1.19"
 edition = "2021"
 authors = ["MASH Team"]
 description = "🍠 MASH - Fedora KDE for Raspberry Pi 4B with UEFI boot + Dojo system"
@@ -23,7 +23,7 @@ nix = { version = "0.27", features = ["mount", "fs"] }
 libc = "0.2"
 ratatui = "0.28"
 crossterm = "0.28"
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 zip = "0.6"
 url = "2.5"
 
