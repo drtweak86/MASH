@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use log::{info, warn};
+use log::info;
 use std::path::Path;
 use std::process::Command;
 
@@ -10,7 +10,7 @@ pub fn run(
     disk: &str,
     uefi_dir: &Path,
     dry_run: bool,
-    auto_unmount: bool,
+    _auto_unmount: bool,  // Prefix unused with _
     yes_i_know: bool,
 ) -> Result<()> {
     info!("🎮 MASH Full-Loop Installer: Fedora KDE + UEFI Boot for RPi4");
@@ -38,8 +38,8 @@ pub fn run(
         return Ok(());
     }
 
-    info!("✅ Installation pipeline ready (implementation in progress)");
-    info!("This will be completed in the next update");
+    info!("✅ Installation pipeline ready");
+    info!("Full implementation coming in next update");
     
     Ok(())
 }
