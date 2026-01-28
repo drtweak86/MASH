@@ -19,7 +19,7 @@ Download Fedora KDE for ARM:
 #### Using GUI (Easiest)
 
 ```bash
-sudo mash-installer-qt
+(Optional GUI is x86_64-only right now; use the CLI on Pi)
 ```
 
 1. Click "Browse" to select your Fedora image
@@ -120,7 +120,7 @@ You should see 4 partitions with correct labels:
 ### "Permission denied"
 ```bash
 # Make sure you're using sudo
-sudo mash-installer-qt
+(Optional GUI is x86_64-only right now; use the CLI on Pi)
 ```
 
 ### "Disk not found"

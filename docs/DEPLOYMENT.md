@@ -16,7 +16,7 @@ mash-complete/
 │   │   ├── errors.rs             # Error handling
 │   │   └── logging.rs            # Logging setup
 │   └── Cargo.toml                # Dependencies
-├── qt-gui/                        # Qt GUI wrapper
+├── GUI/                        # GUI (optional) wrapper
 │   ├── src/
 │   │   ├── main.cpp
 │   │   ├── mainwindow.cpp/.h     # Main window logic
@@ -97,7 +97,7 @@ git push origin main --tags
 
 This will:
 - Build binaries for ARM64 and x86_64
-- Create Qt GUI executable
+- Create GUI (optional) executable
 - Package everything into a release
 - Make available via GitHub Releases
 
@@ -124,7 +124,7 @@ make
 
 # Or build individually
 make build-cli   # Rust CLI only
-make build-qt    # Qt GUI only
+make build-qt    # GUI (optional) only
 
 # Run tests
 make test
@@ -147,9 +147,9 @@ cargo test
 RUST_LOG=debug cargo run -- preflight
 
 # 4. Test GUI
-cd ../qt-gui
+cd ../GUI
 cmake -B build && cmake --build build
-./build/mash-installer-qt
+./build/(optional GUI - x86_64 only)
 
 # 5. Commit changes
 git add .
@@ -185,7 +185,7 @@ git push origin main --tags
 - **UUID-based fstab**: Proper disk identification
 - **Safety Features**: Dry-run, confirmations, lsblk display
 
-### ✅ Qt GUI
+### ✅ GUI (optional)
 
 - **File Browser**: Easy image selection
 - **Disk Detection**: Auto-discover available disks
@@ -240,7 +240,7 @@ RUST_LOG=debug sudo mash-installer flash [options]
 
 ```bash
 # Launch GUI
-sudo mash-installer-qt
+sudo (optional GUI - x86_64 only)
 
 # Steps in GUI:
 # 1. Browse for Fedora image
@@ -341,7 +341,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
 ```
 
-**Qt not found:**
+**GUI (optional, x86_64 only) not found:**
 ```bash
 # Fedora
 sudo dnf install qt6-qtbase-devel
@@ -400,7 +400,7 @@ MIT License - see LICENSE file for details.
 ## 🙏 Acknowledgments
 
 - Rust community for amazing tools
-- Qt Project for cross-platform framework
+- GUI (optional, x86_64 only) Project for cross-platform framework
 - Fedora Project for ARM support
 - Raspberry Pi Foundation
 - GitHub for free CI/CD

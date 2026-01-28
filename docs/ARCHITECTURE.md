@@ -5,7 +5,7 @@
 MASH Installer is a modular system for deploying Fedora KDE on Raspberry Pi 4B with UEFI boot. It consists of:
 
 1. **Rust CLI** - Core installation logic
-2. **Qt GUI** - User-friendly interface
+2. **GUI (optional)** - User-friendly interface
 3. **CI/CD Pipeline** - Automated builds and releases
 4. **Install Script** - One-command deployment
 
@@ -33,16 +33,16 @@ src/
 - **UEFI Configuration**: Runs `dracut` and installs GRUB
 - **Safety Features**: Dry-run mode, confirmation prompts, UUID-based fstab
 
-### 2. Qt GUI (`qt-gui/`)
+### 2. GUI (optional) (`GUI/`)
 
 #### Components
 
 ```
 src/
-├── main.cpp         - Qt application entry
+├── main.cpp         - GUI (optional, x86_64 only) application entry
 ├── mainwindow.h     - Window class declaration
 ├── mainwindow.cpp   - Window implementation
-└── mainwindow.ui    - UI layout (Qt Designer)
+└── mainwindow.ui    - UI layout (GUI (optional, x86_64 only) Designer)
 ```
 
 #### Features
@@ -70,8 +70,8 @@ Strategy:
    - Strip binaries for size optimization
    - Upload as artifacts
 
-2. **Build Qt GUI**
-   - Compile with Qt 6
+2. **Build GUI (optional)**
+   - Compile with GUI (optional, x86_64 only) 6
    - Create single-file executable
    - Upload as artifact
 
@@ -319,7 +319,7 @@ mash-installer flash --dry-run [options]
 ### Build Dependencies
 
 - Rust 1.70+
-- Qt 5.15+ or Qt 6.x
+- GUI (optional, x86_64 only) 5.15+ or GUI (optional, x86_64 only) 6.x
 - CMake 3.16+
 - GCC/G++ (with ARM cross-compiler for ARM builds)
 
@@ -328,5 +328,5 @@ mash-installer flash --dry-run [options]
 - [Fedora ARM Documentation](https://fedoraproject.org/wiki/Architectures/ARM)
 - [RPi4 UEFI Firmware](https://github.com/pftf/RPi4)
 - [Rust Book](https://doc.rust-lang.org/book/)
-- [Qt Documentation](https://doc.qt.io/)
+- [GUI (optional, x86_64 only) Documentation](https://doc.qt.io/)
 - [GitHub Actions](https://docs.github.com/en/actions)

@@ -6,7 +6,7 @@
 
 MASH is a complete solution for installing Fedora KDE on Raspberry Pi 4B that combines:
 
-1. **Rust CLI/Qt GUI Installer** - Flash Fedora images with proper UEFI boot
+1. **Rust CLI/GUI (optional) Installer** - Flash Fedora images with proper UEFI boot
 2. **Loop Mount System** - No extraction needed, works directly with .raw images  
 3. **Btrfs with Subvolumes** - Modern filesystem with snapshots via Snapper
 4. **MBR 4-Partition Layout** - Optimized for 4TB drives
@@ -66,7 +66,7 @@ The Dojo is a post-install automation system that runs after first boot:
 - ✅ Offline locale patching (en_GB.UTF-8, gb keymap)
 - ✅ Safety features (dry-run, confirmations, disk verification)
 
-### Qt GUI
+### GUI (optional)
 - ✅ Modern interface with live logging
 - ✅ Disk auto-discovery
 - ✅ Progress tracking
@@ -103,7 +103,7 @@ curl -fsSL https://raw.githubusercontent.com/drtweak86/MASH/main/install.sh | su
 #### GUI (Recommended)
 
 ```bash
-sudo mash-installer-qt
+(Optional GUI is x86_64-only right now)
 ```
 
 1. Select Fedora KDE .raw image
@@ -284,14 +284,14 @@ Q. Quit
 
 ```bash
 # Install dependencies (Fedora)
-sudo dnf install -y rust cargo cmake qt6-qtbase-devel
+sudo dnf install -y rust cargo cmake   # (GUI deps removed for Pi-first)
 
 # Build
 make
 
 # Or individually
 make build-cli    # Rust CLI
-make build-qt     # Qt GUI
+# make build-qt   # (GUI removed / x86_64-only)
 
 # Install
 sudo make install
@@ -310,7 +310,7 @@ mash-merged/
 │   │   ├── errors.rs
 │   │   └── logging.rs
 │   └── Cargo.toml
-├── qt-gui/                  # Qt GUI wrapper
+├── GUI/                  # GUI (optional) wrapper
 │   ├── src/
 │   │   ├── main.cpp
 │   │   ├── mainwindow.cpp
@@ -366,7 +366,7 @@ git push origin main --tags
 ### Software (Host)
 - Linux system (for running installer)
 - Rust 1.70+ (for building)
-- Qt 6.x (for GUI)
+- (Optional GUI) x86_64 only for now
 - System tools: parted, mkfs.btrfs, mkfs.ext4, mkfs.vfat, rsync, losetup
 
 ### UEFI Firmware
@@ -426,7 +426,7 @@ sudo /data/mash-staging/install_dojo.sh /data/mash-staging
 - **Raspberry Pi Foundation** - Hardware
 - **PFTF UEFI** - UEFI firmware for RPi
 - **Rust Community** - Excellent tooling
-- **Qt Project** - Cross-platform framework
+- (Optional GUI) previously planned with Qt; Pi-first focuses on CLI/TUI
 
 ## 📝 License
 
