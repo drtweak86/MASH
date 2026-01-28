@@ -50,10 +50,10 @@ check_root() {
 detect_arch() {
   local arch
   arch="$(uname -m)"
-  case "$arch" in
+  case "$ARCH" in
     aarch64|arm64) echo "aarch64-unknown-linux-gnu" ;;
     x86_64|amd64)  echo "x86_64-unknown-linux-gnu" ;;
-    *) log_error "Unsupported architecture: $arch (supported: aarch64, x86_64)"; exit 1 ;;
+    *) log_error "Unsupported architecture: $ARCH (supported: aarch64, x86_64)"; exit 1 ;;
   esac
 }
 
@@ -87,10 +87,10 @@ try_known_urls() {
   local version="$1"
   local arch="$2"
   local arch_short
-  case "$arch" in
+  case "$ARCH" in
     aarch64-unknown-linux-gnu) arch_short="aarch64" ;;
     x86_64-unknown-linux-gnu)  arch_short="x86_64" ;;
-    *) arch_short="$arch" ;;
+    *) arch_short="$ARCH" ;;
   esac
 
   local base="https://github.com/${REPO}/releases/download/${version}"
@@ -178,14 +178,14 @@ download_release_asset() {
 
   # 1) Try known URL patterns.
   local local_path
-  if local_path="$(try_known_urls "$version" "$arch")"; then
+  if local_path="$(try_known_urls "$version" "$ARCH")"; then
     echo "$local_path"
     return 0
   fi
 
   # 2) Fallback to API discovery.
   local url
-  url="$(get_asset_url_from_api "$version" "$arch")"
+  url="$(get_asset_url_from_api "$version" "$ARCH")"
   log_info "Selected asset: $url"
   local filename
   filename="$(basename "$url")"
@@ -324,14 +324,14 @@ main() {
 EOF
   echo -e "${NC}"
 
-  local arch version archive
+local ARCH version archive
     ARCH="$(detect_arch)"
-  log_info "Detected architecture: ${arch}"
+  log_info "Detected architecture: ${ARCH}"
 
   version="$(get_latest_version)"
   log_info "Latest version: ${version}"
 
-  log_info "Downloading MASH Installer ${version} for ${arch}..."
+  log_info "Downloading MASH Installer ${version} for ${ARCH}..."
   archive="$(download_release_asset "$version" "$ARCH")"
 
   log_info "Extracting..."
