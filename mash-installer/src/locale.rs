@@ -6,6 +6,7 @@
 //! - /etc/default/keyboard (X11 keyboard layout)
 
 use crate::errors::Result;
+use anyhow::bail; // Add anyhow for bail! macro
 use std::fs;
 use std::path::Path;
 
@@ -18,6 +19,23 @@ pub struct LocaleConfig {
     pub keymap: &'static str,
     /// X11 keyboard layout (e.g., "gb")
     pub x11_layout: &'static str,
+}
+
+impl LocaleConfig {
+    pub fn parse_from_str(s: &str) -> Result<Self> {
+        let parts: Vec<&str> = s.split(':').collect();
+        if parts.len() != 2 {
+            bail!("Invalid locale format: expected 'lang:keymap', got '{}'", s);
+        }
+        let lang = parts[0];
+        let keymap = parts[1];
+
+        // Find matching locale in LOCALES
+        LOCALES.iter()
+            .find(|lc| lc.lang == lang && lc.keymap == keymap)
+            .cloned() // Clone to get an owned LocaleConfig
+            .ok_or_else(|| anyhow::anyhow!("Unsupported locale: '{}'. Available: {:?}", s, LOCALES.iter().map(|lc| format!("{}:{}", lc.lang, lc.keymap)).collect::<Vec<_>>()))
+    }
 }
 
 /// Available locales

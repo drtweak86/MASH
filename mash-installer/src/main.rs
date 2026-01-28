@@ -1,20 +1,99 @@
+//! 🍠 MASH - Fedora KDE for Raspberry Pi 4B
+//!
+//! A friendly TUI wizard for installing Fedora KDE on Raspberry Pi 4 with UEFI boot.
+//! Run without arguments to launch the interactive TUI wizard.
+
 use clap::Parser;
+use anyhow::Context;
+
 mod cli;
-mod preflight;
-mod flash;
-mod logging;
 mod errors;
+mod flash;
+mod locale;
+mod logging;
+mod preflight;
+mod tui;
+mod download;
 
 fn main() -> anyhow::Result<()> {
     logging::init();
     let cli = cli::Cli::parse();
 
     match &cli.command {
-        cli::Command::Preflight { dry_run } => {
-            preflight::run(*dry_run)?;
+        // No subcommand = launch TUI wizard (default)
+        None => {
+            log::info!("🎉 Launching MASH TUI wizard...");
+            tui::run(&cli, cli.watch, cli.dry_run)?;
         }
-        cli::Command::Flash { image, disk, uefi_dir, dry_run, auto_unmount, yes_i_know } => {
-            flash::run(image, disk, uefi_dir, *dry_run, *auto_unmount, *yes_i_know)?;
+
+        // Preflight checks
+        Some(cli::Command::Preflight) => {
+            log::info!("🔍 Running preflight checks...");
+            preflight::run(cli.dry_run)?;
+        }
+
+        // CLI flash mode (for scripting)
+        Some(cli::Command::Flash {
+            image,
+            disk,
+            scheme,
+            uefi_dir,
+            auto_unmount,
+            yes_i_know,
+            locale: _locale,
+            early_ssh: _early_ssh,
+            efi_size,
+            boot_size,
+            root_end,
+            download_uefi,
+            download_image,
+            image_version,
+            image_edition,
+        }) => {
+            log::info!("💾 Running flash in CLI mode...");
+
+            let mut final_image_path = image.clone();
+            let mut final_uefi_dir = uefi_dir.clone();
+
+            let downloads_dir = cli.mash_root.join("downloads");
+
+            if *download_uefi {
+                log::info!("⬇️ Downloading UEFI firmware...");
+                let uefi_dest_dir = downloads_dir.join("uefi");
+                download::download_uefi_firmware(&uefi_dest_dir)?;
+                final_uefi_dir = Some(uefi_dest_dir);
+            }
+
+            if *download_image {
+                log::info!("⬇️ Downloading Fedora image...");
+                let image_dest_dir = downloads_dir.join("images");
+                final_image_path = Some(download::download_fedora_image(
+                    &image_dest_dir,
+                    image_version,
+                    image_edition,
+                )?);
+            }
+
+            let parsed_locale = if let Some(l_str) = _locale.as_ref() { // Use .as_ref() to get &String
+                Some(locale::LocaleConfig::parse_from_str(l_str)?)
+            } else {
+                None
+            };
+
+            flash::run(
+                final_image_path.as_ref().context("Image path is required (provide --image or use --download-image)")?,
+                disk,
+                scheme,
+                final_uefi_dir.as_ref().context("UEFI directory is required (provide --uefi-dir or use --download-uefi)")?,
+                cli.dry_run,
+                *auto_unmount,
+                *yes_i_know,
+                parsed_locale, // Pass the parsed LocaleConfig
+                *_early_ssh,
+                efi_size,
+                boot_size,
+                root_end,
+            )?;
         }
     }
 

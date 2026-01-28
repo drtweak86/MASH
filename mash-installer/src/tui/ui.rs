@@ -46,12 +46,12 @@ pub fn draw(f: &mut Frame, app: &App) {
 
 fn draw_title_bar(f: &mut Frame, app: &App, area: Rect) {
     let title = format!(
-        " MASH Installer - {} ",
+        " 🍠 MASH - {} ",
         app.current_screen.title()
     );
 
     let mode_indicator = if app.options.dry_run || app.dry_run_cli {
-        " [DRY-RUN] "
+        " [🧪 DRY-RUN] "
     } else {
         ""
     };
@@ -70,27 +70,27 @@ fn draw_title_bar(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_help_bar(f: &mut Frame, app: &App, area: Rect) {
     let help_text = match app.current_screen {
-        Screen::Welcome => "Enter: Start | Esc/q: Quit",
-        Screen::DiskSelection => "Up/Down: Select | Enter: Confirm | r: Refresh | Esc: Back",
+        Screen::Welcome => "⏎ Enter: Start | Esc/q: Quit",
+        Screen::DiskSelection => "↑↓: Select | ⏎ Enter: Confirm | r: Refresh | Esc: Back",
         Screen::ImageSelection => {
             if app.image_input.mode == InputMode::Editing {
-                "Enter: Confirm | Esc: Cancel editing"
+                "⏎ Enter: Confirm | Esc: Cancel editing"
             } else {
-                "Enter/e/i: Edit | Tab: Next | Esc: Back"
+                "⏎/e/i: Edit | Tab: Next | Esc: Back"
             }
         }
         Screen::UefiDirectory => {
             if app.uefi_input.mode == InputMode::Editing {
-                "Enter: Confirm | Esc: Cancel editing"
+                "⏎ Enter: Confirm | Esc: Cancel editing"
             } else {
-                "Enter/e/i: Edit | Tab: Next | Esc: Back"
+                "⏎/e/i: Edit | Tab: Next | Esc: Back"
             }
         }
-        Screen::LocaleSelection => "Up/Down: Select | Enter/Tab: Next | Esc: Back",
-        Screen::Options => "Up/Down: Navigate | Space/Enter: Toggle | Tab: Next | Esc: Back",
+        Screen::LocaleSelection => "↑↓: Select | ⏎/Tab: Next | Esc: Back",
+        Screen::Options => "↑↓: Navigate | Space/⏎: Toggle | Tab: Next | Esc: Back",
         Screen::Confirmation => "Type 'YES I KNOW' to confirm | Esc: Back",
         Screen::Progress => "Ctrl+C: Abort",
-        Screen::Complete => "Enter/Esc/q: Exit",
+        Screen::Complete => "⏎/Esc/q: Exit",
     };
 
     let help = Paragraph::new(help_text)
@@ -101,32 +101,38 @@ fn draw_help_bar(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(help, area);
 }
 
-fn draw_welcome(f: &mut Frame, _app: &App, area: Rect) {
+fn draw_welcome(f: &mut Frame, app: &App, area: Rect) {
+    // Animated cursor blink
+    let cursor = if (app.animation_tick / 5) % 2 == 0 { "▌" } else { " " };
+
     let text = vec![
         Line::from(""),
         Line::from(""),
         Line::from(Span::styled(
-            "Enter the Dojo",
+            "🥋 Enter the Dojo 🥋",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(""),
-        Line::from("MASH Installer will guide you through:"),
+        Line::from("🍠 MASH Installer will guide you through:"),
         Line::from(""),
-        Line::from("  1. Select target disk (will be ERASED)"),
-        Line::from("  2. Select Fedora image file"),
-        Line::from("  3. Configure UEFI overlay"),
-        Line::from("  4. Choose locale and keymap"),
-        Line::from("  5. Set installation options"),
-        Line::from("  6. Flash the image"),
+        Line::from("  1️⃣  Select target disk (will be ERASED)"),
+        Line::from("  2️⃣  Select Fedora image file"),
+        Line::from("  3️⃣  Configure UEFI overlay"),
+        Line::from("  4️⃣  Choose locale and keymap"),
+        Line::from("  5️⃣  Set installation options"),
+        Line::from("  6️⃣  Flash the image"),
         Line::from(""),
         Line::from(""),
-        Line::from(Span::styled(
-            "Press ENTER to begin...",
-            Style::default().fg(Color::Green),
-        )),
+        Line::from(vec![
+            Span::styled(
+                "Press ENTER to begin...",
+                Style::default().fg(Color::Green),
+            ),
+            Span::styled(cursor, Style::default().fg(Color::Green)),
+        ]),
     ];
 
     let paragraph = Paragraph::new(text)
@@ -134,7 +140,7 @@ fn draw_welcome(f: &mut Frame, _app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Welcome ")
+                .title(" 🎉 Welcome ")
                 .border_style(Style::default().fg(Color::Yellow)),
         );
 
@@ -156,9 +162,9 @@ fn draw_disk_selection(f: &mut Frame, app: &App, area: Rect) {
             };
 
             let prefix = if i == app.selected_disk_index {
-                "> "
+                "👉 "
             } else {
-                "  "
+                "   "
             };
 
             ListItem::new(format!("{}{}", prefix, disk.display())).style(style)
@@ -168,17 +174,17 @@ fn draw_disk_selection(f: &mut Frame, app: &App, area: Rect) {
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Select Target Disk (will be ERASED!) ")
+            .title(" 💾 Select Target Disk (will be ERASED!) ⚠️ ")
             .border_style(Style::default().fg(Color::Red)),
     );
 
     if app.available_disks.is_empty() {
-        let no_disks = Paragraph::new("No removable disks found.\n\nPress 'r' to refresh.")
+        let no_disks = Paragraph::new("😕 No removable disks found.\n\n🔄 Press 'r' to refresh.")
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" Select Target Disk ")
+                    .title(" 💾 Select Target Disk ")
                     .border_style(Style::default().fg(Color::Red)),
             );
         f.render_widget(no_disks, area);
@@ -211,10 +217,10 @@ fn draw_image_selection(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .borders(Borders::ALL)
                 .title(format!(
-                    " {} {} ",
+                    " 📀 {} {} ",
                     app.image_input.placeholder,
                     if app.image_input.mode == InputMode::Editing {
-                        "(editing)"
+                        "✏️"
                     } else {
                         ""
                     }
@@ -238,26 +244,26 @@ fn draw_image_selection(f: &mut Frame, app: &App, area: Rect) {
 
     // Error message
     if let Some(ref err) = app.image_error {
-        let error = Paragraph::new(err.as_str())
+        let error = Paragraph::new(format!("❌ {}", err))
             .style(Style::default().fg(Color::Red))
-            .block(Block::default().borders(Borders::ALL).title(" Error "));
+            .block(Block::default().borders(Borders::ALL).title(" ⚠️ Error "));
         f.render_widget(error, chunks[1]);
     }
 
     // Help text
     let help = Paragraph::new(
-        "Enter the full path to a Fedora .raw image file.\n\
-         The image will be loop-mounted and copied to the target disk.",
+        "📝 Enter the full path to a Fedora .raw image file.\n\
+         📦 The image will be loop-mounted and copied to the target disk.",
     )
     .wrap(Wrap { trim: true })
-    .block(Block::default().borders(Borders::ALL).title(" Help "));
+    .block(Block::default().borders(Borders::ALL).title(" 💡 Help "));
 
     f.render_widget(help, chunks[2]);
 
     // Outer block
     let outer = Block::default()
         .borders(Borders::ALL)
-        .title(" Select Image File ");
+        .title(" 📀 Select Image File ");
     f.render_widget(outer, area);
 }
 
@@ -285,10 +291,10 @@ fn draw_uefi_selection(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .borders(Borders::ALL)
                 .title(format!(
-                    " {} {} ",
+                    " 🔧 {} {} ",
                     app.uefi_input.placeholder,
                     if app.uefi_input.mode == InputMode::Editing {
-                        "(editing)"
+                        "✏️"
                     } else {
                         ""
                     }
@@ -312,26 +318,26 @@ fn draw_uefi_selection(f: &mut Frame, app: &App, area: Rect) {
 
     // Error message
     if let Some(ref err) = app.uefi_error {
-        let error = Paragraph::new(err.as_str())
+        let error = Paragraph::new(format!("❌ {}", err))
             .style(Style::default().fg(Color::Red))
-            .block(Block::default().borders(Borders::ALL).title(" Error "));
+            .block(Block::default().borders(Borders::ALL).title(" ⚠️ Error "));
         f.render_widget(error, chunks[1]);
     }
 
     // Help text
     let help = Paragraph::new(
-        "Directory containing UEFI files for Raspberry Pi 4.\n\
-         These will be copied onto the EFI partition.",
+        "📁 Directory containing UEFI files for Raspberry Pi 4.\n\
+         🎩 These will be copied onto the EFI partition.",
     )
     .wrap(Wrap { trim: true })
-    .block(Block::default().borders(Borders::ALL).title(" Help "));
+    .block(Block::default().borders(Borders::ALL).title(" 💡 Help "));
 
     f.render_widget(help, chunks[2]);
 
     // Outer block
     let outer = Block::default()
         .borders(Borders::ALL)
-        .title(" UEFI Directory ");
+        .title(" 🔧 UEFI Configuration ");
     f.render_widget(outer, area);
 }
 
@@ -350,14 +356,24 @@ fn draw_locale_selection(f: &mut Frame, app: &App, area: Rect) {
             };
 
             let prefix = if i == app.selected_locale_index {
-                "> "
+                "👉 "
             } else {
-                "  "
+                "   "
+            };
+
+            // Add flag emoji based on locale
+            let flag = match locale.lang {
+                "en_GB.UTF-8" => "🇬🇧",
+                "en_US.UTF-8" => "🇺🇸",
+                "de_DE.UTF-8" => "🇩🇪",
+                "fr_FR.UTF-8" => "🇫🇷",
+                "es_ES.UTF-8" => "🇪🇸",
+                _ => "🌍",
             };
 
             ListItem::new(format!(
-                "{}{} (keymap: {})",
-                prefix, locale.lang, locale.keymap
+                "{}{} {} (⌨️ {})",
+                prefix, flag, locale.lang, locale.keymap
             ))
             .style(style)
         })
@@ -366,7 +382,7 @@ fn draw_locale_selection(f: &mut Frame, app: &App, area: Rect) {
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Select Locale & Keymap ")
+            .title(" 🌍 Select Locale & Keymap ")
             .border_style(Style::default().fg(Color::Cyan)),
     );
 
@@ -374,29 +390,45 @@ fn draw_locale_selection(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_options(f: &mut Frame, app: &App, area: Rect) {
+    // Options are rendered as a focusable list. Space/Enter toggles the focused row.
+    // For partition scheme we "toggle" between MBR <-> GPT.
+    let scheme_label = format!(
+        "🧭 Partition scheme: {}{}",
+        app.options.partition_scheme,
+        if matches!(app.options.partition_scheme, crate::cli::PartitionScheme::Mbr) {
+            " (recommended)"
+        } else {
+            ""
+        }
+    );
+
     let options = [
         (
-            "Auto-unmount target disk mounts",
-            app.options.auto_unmount,
-            "Automatically unmount any partitions from the target disk",
+            "🔌 Auto-unmount target disk mounts".to_string(),
+            Some(app.options.auto_unmount),
+            "Automatically unmount any partitions from the target disk".to_string(),
         ),
         (
-            "Enable Early SSH",
-            app.options.early_ssh,
-            "Enable SSH access before graphical login (recommended)",
+            "🔐 Enable Early SSH".to_string(),
+            Some(app.options.early_ssh),
+            "Enable SSH access before graphical login (recommended)".to_string(),
         ),
         (
-            "Dry-run mode",
-            app.options.dry_run,
-            "Print what would happen without making changes",
+            scheme_label,
+            None,
+            "Toggle between MBR (msdos) and GPT partition tables".to_string(),
+        ),
+        (
+            "🧪 Dry-run mode".to_string(),
+            Some(app.options.dry_run),
+            "Print what would happen without making changes".to_string(),
         ),
     ];
 
     let items: Vec<ListItem> = options
         .iter()
         .enumerate()
-        .map(|(i, (label, checked, desc))| {
-            let checkbox = CheckboxState::from(*checked);
+        .map(|(i, (label, checked_opt, desc))| {
             let style = if i == app.options_focus {
                 Style::default()
                     .fg(Color::Yellow)
@@ -405,9 +437,15 @@ fn draw_options(f: &mut Frame, app: &App, area: Rect) {
                 Style::default()
             };
 
-            let prefix = if i == app.options_focus { "> " } else { "  " };
+            let prefix = if i == app.options_focus { "👉 " } else { "   " };
 
-            let text = format!("{}{} {}\n      {}", prefix, checkbox.symbol(), label, desc);
+            let symbol = match checked_opt {
+                Some(checked) => CheckboxState::from(*checked).symbol().to_string(),
+                None => "🔁".to_string(),
+            };
+
+            let text = format!("{}{} {}
+      📝 {}", prefix, symbol, label, desc);
             ListItem::new(text).style(style)
         })
         .collect();
@@ -415,7 +453,7 @@ fn draw_options(f: &mut Frame, app: &App, area: Rect) {
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Installation Options ")
+            .title(" ⚙️ Installation Options ")
             .border_style(Style::default().fg(Color::Cyan)),
     );
 
@@ -445,31 +483,32 @@ fn draw_confirmation(f: &mut Frame, app: &App, area: Rect) {
 
     let summary_text = vec![
         Line::from(Span::styled(
-            "DANGER ZONE",
+            "⚠️  DANGER ZONE ⚠️",
             Style::default()
                 .fg(Color::Red)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from(format!("Target Disk: {}", disk_display)),
-        Line::from(format!("Image: {}", app.image_input.value())),
-        Line::from(format!("UEFI Dir: {}", app.uefi_input.value())),
-        Line::from(format!("Locale: {}", locale_display)),
+        Line::from(format!("💾 Target Disk: {}", disk_display)),
+        Line::from(format!("📀 Image: {}", app.image_input.value())),
+        Line::from(format!("🔧 UEFI Dir: {}", app.uefi_input.value())),
+        Line::from(format!("🌍 Locale: {}", locale_display)),
+        Line::from(format!("🧭 Partition Scheme: {}", app.options.partition_scheme)),
         Line::from(format!(
-            "Early SSH: {}",
-            if app.options.early_ssh { "Yes" } else { "No" }
+            "🔐 Early SSH: {}",
+            if app.options.early_ssh { "✅ Yes" } else { "❌ No" }
         )),
         Line::from(format!(
-            "Dry-run: {}",
+            "🧪 Dry-run: {}",
             if app.options.dry_run || app.dry_run_cli {
-                "Yes"
+                "✅ Yes"
             } else {
-                "No"
+                "❌ No"
             }
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "This will ERASE the target disk!",
+            "🔥 This will ERASE the target disk! 🔥",
             Style::default().fg(Color::Red),
         )),
     ];
@@ -479,7 +518,7 @@ fn draw_confirmation(f: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Installation Summary ")
+                .title(" 📋 Installation Summary ")
                 .border_style(Style::default().fg(Color::Red)),
         );
 
@@ -487,7 +526,7 @@ fn draw_confirmation(f: &mut Frame, app: &App, area: Rect) {
 
     // Confirmation input
     let input_text = format!(
-        "Type 'YES I KNOW' to confirm: {}",
+        "🔒 Type 'YES I KNOW' to confirm: {}",
         app.confirmation_input
     );
     let input = Paragraph::new(input_text)
@@ -495,7 +534,7 @@ fn draw_confirmation(f: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Confirmation ")
+                .title(" ✍️ Confirmation ")
                 .border_style(Style::default().fg(Color::Yellow)),
         );
 
@@ -503,13 +542,13 @@ fn draw_confirmation(f: &mut Frame, app: &App, area: Rect) {
 
     // Set cursor position
     f.set_cursor_position((
-        chunks[1].x + 35 + app.confirmation_input.len() as u16,
+        chunks[1].x + 38 + app.confirmation_input.len() as u16,
         chunks[1].y + 1,
     ));
 
     // Error
     if let Some(ref err) = app.confirmation_error {
-        let error = Paragraph::new(err.as_str())
+        let error = Paragraph::new(format!("❌ {}", err))
             .style(Style::default().fg(Color::Red))
             .alignment(Alignment::Center);
         f.render_widget(error, chunks[2]);
@@ -518,7 +557,7 @@ fn draw_confirmation(f: &mut Frame, app: &App, area: Rect) {
     // Outer block
     let outer = Block::default()
         .borders(Borders::ALL)
-        .title(" Confirm Installation ")
+        .title(" ⚠️ Confirm Installation ⚠️ ")
         .border_style(Style::default().fg(Color::Red));
     f.render_widget(outer, area);
 }
@@ -527,25 +566,26 @@ fn draw_progress(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Overall progress
-            Constraint::Length(5),  // Current phase info
-            Constraint::Min(10),    // Phase list
+            Constraint::Length(3),  // Overall progress bar
+            Constraint::Min(12),    // Analytics + Phases (split horizontally)
             Constraint::Length(3),  // Status
         ])
         .margin(1)
         .split(area);
 
-    // Overall progress bar
+    // Overall progress bar with animated fill
     let progress_label = format!(
-        "{}% - ETA: {}",
+        "{}%  ⏱️ {}  🎯 ETA: {}",
         app.progress.overall_percent as u32,
+        app.progress.elapsed_string(),
         app.progress.eta_string()
     );
+
     let gauge = Gauge::default()
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Overall Progress "),
+                .title(" 📊 Overall Progress "),
         )
         .gauge_style(Style::default().fg(Color::Green))
         .percent(app.progress.overall_percent as u16)
@@ -553,89 +593,47 @@ fn draw_progress(f: &mut Frame, app: &App, area: Rect) {
 
     f.render_widget(gauge, chunks[0]);
 
-    // Current phase info
-    let phase_info = if let Some(phase) = app.progress.current_phase {
-        let speed_text = if app.progress.rsync_speed > 0.0 {
-            format!("Speed: {:.1} MB/s", app.progress.rsync_speed)
-        } else if app.progress.disk_io_speed > 0.0 {
-            format!("Disk I/O: {:.1} MB/s", app.progress.disk_io_speed)
-        } else {
-            String::new()
-        };
+    // Split middle area into Analytics (left) and Phases (right)
+    let middle_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(45), // Analytics
+            Constraint::Percentage(55), // Phases
+        ])
+        .split(chunks[1]);
 
-        let files_text = if app.progress.files_total > 0 {
-            format!(
-                "Files: {} / {}",
-                app.progress.files_done, app.progress.files_total
-            )
-        } else {
-            String::new()
-        };
-
-        vec![
-            Line::from(format!("Current: {}", phase.name())),
-            Line::from(speed_text),
-            Line::from(files_text),
-        ]
-    } else {
-        vec![Line::from("Preparing...")]
-    };
-
-    let phase_para = Paragraph::new(phase_info).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Current Phase "),
-    );
-
-    f.render_widget(phase_para, chunks[1]);
+    // Analytics panel
+    draw_analytics_panel(f, app, middle_chunks[0]);
 
     // Phase list
-    let phase_items: Vec<ListItem> = Phase::all()
-        .iter()
-        .map(|phase| {
-            let symbol = app.progress.phase_symbol(*phase);
-            let style = if app.progress.current_phase == Some(*phase) {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else if app.progress.completed_phases.contains(phase) {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
+    draw_phase_list(f, app, middle_chunks[1]);
 
-            ListItem::new(format!("  {} Phase {}: {}", symbol, phase.number(), phase.name()))
-                .style(style)
-        })
-        .collect();
-
-    let phase_list = List::new(phase_items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Installation Phases "),
-    );
-
-    f.render_widget(phase_list, chunks[2]);
-
-    // Status message
+    // Status message with animated spinner
     let status_style = if app.progress.error.is_some() {
         Style::default().fg(Color::Red)
     } else {
         Style::default().fg(Color::Cyan)
     };
 
-    let status = Paragraph::new(app.progress.status.as_str())
+    let spinner = if let Some(phase) = app.progress.current_phase {
+        phase.spinner_frame(app.animation_tick)
+    } else {
+        "🚀"
+    };
+
+    let status_text = format!("{} {}", spinner, app.progress.status);
+    let status = Paragraph::new(status_text)
         .style(status_style)
         .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL).title(" Status "));
+        .block(Block::default().borders(Borders::ALL).title(" 📝 Status "));
 
-    f.render_widget(status, chunks[3]);
+    f.render_widget(status, chunks[2]);
 
     // Outer block
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(format!(
-            " Installing - Phase {}/{} ",
+            " 🔥 Installing - Phase {}/{} ",
             app.progress
                 .current_phase
                 .map(|p| p.number())
@@ -646,29 +644,134 @@ fn draw_progress(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(outer, area);
 }
 
+fn draw_analytics_panel(f: &mut Frame, app: &App, area: Rect) {
+    let analytics_lines = vec![
+        Line::from(Span::styled(
+            "📊 Analytics",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from("─────────────────────"),
+        Line::from(format!(
+            "⚡ Speed:     {:.1} MB/s",
+            app.progress.rsync_speed
+        )),
+        Line::from(format!(
+            "📈 Average:   {:.1} MB/s",
+            app.progress.average_speed
+        )),
+        Line::from(format!(
+            "🚀 Peak:      {:.1} MB/s",
+            app.progress.peak_speed
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "⏱️ Time",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from("─────────────────────"),
+        Line::from(format!(
+            "⏳ Elapsed:   {}",
+            app.progress.elapsed_string()
+        )),
+        Line::from(format!("🎯 ETA:       {}", app.progress.eta_string())),
+        Line::from(format!(
+            "📍 Phase:     {}",
+            app.progress.phase_elapsed_string()
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "📁 Files",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from("─────────────────────"),
+        Line::from(format!(
+            "📄 Copied:    {} / {}",
+            app.progress.files_done, app.progress.files_total
+        )),
+    ];
+
+    let analytics = Paragraph::new(analytics_lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" 📊 Analytics ")
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
+
+    f.render_widget(analytics, area);
+}
+
+fn draw_phase_list(f: &mut Frame, app: &App, area: Rect) {
+    let phase_items: Vec<ListItem> = Phase::all()
+        .iter()
+        .map(|phase| {
+            let symbol = if app.progress.completed_phases.contains(phase) {
+                "✅"
+            } else if app.progress.current_phase == Some(*phase) {
+                phase.spinner_frame(app.animation_tick)
+            } else {
+                "⏸️"
+            };
+
+            let style = if app.progress.current_phase == Some(*phase) {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else if app.progress.completed_phases.contains(phase) {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+
+            ListItem::new(format!("  {} {}", symbol, phase.name())).style(style)
+        })
+        .collect();
+
+    let phase_list = List::new(phase_items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" 📋 Phases ")
+            .border_style(Style::default().fg(Color::Magenta)),
+    );
+
+    f.render_widget(phase_list, area);
+}
+
 fn draw_complete(f: &mut Frame, app: &App, area: Rect) {
+    // Celebration animation for success
+    let sparkle = if app.install_success {
+        match (app.animation_tick / 3) % 4 {
+            0 => "✨",
+            1 => "🎉",
+            2 => "🎊",
+            _ => "⭐",
+        }
+    } else {
+        "💔"
+    };
+
     let (title, text, style) = if app.install_success {
         (
-            " Installation Complete ",
+            format!(" {} Installation Complete! {} ", sparkle, sparkle),
             vec![
                 Line::from(""),
                 Line::from(Span::styled(
-                    "Installation completed successfully!",
+                    "🎉 Installation completed successfully! 🎉",
                     Style::default()
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                Line::from("Next steps:"),
+                Line::from("📋 Next steps:"),
                 Line::from(""),
-                Line::from("  1. Remove the disk from this computer"),
-                Line::from("  2. Insert into your Raspberry Pi 4"),
-                Line::from("  3. Boot with UEFI"),
-                Line::from("  4. Run Dojo setup: sudo /data/mash-staging/install_dojo.sh"),
+                Line::from("  1️⃣  Remove the disk from this computer"),
+                Line::from("  2️⃣  Insert into your Raspberry Pi 4"),
+                Line::from("  3️⃣  Boot with UEFI"),
+                Line::from("  4️⃣  Run Dojo setup: sudo /data/mash-staging/install_dojo.sh"),
                 Line::from(""),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "Press Enter to exit",
+                    "🍠 Press Enter to exit - Enjoy your MASH! 🍠",
                     Style::default().fg(Color::Cyan),
                 )),
             ],
@@ -681,19 +784,19 @@ fn draw_complete(f: &mut Frame, app: &App, area: Rect) {
             .map(|e| e.as_str())
             .unwrap_or("Unknown error");
         (
-            " Installation Failed ",
+            " ❌ Installation Failed ".to_string(),
             vec![
                 Line::from(""),
                 Line::from(Span::styled(
-                    "Installation failed!",
+                    "😢 Installation failed!",
                     Style::default()
                         .fg(Color::Red)
                         .add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                Line::from(format!("Error: {}", error_msg)),
+                Line::from(format!("❌ Error: {}", error_msg)),
                 Line::from(""),
-                Line::from("Please check the logs and try again."),
+                Line::from("🔧 Please check the logs and try again."),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Press Enter to exit",

@@ -59,9 +59,16 @@ if [ -f "$CMAKE_FILE" ]; then
     sed -i "s/project(mash-installer-qt VERSION .*/project(mash-installer-qt VERSION $NEW_VERSION LANGUAGES CXX)/" "$CMAKE_FILE"
 fi
 
+# Update README.md version in title
+README_FILE="README.md"
+if [ -f "$README_FILE" ]; then
+    echo "Updating $README_FILE..."
+    sed -i "s/^# MASH 🐀🍕.*/# MASH 🐀🍕 v$NEW_VERSION/" "$README_FILE"
+fi
+
 # Git operations
 echo "Creating git commit..."
-git add "$CARGO_TOML" "$CMAKE_FILE"
+git add "$CARGO_TOML" "$CMAKE_FILE" "$README_FILE"
 git commit -m "Bump version to $NEW_VERSION"
 
 echo "Creating git tag..."

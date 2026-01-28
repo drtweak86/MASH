@@ -8,7 +8,7 @@ VERSION="${VERSION:-}"
 
 
 # ==========================================================
-# 🦀 MASH Installer - One-Command Install Script (Pi-first)
+# 🍠 MASH Installer - One-Command Install Script (Pi-first)
 # Repo: drtweak86/MASH
 #
 # Usage:
@@ -25,6 +25,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m'
 
 REPO_DEFAULT="drtweak86/MASH"
@@ -104,7 +105,10 @@ try_known_urls() {
 
   local base="https://github.com/${REPO}/releases/download/${version}"
   local candidates=(
-    # Your current battle-tested asset naming:
+    # New naming convention (v1.2+)
+    "mash-${version}.tar.gz"
+    "mash-${version}.tgz"
+    # Legacy naming convention
     "mash-installer-${version}.tar.gz"
     "mash-installer-${version}.tgz"
     # Older/alternate patterns (kept for resilience)
@@ -136,18 +140,21 @@ get_asset_url_from_api() {
   local urls
   urls="$(echo "$json" | grep -oE '"browser_download_url"\s*:\s*"[^"]+"' | sed -E 's/.*"([^"]+)".*/\1/')"
 
-  # Prefer the main tarball, never the .sha256
+  # Prefer the new naming, then fall back to legacy
   local u
-  u="$(echo "$urls" | grep -E "mash-installer-${version}\.tar\.gz$" | head -n1 || true)"
+  u="$(echo "$urls" | grep -E "mash-${version}\.tar\.gz$" | head -n1 || true)"
   if [[ -z "${u:-}" ]]; then
-    u="$(echo "$urls" | grep -E "mash-installer-.*${version}.*\.tar\.gz$" | grep -v '\.sha256$' | head -n1 || true)"
+    u="$(echo "$urls" | grep -E "mash-installer-${version}\.tar\.gz$" | head -n1 || true)"
   fi
   if [[ -z "${u:-}" ]]; then
-    u="$(echo "$urls" | grep -E "mash-installer.*\.tar\.gz$" | grep -v '\.sha256$' | head -n1 || true)"
+    u="$(echo "$urls" | grep -E "mash-.*${version}.*\.tar\.gz$" | grep -v '\.sha256$' | head -n1 || true)"
+  fi
+  if [[ -z "${u:-}" ]]; then
+    u="$(echo "$urls" | grep -E "mash.*\.tar\.gz$" | grep -v '\.sha256$' | head -n1 || true)"
   fi
 
   if [[ -z "${u:-}" ]]; then
-    log_error "No suitable mash-installer .tar.gz asset found for ${version}" >&2
+    log_error "No suitable mash .tar.gz asset found for ${version}" >&2
     log_info "Available assets:" >&2
     echo "$urls" >&2
     exit 1
@@ -198,13 +205,26 @@ extract_archive() {
 }
 
 install_binaries() {
-    log_info "Installing..."
+    log_info "🔧 Installing..."
 
     # We extract into $TEMP_DIR and run from there
     # Release layout is typically:
-    #   mash-installer-${ARCH}/mash-installer-${ARCH}
+    #   mash-${ARCH}/mash-${ARCH} (new)
+    #   mash-installer-${ARCH}/mash-installer-${ARCH} (legacy)
     local cli=""
-    cli="$(find . -maxdepth 6 -type f -name "mash-installer-${ARCH}" -perm -111 -print -quit 2>/dev/null || true)"
+
+    # Try new naming first
+    cli="$(find . -maxdepth 6 -type f -name "mash-${ARCH}" -perm -111 -print -quit 2>/dev/null || true)"
+
+    # Fall back to any executable named mash (not mash-installer)
+    if [[ -z "${cli:-}" ]]; then
+        cli="$(find . -maxdepth 6 -type f -name "mash" -perm -111 -print -quit 2>/dev/null || true)"
+    fi
+
+    # Fall back to legacy naming
+    if [[ -z "${cli:-}" ]]; then
+        cli="$(find . -maxdepth 6 -type f -name "mash-installer-${ARCH}" -perm -111 -print -quit 2>/dev/null || true)"
+    fi
 
     # Fallback: anything executable named mash-installer* (covers naming drift)
     if [[ -z "${cli:-}" ]]; then
@@ -212,35 +232,33 @@ install_binaries() {
     fi
 
     if [[ -z "${cli:-}" ]]; then
-        log_error "Could not find 'mash-installer' binary inside the release archive."
+        log_error "Could not find 'mash' binary inside the release archive."
         log_info "Archive contents (top-level):"
         find . -maxdepth 3 -type f -print
         exit 1
     fi
 
-    install -m 0755 "$cli" "$INSTALL_DIR/mash-installer"
-    log_success "Installed: $INSTALL_DIR/mash-installer"
-
-    # Qt is removed in v1.1.x+; no GUI install attempt.
+    install -m 0755 "$cli" "$INSTALL_DIR/mash"
+    log_success "✅ Installed: $INSTALL_DIR/mash"
 }
 
 create_desktop_entry() {
-    local desktop_file="/usr/share/applications/mash-installer.desktop"
+    local desktop_file="/usr/share/applications/mash.desktop"
 
-    if [ -f "${INSTALL_DIR}/mash-installer-qt" ]; then
+    if [ -f "${INSTALL_DIR}/mash-qt" ]; then
         log_info "Creating desktop entry..."
 
         cat > "$desktop_file" <<'EOF'
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=MASH Installer
-Comment=Install Fedora KDE on Raspberry Pi 4
-Exec=pkexec /usr/local/bin/mash-installer-qt
+Name=MASH
+Comment=🍠 Install Fedora KDE on Raspberry Pi 4
+Exec=pkexec /usr/local/bin/mash-qt
 Icon=drive-harddisk
 Terminal=false
 Categories=System;Settings;
-Keywords=installer;fedora;raspberry;pi;
+Keywords=installer;fedora;raspberry;pi;mash;
 EOF
 
         chmod 644 "$desktop_file"
@@ -253,38 +271,45 @@ show_usage() {
 
 ${GREEN}╔════════════════════════════════════════════════════════════╗
 ║                                                            ║
-║              🚀 MASH Installer Ready! 🚀                  ║
+║             🍠 MASH Ready to Roll! 🍠                     ║
 ║                                                            ║
 ╚════════════════════════════════════════════════════════════╝${NC}
 
-${BLUE}CLI Usage:${NC}
-  # Check system requirements
-  mash-installer preflight
+${CYAN}🎉 Quick Start (Recommended):${NC}
+  ${GREEN}sudo mash${NC}
 
-  # Install (with confirmation)
-  sudo mash-installer flash \
-    --image /path/to/fedora-kde.raw \
-    --disk /dev/sdX \
-    --uefi-dir /path/to/uefi \
-    --auto-unmount \
-    --yes-i-know
+  This launches the friendly TUI wizard that guides you through
+  the entire installation process step by step!
+
+${BLUE}📋 CLI Usage (for scripting):${NC}
+  # Check system requirements
+  ${YELLOW}mash preflight${NC}
+
+  # Install via CLI (advanced users)
+  ${YELLOW}sudo mash flash \\
+    --image /path/to/fedora-kde.raw \\
+    --disk /dev/sdX \\
+    --uefi-dir /path/to/uefi \\
+    --auto-unmount \\
+    --yes-i-know${NC}
 
   # Dry run (test without changes)
-  sudo mash-installer flash \
-    --image /path/to/fedora-kde.raw \
-    --disk /dev/sdX \
-    --uefi-dir /path/to/uefi \
-    --dry-run
-  mash-installer --help
+  ${YELLOW}sudo mash --dry-run flash \\
+    --image /path/to/fedora-kde.raw \\
+    --disk /dev/sdX \\
+    --uefi-dir /path/to/uefi${NC}
 
-${YELLOW}⚠️  WARNING:${NC}
+  # Get help
+  ${YELLOW}mash --help${NC}
+
+${RED}⚠️  WARNING:${NC}
   This installer will COMPLETELY ERASE the target disk!
   Always double-check your disk selection!
 
-${BLUE}Documentation:${NC}
+${BLUE}📚 Documentation:${NC}
   https://github.com/$REPO
 
-${GREEN}Happy Installing! 🎉${NC}
+${GREEN}🎉 Happy Installing! Enjoy your MASH! 🍠${NC}
 
 EOF
 }
@@ -301,7 +326,7 @@ main() {
   cat <<'EOF'
 ╔════════════════════════════════════════════════════════════╗
 ║                                                            ║
-║              🦀 MASH Installer Setup 🦀                   ║
+║              🍠 MASH Installer Setup 🍠                   ║
 ║         Fedora KDE for Raspberry Pi 4 (UEFI)              ║
 ║                                                            ║
 ╚════════════════════════════════════════════════════════════╝
@@ -310,22 +335,22 @@ EOF
 
 local ARCH version archive
     ARCH="$(detect_arch)"
-  log_info "Detected architecture: ${ARCH}"
+  log_info "🔍 Detected architecture: ${ARCH}"
 
   version="$(get_latest_version)"
-  log_info "Latest version: ${version}"
+  log_info "📦 Latest version: ${version}"
 
-  log_info "Downloading MASH Installer ${version} for ${ARCH}..."
+  log_info "⬇️  Downloading MASH ${version} for ${ARCH}..."
   archive="$(download_release_asset "$version" "$ARCH")"
 
-  log_info "Extracting..."
+  log_info "📂 Extracting..."
   extract_archive "$archive"
 
-  log_info "Installing..."
+  log_info "🔧 Installing..."
   install_binaries
   create_desktop_entry
 
-  log_success "Installation complete!"
+  log_success "🎉 Installation complete!"
   show_usage
 }
 

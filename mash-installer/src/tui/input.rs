@@ -162,7 +162,6 @@ impl InputField {
 
     fn move_word_backward(&mut self) {
         // Skip whitespace, then skip word characters
-        let mut new_cursor = self.cursor;
         let chars: Vec<_> = self.value[..self.cursor].char_indices().collect();
 
         // Skip trailing whitespace
@@ -176,11 +175,10 @@ impl InputField {
         }
 
         if i > 0 {
-            new_cursor = chars[i].0;
+            self.cursor = chars[i].0;
         } else {
-            new_cursor = 0;
+            self.cursor = 0;
         }
-        self.cursor = new_cursor;
     }
 
     fn move_word_forward(&mut self) {

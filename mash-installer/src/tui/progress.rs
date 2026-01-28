@@ -18,18 +18,19 @@ pub enum Phase {
 }
 
 impl Phase {
+    /// Get the jovial emoji-enhanced phase name
     pub fn name(&self) -> &'static str {
         match self {
-            Phase::Partition => "Partitioning disk",
-            Phase::Format => "Formatting partitions",
-            Phase::CopyRoot => "Copying root filesystem",
-            Phase::CopyBoot => "Copying boot partition",
-            Phase::CopyEfi => "Copying EFI partition",
-            Phase::UefiConfig => "Applying UEFI configuration",
-            Phase::LocaleConfig => "Configuring locale",
-            Phase::Fstab => "Generating fstab",
-            Phase::StageDojo => "Staging Dojo",
-            Phase::Cleanup => "Cleaning up",
+            Phase::Partition => "🔪 Slicing up the disk",
+            Phase::Format => "✨ Making it sparkly clean",
+            Phase::CopyRoot => "📦 Moving the big stuff",
+            Phase::CopyBoot => "🥾 Setting up the boots",
+            Phase::CopyEfi => "🎩 Adding the fancy hat",
+            Phase::UefiConfig => "🔧 Tweaking the UEFI magic",
+            Phase::LocaleConfig => "🗣️ Teaching it your language",
+            Phase::Fstab => "📋 Writing the mount map",
+            Phase::StageDojo => "🥋 Preparing the Dojo",
+            Phase::Cleanup => "🧹 Tidying up",
         }
     }
 
@@ -65,6 +66,29 @@ impl Phase {
             Phase::StageDojo,
             Phase::Cleanup,
         ]
+    }
+
+    /// Get the spinner frames for this phase type
+    pub fn spinners(&self) -> &'static [&'static str] {
+        match self {
+            // Disk operations
+            Phase::Partition | Phase::Format => &["💿", "📀", "💾", "🖴"],
+            // Copy operations
+            Phase::CopyRoot | Phase::CopyBoot | Phase::CopyEfi => &["📦", "📤", "📥", "🗃️"],
+            // Config operations
+            Phase::UefiConfig | Phase::LocaleConfig | Phase::Fstab => &["🔧", "⚙️", "🛠️", "🔩"],
+            // Dojo stage
+            Phase::StageDojo => &["🥋", "🥷", "⚔️", "🏯"],
+            // Cleanup
+            Phase::Cleanup => &["🧹", "🧼", "✨", "🪄"],
+        }
+    }
+
+    /// Get the current spinner frame for this phase
+    pub fn spinner_frame(&self, tick: u64) -> &'static str {
+        let spinners = self.spinners();
+        let index = (tick / 3) as usize % spinners.len(); // Change every 3 ticks (~300ms)
+        spinners[index]
     }
 }
 
@@ -105,15 +129,29 @@ pub struct ProgressState {
     pub phase_percent: f64,
     /// Current rsync speed in MB/s
     pub rsync_speed: f64,
+    /// Peak rsync speed in MB/s
+    pub peak_speed: f64,
+    /// Running average speed in MB/s
+    pub average_speed: f64,
+    /// Speed samples for averaging
+    speed_samples: Vec<f64>,
     /// Disk I/O speed in MB/s
     pub disk_io_speed: f64,
+    /// Bytes transferred
+    pub bytes_done: u64,
+    /// Total bytes to transfer
+    pub bytes_total: u64,
     /// Files copied / total
     pub files_done: u64,
     pub files_total: u64,
+    /// Current file being processed
+    pub current_file: Option<String>,
     /// Status message
     pub status: String,
     /// Start time
     pub start_time: Option<Instant>,
+    /// Phase start time
+    pub phase_start_time: Option<Instant>,
     /// Is installation complete?
     pub is_complete: bool,
     /// Error message if failed
@@ -128,11 +166,18 @@ impl Default for ProgressState {
             overall_percent: 0.0,
             phase_percent: 0.0,
             rsync_speed: 0.0,
+            peak_speed: 0.0,
+            average_speed: 0.0,
+            speed_samples: Vec::new(),
             disk_io_speed: 0.0,
+            bytes_done: 0,
+            bytes_total: 0,
             files_done: 0,
             files_total: 0,
-            status: "Starting installation...".to_string(),
+            current_file: None,
+            status: "🚀 Starting installation...".to_string(),
             start_time: None,
+            phase_start_time: None,
             is_complete: false,
             error: None,
         }
@@ -147,6 +192,7 @@ impl ProgressState {
                 self.current_phase = Some(phase);
                 self.phase_percent = 0.0;
                 self.status = format!("{}...", phase.name());
+                self.phase_start_time = Some(Instant::now());
                 if self.start_time.is_none() {
                     self.start_time = Some(Instant::now());
                 }
@@ -170,6 +216,20 @@ impl ProgressState {
                 self.rsync_speed = speed_mbps;
                 self.files_done = files_done;
                 self.files_total = files_total;
+
+                // Track peak speed
+                if speed_mbps > self.peak_speed {
+                    self.peak_speed = speed_mbps;
+                }
+
+                // Update running average
+                self.speed_samples.push(speed_mbps);
+                if self.speed_samples.len() > 100 {
+                    self.speed_samples.remove(0);
+                }
+                self.average_speed = self.speed_samples.iter().sum::<f64>()
+                    / self.speed_samples.len() as f64;
+
                 self.update_overall_progress();
             }
             ProgressUpdate::DiskIo { mbps } => {
@@ -181,12 +241,12 @@ impl ProgressState {
             ProgressUpdate::Complete => {
                 self.is_complete = true;
                 self.overall_percent = 100.0;
-                self.status = "Installation complete!".to_string();
+                self.status = "🎉 Installation complete!".to_string();
             }
             ProgressUpdate::Error(msg) => {
                 self.is_complete = true;
                 self.error = Some(msg.clone());
-                self.status = format!("Error: {}", msg);
+                self.status = format!("❌ Error: {}", msg);
             }
         }
     }
@@ -221,31 +281,77 @@ impl ProgressState {
         }
     }
 
+    /// Get elapsed time
+    pub fn elapsed(&self) -> Option<Duration> {
+        self.start_time.map(|t| t.elapsed())
+    }
+
+    /// Get phase elapsed time
+    pub fn phase_elapsed(&self) -> Option<Duration> {
+        self.phase_start_time.map(|t| t.elapsed())
+    }
+
+    /// Format duration as string
+    pub fn format_duration(d: Duration) -> String {
+        let secs = d.as_secs();
+        if secs < 60 {
+            format!("{}s", secs)
+        } else if secs < 3600 {
+            format!("{}m {}s", secs / 60, secs % 60)
+        } else {
+            format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+        }
+    }
+
     /// Format ETA as string
     pub fn eta_string(&self) -> String {
         match self.eta() {
-            Some(d) => {
-                let secs = d.as_secs();
-                if secs < 60 {
-                    format!("{}s", secs)
-                } else if secs < 3600 {
-                    format!("{}m {}s", secs / 60, secs % 60)
-                } else {
-                    format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
-                }
-            }
-            None => "calculating...".to_string(),
+            Some(d) => Self::format_duration(d),
+            None => "⏳ calculating...".to_string(),
+        }
+    }
+
+    /// Format elapsed time as string
+    pub fn elapsed_string(&self) -> String {
+        match self.elapsed() {
+            Some(d) => Self::format_duration(d),
+            None => "0s".to_string(),
+        }
+    }
+
+    /// Format phase elapsed time as string
+    pub fn phase_elapsed_string(&self) -> String {
+        match self.phase_elapsed() {
+            Some(d) => Self::format_duration(d),
+            None => "0s".to_string(),
         }
     }
 
     /// Get phase status symbol
     pub fn phase_symbol(&self, phase: Phase) -> &'static str {
         if self.completed_phases.contains(&phase) {
-            "\u{2713}" // checkmark
+            "✅" // Completed
         } else if self.current_phase == Some(phase) {
-            "\u{25b6}" // play/arrow
+            "⏳" // In progress
         } else {
-            "\u{25cb}" // circle
+            "⏸️" // Pending
+        }
+    }
+
+    /// Format bytes as human-readable string
+    pub fn format_bytes(bytes: u64) -> String {
+        const KB: u64 = 1024;
+        const MB: u64 = 1024 * KB;
+        const GB: u64 = 1024 * MB;
+
+        if bytes >= GB {
+            format!("{:.1} GB", bytes as f64 / GB as f64)
+        } else if bytes >= MB {
+            format!("{:.1} MB", bytes as f64 / MB as f64)
+        } else if bytes >= KB {
+            format!("{:.1} KB", bytes as f64 / KB as f64)
+        } else {
+            format!("{} B", bytes)
         }
     }
 }
@@ -267,5 +373,25 @@ mod tests {
         state.apply_update(ProgressUpdate::Complete);
         assert!(state.is_complete);
         assert_eq!(state.overall_percent, 100.0);
+    }
+
+    #[test]
+    fn test_phase_spinners() {
+        let disk_phase = Phase::Partition;
+        let copy_phase = Phase::CopyRoot;
+        let config_phase = Phase::UefiConfig;
+
+        // Each phase type should have its own spinners
+        assert_eq!(disk_phase.spinners()[0], "💿");
+        assert_eq!(copy_phase.spinners()[0], "📦");
+        assert_eq!(config_phase.spinners()[0], "🔧");
+    }
+
+    #[test]
+    fn test_format_bytes() {
+        assert_eq!(ProgressState::format_bytes(512), "512 B");
+        assert_eq!(ProgressState::format_bytes(1536), "1.5 KB");
+        assert_eq!(ProgressState::format_bytes(1_500_000), "1.4 MB");
+        assert_eq!(ProgressState::format_bytes(2_500_000_000), "2.3 GB");
     }
 }

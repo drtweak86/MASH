@@ -1,6 +1,6 @@
 //! Application state machine for the TUI wizard
 
-use crate::cli::Cli;
+use crate::cli::{Cli, PartitionScheme};
 use crate::locale::LocaleConfig;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::path::PathBuf;
@@ -27,15 +27,15 @@ pub enum Screen {
 impl Screen {
     pub fn title(&self) -> &'static str {
         match self {
-            Screen::Welcome => "Welcome",
-            Screen::DiskSelection => "Select Target Disk",
-            Screen::ImageSelection => "Select Image File",
-            Screen::UefiDirectory => "UEFI Directory",
-            Screen::LocaleSelection => "Locale & Keymap",
-            Screen::Options => "Installation Options",
-            Screen::Confirmation => "Confirm Installation",
-            Screen::Progress => "Installing...",
-            Screen::Complete => "Installation Complete",
+            Screen::Welcome => "🥋 Enter the Dojo",
+            Screen::DiskSelection => "💾 Select Target Disk",
+            Screen::ImageSelection => "📀 Select Image File",
+            Screen::UefiDirectory => "🔧 UEFI Configuration",
+            Screen::LocaleSelection => "🌍 Locale & Keymap",
+            Screen::Options => "⚙️ Installation Options",
+            Screen::Confirmation => "⚠️ DANGER ZONE ⚠️",
+            Screen::Progress => "🔥 Installing...",
+            Screen::Complete => "🎉 Installation Complete!",
         }
     }
 
@@ -80,6 +80,7 @@ pub enum InputResult {
 pub struct InstallOptions {
     pub auto_unmount: bool,
     pub early_ssh: bool,
+    pub partition_scheme: PartitionScheme,
     pub dry_run: bool,
 }
 
@@ -88,6 +89,7 @@ impl Default for InstallOptions {
         Self {
             auto_unmount: true,
             early_ssh: true, // Default ON as per spec
+            partition_scheme: PartitionScheme::Mbr,
             dry_run: false,
         }
     }
@@ -105,6 +107,9 @@ pub struct FlashConfig {
     pub locale: LocaleConfig,
     pub early_ssh: bool,
     pub progress_tx: Option<Sender<super::progress::ProgressUpdate>>,
+    pub efi_size: String,
+    pub boot_size: String,
+    pub root_end: String,
 }
 
 /// Application state
@@ -113,6 +118,9 @@ pub struct App {
     pub mash_root: PathBuf,
     pub watch: bool,
     pub dry_run_cli: bool, // From CLI flag
+
+    // Animation state
+    pub animation_tick: u64, // Increments each frame for spinners/effects
 
     // Disk selection
     pub available_disks: Vec<DiskInfo>,
@@ -145,6 +153,11 @@ pub struct App {
     // Complete
     pub install_success: bool,
     pub install_error: Option<String>,
+
+    // Partition sizes from CLI (used as defaults for TUI if not overridden)
+    pub efi_size_cli: String,
+    pub boot_size_cli: String,
+    pub root_end_cli: String,
 }
 
 impl App {
@@ -166,6 +179,8 @@ impl App {
             mash_root,
             watch,
             dry_run_cli: dry_run,
+
+            animation_tick: 0,
 
             available_disks,
             selected_disk_index: 0,
@@ -199,6 +214,19 @@ impl App {
 
             install_success: false,
             install_error: None,
+
+            efi_size_cli: match &cli.command {
+                Some(crate::cli::Command::Flash { efi_size, .. }) => efi_size.clone(),
+                _ => "1024MiB".to_string(),
+            },
+            boot_size_cli: match &cli.command {
+                Some(crate::cli::Command::Flash { boot_size, .. }) => boot_size.clone(),
+                _ => "2048MiB".to_string(),
+            },
+            root_end_cli: match &cli.command {
+                Some(crate::cli::Command::Flash { root_end, .. }) => root_end.clone(),
+                _ => "1800GiB".to_string(),
+            },
         }
     }
 
@@ -397,7 +425,7 @@ impl App {
                 InputResult::Continue
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.options_focus < 2 {
+                if self.options_focus < 3 {
                     self.options_focus += 1;
                 }
                 InputResult::Continue
@@ -407,7 +435,13 @@ impl App {
                 match self.options_focus {
                     0 => self.options.auto_unmount = !self.options.auto_unmount,
                     1 => self.options.early_ssh = !self.options.early_ssh,
-                    2 => self.options.dry_run = !self.options.dry_run,
+                    2 => {
+                        self.options.partition_scheme = match self.options.partition_scheme {
+                            PartitionScheme::Mbr => PartitionScheme::Gpt,
+                            PartitionScheme::Gpt => PartitionScheme::Mbr,
+                        };
+                    }
+                    3 => self.options.dry_run = !self.options.dry_run,
                     _ => {}
                 }
                 InputResult::Continue
@@ -526,6 +560,7 @@ impl App {
         Some(FlashConfig {
             image: PathBuf::from(self.image_input.value()),
             disk,
+            scheme: self.options.partition_scheme,
             uefi_dir: PathBuf::from(self.uefi_input.value()),
             dry_run: self.options.dry_run || self.dry_run_cli,
             auto_unmount: self.options.auto_unmount,
@@ -533,6 +568,9 @@ impl App {
             locale,
             early_ssh: self.options.early_ssh,
             progress_tx: None, // Will be set up by the caller
+            efi_size: self.efi_size_cli.clone(),
+            boot_size: self.boot_size_cli.clone(),
+            root_end: self.root_end_cli.clone(),
         })
     }
 
