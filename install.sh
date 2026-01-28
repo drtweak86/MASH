@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # MASH Installer - One-Command Install Script
-# Usage: curl -fsSL https://raw.githubusercontent.com/drtweak86/MASH/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/drtweak86/MASH/main/install.sh | sudo bash
 
 set -e
 
@@ -101,17 +101,7 @@ download_and_install() {
         log_error "CLI binary not found in archive"
         exit 1
     fi
-    
-    # Install Qt GUI (optional)
-    if [ -f "MASH-qt/MASH-qt" ]; then
-        log_info "Installing Qt GUI..."
-        cp "MASH-qt/MASH-qt" "$INSTALL_DIR/MASH-qt"
-        chmod +x "$INSTALL_DIR/MASH-qt"
-        log_success "Qt GUI installed to $INSTALL_DIR/MASH-qt"
-    else
-        log_warning "Qt GUI not found in archive (optional component)"
-    fi
-    
+
     # Cleanup
     cd /
     rm -rf "$TEMP_DIR"

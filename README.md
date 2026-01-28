@@ -95,7 +95,7 @@ The Dojo is a post-install automation system that runs after first boot:
 ### One-Command Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/drtweak86/mash-installer/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/drtweak86/MASH/main/install.sh | sudo bash
 ```
 
 ### Usage
@@ -434,8 +434,8 @@ MIT License - see LICENSE file
 
 ## 🔗 Links
 
-- Repository: https://github.com/drtweak86/mash-installer
-- Issues: https://github.com/drtweak86/mash-installer/issues
+- Repository: https://github.com/drtweak86/MASH
+- Issues: https://github.com/drtweak86/MASH/issues
 - UEFI Firmware: https://github.com/pftf/RPi4
 - Fedora ARM: https://fedoraproject.org/wiki/Architectures/ARM
 

@@ -81,14 +81,14 @@ jobs:
     - name: Create artifact
       run: |
         mkdir -p artifacts
-        cp mash-installer/target/${{ matrix.target }}/release/mash-installer artifacts/mash-installer-${{ matrix.target }}
-        chmod +x artifacts/mash-installer-${{ matrix.target }}
+        cp mash-installer/target/${{ matrix.target }}/release/mash-installer artifacts/MASH-${{ matrix.target }}
+        chmod +x artifacts/MASH-${{ matrix.target }}
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: mash-installer-${{ matrix.target }}
-        path: artifacts/mash-installer-${{ matrix.target }}
+        name: MASH-${{ matrix.target }}
+        path: artifacts/MASH-${{ matrix.target }}
         retention-days: 30
 
   create-release:
@@ -108,14 +108,14 @@ jobs:
     - name: Create release archive
       run: |
         cd artifacts
-        tar -czf ../mash-installer-${{ github.ref_name }}.tar.gz \
-          mash-installer-aarch64-unknown-linux-gnu/mash-installer-aarch64-unknown-linux-gnu \
-          mash-installer-x86_64-unknown-linux-gnu/mash-installer-x86_64-unknown-linux-gnu
+        tar -czf ../MASH-${{ github.ref_name }}.tar.gz \
+          MASH-aarch64-unknown-linux-gnu/MASH-aarch64-unknown-linux-gnu \
+          MASH-x86_64-unknown-linux-gnu/MASH-x86_64-unknown-linux-gnu
         cd ..
 
     - name: Generate checksums
       run: |
-        sha256sum mash-installer-${{ github.ref_name }}.tar.gz > checksums.txt
+        sha256sum MASH-${{ github.ref_name }}.tar.gz > checksums.txt
         cd artifacts
         find . -type f -exec sha256sum {} \; >> ../checksums.txt
 
@@ -123,44 +123,44 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          mash-installer-${{ github.ref_name }}.tar.gz
+          MASH-${{ github.ref_name }}.tar.gz
           checksums.txt
         body: |
-          # MASH Installer ${{ github.ref_name }}
+          # MASH ${{ github.ref_name }}
 
           ## Installation
 
           ### One-Command Install (Recommended)
           ```bash
-          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sudo bash
           ```
 
           ### Manual Install
           ```bash
           # Download and extract
-          wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mash-installer-${{ github.ref_name }}.tar.gz
-          tar -xzf mash-installer-${{ github.ref_name }}.tar.gz
+          wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/MASH-${{ github.ref_name }}.tar.gz
+          tar -xzf MASH-${{ github.ref_name }}.tar.gz
 
           # For Raspberry Pi 4 (aarch64)
-          sudo cp mash-installer-aarch64-unknown-linux-gnu/mash-installer-aarch64-unknown-linux-gnu /usr/local/bin/mash-installer
+          sudo cp MASH-aarch64-unknown-linux-gnu/MASH-aarch64-unknown-linux-gnu /usr/local/bin/MASH
 
           # For x86_64 hosts
-          sudo cp mash-installer-x86_64-unknown-linux-gnu/mash-installer-x86_64-unknown-linux-gnu /usr/local/bin/mash-installer
+          sudo cp MASH-x86_64-unknown-linux-gnu/MASH-x86_64-unknown-linux-gnu /usr/local/bin/MASH
 
-          sudo chmod +x /usr/local/bin/mash-installer
+          sudo chmod +x /usr/local/bin/MASH
           ```
 
           ## Usage
 
           ```bash
           # Launch TUI wizard
-          sudo mash-installer
+          sudo MASH
 
           # Check system
-          mash-installer preflight
+          MASH preflight
 
           # Direct flash (advanced)
-          sudo mash-installer flash \
+          sudo MASH flash \
             --image /path/to/fedora-kde.raw \
             --disk /dev/sdX \
             --uefi-dir /path/to/uefi \

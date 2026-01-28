@@ -5,7 +5,7 @@
 ### 1. Install MASH Installer
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/drtweak86/mash-installer/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/drtweak86/MASH/main/install.sh | sudo bash
 ```
 
 ### 2. Prepare Your Image
@@ -152,7 +152,7 @@ ls -lh ~/Downloads/*.raw
 
 - **Full Documentation**: [README.md](../README.md)
 - **Architecture**: [docs/ARCHITECTURE.md](ARCHITECTURE.md)
-- **Report Issues**: https://github.com/drtweak86/mash-installer/issues
+- **Report Issues**: https://github.com/drtweak86/MASH/issues
 
 ## 💡 Pro Tips
 

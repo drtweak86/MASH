@@ -53,7 +53,7 @@ git commit -m "Initial commit: MASH Installer v0.3.0"
 gh repo create mash-installer --public --source=. --remote=origin --push
 
 # Or manually:
-git remote add origin https://github.com/drtweak86/mash-installer.git
+git remote add origin https://github.com/drtweak86/MASH.git
 git branch -M main
 git push -u origin main
 ```
@@ -64,11 +64,11 @@ Edit these files to match your repository:
 
 **1. install.sh** (Line 13)
 ```bash
-REPO="drtweak86/mash-installer"  # ← Change this!
+REPO="drtweak86/MASH"  # ← Change this!
 ```
 
 **2. README.md**
-Replace all instances of `drtweak86/mash-installer` with your actual repository.
+Replace all instances of `drtweak86/MASH` with your actual repository.
 
 **3. .github/workflows/build.yml**
 The workflow uses `${{ github.repository }}` so it's automatically correct.
@@ -105,7 +105,7 @@ This will:
 
 After first release, update your documentation to use:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/drtweak86/mash-installer/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/drtweak86/MASH/main/install.sh | sudo bash
 ```
 
 ## 🔧 Local Development
@@ -407,8 +407,8 @@ MIT License - see LICENSE file for details.
 
 ## 📬 Support
 
-- **Issues**: https://github.com/drtweak86/mash-installer/issues
-- **Discussions**: https://github.com/drtweak86/mash-installer/discussions
+- **Issues**: https://github.com/drtweak86/MASH/issues
+- **Discussions**: https://github.com/drtweak86/MASH/discussions
 - **Email**: your-email@example.com
 
 ---
