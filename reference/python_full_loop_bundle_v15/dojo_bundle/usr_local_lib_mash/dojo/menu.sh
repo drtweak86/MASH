@@ -42,47 +42,27 @@ action_bootstrap() {
   sudo "$BASE/bootstrap.sh" --run || true
 }
 
-action_fonts() {
-  # Run fonts helper from staging or installed location
-  local fonts_script=""
-  if [[ -x "/data/mash-staging/helpers/05_fonts_essential.sh" ]]; then
-    fonts_script="/data/mash-staging/helpers/05_fonts_essential.sh"
-  elif [[ -x "/usr/local/lib/mash/helpers/05_fonts_essential.sh" ]]; then
-    fonts_script="/usr/local/lib/mash/helpers/05_fonts_essential.sh"
-  fi
-
-  if [[ -n "$fonts_script" ]]; then
-    bash "$fonts_script" || true
-  else
-    echo "ERROR: Fonts helper not found."
-    echo "Press Enter to continue..."
-    read -r
-  fi
-}
-
 menu_main() {
   _need_dialog || return 0
 
   local choice
   while true; do
     choice=$(dialog --clear --no-shadow --title "MASH Dojo 🥋" \
-      --menu "Choose your move:" 20 72 12 \
-      1 "🔤 Install fonts (Nerd Font, Emoji) [DO FIRST!]" \
-      2 "🔊 Fix audio (PipeWire/ALSA sanity)" \
-      3 "🖥️  Disable DPMS + screensaver (no blackouts)" \
-      4 "🛡️  Firewall sane (LAN SSH/Mosh allowed)" \
-      5 "⭐ Preview Starship theme" \
-      6 "🔥 Run MASH bootstrap (packages, extras)" \
+      --menu "Choose your move:" 18 72 10 \
+      1 "🔊 Fix audio (PipeWire/ALSA sanity)" \
+      2 "🖥️  Disable DPMS + screensaver (no blackouts)" \
+      3 "🛡️  Firewall sane (LAN SSH/Mosh allowed)" \
+      4 "⭐ Preview Starship theme" \
+      5 "🔥 Run MASH bootstrap (packages, extras)" \
       9 "✅ Exit & don't show again" \
       3>&1 1>&2 2>&3) || true
 
     case "${choice:-}" in
-      1) action_fonts ;;
-      2) action_audio ;;
-      3) action_disable_dpms ;;
-      4) action_firewall ;;
-      5) action_preview_starship ;;
-      6) action_bootstrap ;;
+      1) action_audio ;;
+      2) action_disable_dpms ;;
+      3) action_firewall ;;
+      4) action_preview_starship ;;
+      5) action_bootstrap ;;
       9) mark_done; clear; echo "✅ Dojo completed. See you in the dojo, captain. 🥋"; return 0 ;;
       *) clear; return 0 ;;
     esac

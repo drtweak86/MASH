@@ -1,0 +1,15 @@
+[Unit]
+Description=MASH Internet wait (before Dojo/bootstrap)
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/data
+ConditionPathIsMountPoint=/data
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash -lc '/usr/local/lib/mash/system/internet-wait.sh'
+RemainAfterExit=yes
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
