@@ -211,31 +211,30 @@ extract_archive() {
 }
 
 install_binaries() {
-  # Find CLI binary (mash-installer) anywhere inside extracted tree
-  local cli
-  cli="$(find "$TEMP_DIR" -type f -name 'mash-installer' -perm /111 -print -quit 2>/dev/null || true)"
-  if [[ -z "${cli:-}" ]]; then
-    # fallback: anything named like mash-installer-<arch> or similar
-    cli="$(find "$TEMP_DIR" -type f -iname 'mash-installer*' -perm /111 -print -quit 2>/dev/null || true)"
-  fi
+    log_info "Installing..."
 
-  if [[ -z "${cli:-}" ]]; then
-    log_error "Could not find 'mash-installer' binary inside the release archive."
-    log_info "Archive contents (top-level):"
-    find "$TEMP_DIR" -maxdepth 3 -type f -print >&2
-    exit 1
-  fi
+    # We extract into $TEMP_DIR and run from there
+    # Release layout is typically:
+    #   mash-installer-${ARCH}/mash-installer-${ARCH}
+    local cli=""
+    cli="$(find . -maxdepth 6 -type f -name "mash-installer-${ARCH}" -perm -111 -print -quit 2>/dev/null || true)"
 
-  install -m 0755 "$cli" "${INSTALL_DIR}/mash-installer"
-  log_success "Installed CLI: ${INSTALL_DIR}/mash-installer"
+    # Fallback: anything executable named mash-installer* (covers naming drift)
+    if [[ -z "${cli:-}" ]]; then
+        cli="$(find . -maxdepth 6 -type f -name "mash-installer*" -perm -111 -print -quit 2>/dev/null || true)"
+    fi
 
-  # Optional Qt GUI (x86_64 only today) — install if present
-  local qt
-  qt="$(find "$TEMP_DIR" -type f -name 'mash-installer-qt' -perm /111 -print -quit 2>/dev/null || true)"
-  if [[ -n "${qt:-}" ]]; then
-    install -m 0755 "$qt" "${INSTALL_DIR}/mash-installer-qt"
-    log_success "Installed GUI: ${INSTALL_DIR}/mash-installer-qt"
-  fi
+    if [[ -z "${cli:-}" ]]; then
+        log_error "Could not find 'mash-installer' binary inside the release archive."
+        log_info "Archive contents (top-level):"
+        find . -maxdepth 3 -type f -print
+        exit 1
+    fi
+
+    install -m 0755 "$cli" "$INSTALL_DIR/mash-installer"
+    log_success "Installed: $INSTALL_DIR/mash-installer"
+
+    # Qt is removed in v1.1.x+; no GUI install attempt.
 }
 
 create_desktop_entry() {
@@ -289,11 +288,6 @@ ${BLUE}CLI Usage:${NC}
     --disk /dev/sdX \
     --uefi-dir /path/to/uefi \
     --dry-run
-
-${BLUE}GUI Usage (optional):${NC}
-  sudo mash-installer-qt
-
-${BLUE}Help:${NC}
   mash-installer --help
 
 ${YELLOW}⚠️  WARNING:${NC}
