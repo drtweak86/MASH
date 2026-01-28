@@ -103,7 +103,7 @@ get_asset_url() {
     local arch="$2"
     local api_url="https://api.github.com/repos/$REPO/releases/tags/$version"
 
-    log_info "Querying release metadata for $version..." >&2
+    log_info "Querying release metadata for $version..."
     local json
     json="$(gh_api "$api_url")"
 
