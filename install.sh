@@ -87,10 +87,24 @@ get_latest_version() {
 # Lightweight GitHub API helper that uses GITHUB_TOKEN if provided
 gh_api() {
     local url="$1"
+
+    # Accept either:
+    #   "/repos/OWNER/REPO/..."  (path)
+    # or
+    #   "https://api.github.com/repos/OWNER/REPO/..." (full URL)
+    if [[ "$url" == /* ]]; then
+        url="https://api.github.com${url}"
+    fi
+
     if [ -n "${GITHUB_TOKEN:-}" ]; then
-        curl -sSL -H "Authorization: token ${GITHUB_TOKEN}" -H "Accept: application/vnd.github.v3+json" "$url"
+        curl -sSL \
+          -H "Authorization: token ${GITHUB_TOKEN}" \
+          -H "Accept: application/vnd.github.v3+json" \
+          "$url"
     else
-        curl -sSL -H "Accept: application/vnd.github.v3+json" "$url"
+        curl -sSL \
+          -H "Accept: application/vnd.github.v3+json" \
+          "$url"
     fi
 }
 
