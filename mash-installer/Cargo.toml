@@ -1,12 +1,14 @@
 [package]
-name = "mash-installer"
-version = "1.1.13"
+name = "mash"
+version = "1.1.14"
 edition = "2021"
 authors = ["MASH Team"]
-description = "Full-loop Fedora KDE installer for Raspberry Pi 4B with UEFI boot + Dojo system"
+description = "🍠 MASH - Fedora KDE for Raspberry Pi 4B with UEFI boot + Dojo system"
+
+[workspace]
 
 [[bin]]
-name = "mash-installer"
+name = "mash"
 path = "src/main.rs"
 
 [dependencies]
@@ -19,6 +21,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 nix = { version = "0.27", features = ["mount", "fs"] }
 libc = "0.2"
+ratatui = "0.28"
+crossterm = "0.28"
 
 [profile.release]
 opt-level = 3
