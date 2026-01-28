@@ -107,21 +107,28 @@ get_asset_url() {
     local json
     json="$(gh_api "$api_url")"
 
-    # Build "name|url" pairs
-local last_name=""
-    assets=()
-    while IFS= read -r line; do
-        if echo "$line" | grep -q '"name"'; then
-            last_name="$(echo "$line" | sed -E 's/.*"name"\s*:\s*"([^"]+)".*/\1/')"
-        elif echo "$line" | grep -q '"browser_download_url"'; then
-            local u
-            u="$(echo "$line" | sed -E 's/.*"browser_download_url"\s*:\s*"([^"]+)".*/\1/')"
-            if [[ -n "$last_name" && -n "$u" ]]; then
-                assets+=("${last_name}|${u}")
+# Build "name|url" pairs
+assets=()
+last_name=""
+while IFS= read -r line; do
+    case "$line" in
+        *'"name"'*)
+            last_name="${line#*\"name\":}"
+            last_name="${last_name#*\"}"
+            last_name="${last_name%%\"*}"
+            ;;
+        *'"browser_download_url"'*)
+            url="${line#*\"browser_download_url\":}"
+            url="${url#*\"}"
+            url="${url%%\"*}"
+            if [[ -n "$last_name" && -n "$url" ]]; then
+                assets+=("$last_name|$url")
                 last_name=""
             fi
+            ;;
+    esac
+done <<<"$json"
 
-    done < <(echo "$json" | grep -E '"name"\s*:|"browser_download_url"\s*:')
     if [[ "${#assets[@]}" -eq 0 ]]; then
         log_error "No assets found for release $version"
         exit 1
