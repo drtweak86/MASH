@@ -36,14 +36,20 @@ mash-installer preflight
 
 # Install to /dev/sda (REPLACE WITH YOUR DISK!)
 sudo mash-installer flash \
-  --image ~/Downloads/Fedora-KDE-40.raw \
   --disk /dev/sda \
-  --uefi-dir /path/to/uefi \
+  --scheme mbr \
+  --download-image \
+  --download-uefi \
   --auto-unmount \
   --yes-i-know
 ```
 
 ## ⚠️ Important Notes
+
+### Partition scheme
+- Default is **MBR (msdos)** for best Raspberry Pi UEFI compatibility.
+- Use `--scheme gpt` if you specifically want GPT.
+
 
 ### Before You Start
 
@@ -78,7 +84,7 @@ lsblk
 
 1. ✅ System checks (preflight)
 2. 🧹 Unmount existing partitions
-3. 🔧 Create 4 partitions (MBR):
+3. 🔧 Create 4 partitions (MBR or GPT — you choose):
    - EFI: 512 MB (FAT32)
    - BOOT: 1 GB (ext4)
    - ROOT: 1.8 TB (ext4)
@@ -161,22 +167,10 @@ ls -lh ~/Downloads/*.raw
 ```bash
 # This won't make any changes - safe to test
 sudo mash-installer flash \
-  --image ~/Downloads/Fedora.raw \
   --disk /dev/sda \
-  --uefi-dir /path/to/uefi \
-  --dry-run
-```
-
-### Save Time on Repeat Installs
-
-```bash
-# Store your common command in a script
-cat > ~/install-fedora.sh <<'EOF'
-#!/bin/bash
-sudo mash-installer flash \
-  --image ~/Downloads/Fedora-KDE-40.raw \
-  --disk /dev/sda \
-  --uefi-dir ~/uefi-firmware \
+  --scheme mbr \
+  --download-image \
+  --download-uefi \
   --auto-unmount \
   --yes-i-know
 EOF

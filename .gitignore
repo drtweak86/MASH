@@ -44,3 +44,23 @@ dist/
 # Release artifacts
 artifacts/
 checksums.txt
+
+# --- MASH Merge Toolkit (auto-added) ---
+bak/
+merge-report.txt
+*.raw
+*.raw.xz
+*.img
+*.img.xz
+*.iso
+*.zip
+*.7z
+*.tmp
+*.log
+.DS_Store
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+target/
+# --- /MASH Merge Toolkit ---
