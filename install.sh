@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Defaults for set -u safety (populated in main)
+ARCH=""
+VERSION=""
+
+
 # ==========================================================
 # 🦀 MASH Installer - One-Command Install Script (Pi-first)
 # Repo: drtweak86/MASH
