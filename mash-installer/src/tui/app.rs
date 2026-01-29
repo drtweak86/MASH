@@ -15,12 +15,14 @@ use super::widgets::DiskInfo;
 pub enum Screen {
     Welcome,
     DiskSelection,
-    DownloadSourceSelection, // New screen
+    DownloadSourceSelection,
     ImageSelection,
     UefiDirectory,
     LocaleSelection,
     Options,
     Confirmation,
+    DownloadingFedora, // New: downloading Fedora image
+    DownloadingUefi,   // New: downloading UEFI firmware
     Progress,
     Complete,
 }
@@ -30,12 +32,14 @@ impl Screen {
         match self {
             Screen::Welcome => "🥋 Enter the Dojo",
             Screen::DiskSelection => "💾 Select Target Disk",
-            Screen::DownloadSourceSelection => "⬇️ Select Image Source", // New title
+            Screen::DownloadSourceSelection => "⬇️ Select Image Source",
             Screen::ImageSelection => "📀 Select Image File",
             Screen::UefiDirectory => "🔧 UEFI Configuration",
             Screen::LocaleSelection => "🌍 Locale & Keymap",
             Screen::Options => "⚙️ Installation Options",
             Screen::Confirmation => "⚠️ DANGER ZONE ⚠️",
+            Screen::DownloadingFedora => "📥 Downloading Fedora Image",
+            Screen::DownloadingUefi => "📥 Downloading UEFI Firmware",
             Screen::Progress => "🔥 Installing...",
             Screen::Complete => "🎉 Installation Complete!",
         }
@@ -44,13 +48,16 @@ impl Screen {
     pub fn next(&self) -> Option<Screen> {
         match self {
             Screen::Welcome => Some(Screen::DiskSelection),
-            Screen::DiskSelection => Some(Screen::DownloadSourceSelection), // Flow changed
-            Screen::DownloadSourceSelection => Some(Screen::ImageSelection), // Flow changed
+            Screen::DiskSelection => Some(Screen::DownloadSourceSelection),
+            Screen::DownloadSourceSelection => Some(Screen::ImageSelection),
             Screen::ImageSelection => Some(Screen::UefiDirectory),
             Screen::UefiDirectory => Some(Screen::LocaleSelection),
             Screen::LocaleSelection => Some(Screen::Options),
             Screen::Options => Some(Screen::Confirmation),
-            Screen::Confirmation => Some(Screen::Progress),
+            // After confirmation, downloads happen (handled dynamically)
+            Screen::Confirmation => Some(Screen::DownloadingFedora),
+            Screen::DownloadingFedora => Some(Screen::DownloadingUefi),
+            Screen::DownloadingUefi => Some(Screen::Progress),
             Screen::Progress => Some(Screen::Complete),
             Screen::Complete => None,
         }
@@ -60,13 +67,15 @@ impl Screen {
         match self {
             Screen::Welcome => None,
             Screen::DiskSelection => Some(Screen::Welcome),
-            Screen::DownloadSourceSelection => Some(Screen::DiskSelection), // Flow changed
-            Screen::ImageSelection => Some(Screen::DownloadSourceSelection), // Flow changed
+            Screen::DownloadSourceSelection => Some(Screen::DiskSelection),
+            Screen::ImageSelection => Some(Screen::DownloadSourceSelection),
             Screen::UefiDirectory => Some(Screen::ImageSelection),
             Screen::LocaleSelection => Some(Screen::UefiDirectory),
             Screen::Options => Some(Screen::LocaleSelection),
             Screen::Confirmation => Some(Screen::Options),
-            Screen::Progress => None, // Can't go back during progress
+            Screen::DownloadingFedora => None, // Can't go back during download
+            Screen::DownloadingUefi => None,   // Can't go back during download
+            Screen::Progress => None,          // Can't go back during progress
             Screen::Complete => None,
         }
     }
@@ -171,6 +180,47 @@ impl Default for InstallOptions {
     }
 }
 
+/// Download progress state for TUI display
+#[derive(Debug, Clone, Default)]
+pub struct DownloadState {
+    pub is_downloading: bool,
+    pub is_complete: bool,
+    pub current_bytes: u64,
+    pub total_bytes: Option<u64>,
+    pub speed_bytes_per_sec: u64,
+    pub eta_seconds: u64,
+    pub description: String,
+    pub error: Option<String>,
+    pub phase: DownloadPhase,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DownloadPhase {
+    #[default]
+    NotStarted,
+    Downloading,
+    Extracting,
+    Complete,
+    Failed,
+}
+
+/// Progress update sent from download thread
+#[derive(Debug, Clone)]
+pub enum DownloadUpdate {
+    Started {
+        description: String,
+        total_bytes: Option<u64>,
+    },
+    Progress {
+        current_bytes: u64,
+        speed: u64,
+        eta: u64,
+    },
+    Extracting,
+    Complete,
+    Error(String),
+}
+
 /// Flash configuration collected from the wizard
 #[derive(Debug, Clone)]
 pub struct FlashConfig {
@@ -233,6 +283,12 @@ pub struct App {
     // Confirmation
     pub confirmation_input: String,
     pub confirmation_error: Option<String>,
+
+    // Download progress (for Fedora/UEFI download screens)
+    pub download_state: DownloadState,
+    pub download_rx: Option<Receiver<DownloadUpdate>>,
+    pub downloaded_image_path: Option<PathBuf>,
+    pub downloaded_uefi_path: Option<PathBuf>,
 
     // Progress
     pub progress: ProgressState,
@@ -304,6 +360,11 @@ impl App {
             confirmation_input: String::new(),
             confirmation_error: None,
 
+            download_state: DownloadState::default(),
+            download_rx: None,
+            downloaded_image_path: None,
+            downloaded_uefi_path: None,
+
             progress: ProgressState::default(),
             progress_rx: None,
 
@@ -330,12 +391,14 @@ impl App {
         match self.current_screen {
             Screen::Welcome => self.handle_welcome_input(key),
             Screen::DiskSelection => self.handle_disk_selection_input(key),
-            Screen::DownloadSourceSelection => self.handle_download_source_selection_input(key), // New handler
+            Screen::DownloadSourceSelection => self.handle_download_source_selection_input(key),
             Screen::ImageSelection => self.handle_image_selection_input(key),
             Screen::UefiDirectory => self.handle_uefi_input(key),
             Screen::LocaleSelection => self.handle_locale_selection_input(key),
             Screen::Options => self.handle_options_input(key),
             Screen::Confirmation => self.handle_confirmation_input(key),
+            Screen::DownloadingFedora => self.handle_downloading_input(key),
+            Screen::DownloadingUefi => self.handle_downloading_input(key),
             Screen::Progress => self.handle_progress_input(key),
             Screen::Complete => self.handle_complete_input(key),
         }
@@ -670,9 +733,8 @@ impl App {
             }
             KeyCode::Enter => {
                 if self.confirmation_input.trim() == "YES I KNOW" {
-                    // Start installation
-                    self.start_installation();
-                    self.current_screen = Screen::Progress;
+                    // Determine next screen based on what needs to be downloaded
+                    self.current_screen = self.next_screen_after_confirmation();
                 } else {
                     self.confirmation_error =
                         Some("Type exactly: YES I KNOW (case sensitive)".into());
@@ -688,6 +750,68 @@ impl App {
                 InputResult::Continue
             }
             _ => InputResult::Continue,
+        }
+    }
+
+    /// Determine next screen after confirmation based on download selections
+    fn next_screen_after_confirmation(&mut self) -> Screen {
+        if self.image_source_selection == ImageSource::DownloadFedora {
+            // Need to download Fedora image
+            self.download_state = DownloadState::default();
+            Screen::DownloadingFedora
+        } else if self.download_uefi_firmware {
+            // Only need to download UEFI
+            self.download_state = DownloadState::default();
+            Screen::DownloadingUefi
+        } else {
+            // No downloads needed, go straight to flashing
+            self.start_installation();
+            Screen::Progress
+        }
+    }
+
+    /// Determine next screen after Fedora download
+    pub fn next_screen_after_fedora_download(&mut self) -> Screen {
+        if self.download_uefi_firmware {
+            self.download_state = DownloadState::default();
+            Screen::DownloadingUefi
+        } else {
+            self.start_installation();
+            Screen::Progress
+        }
+    }
+
+    /// Handler for download screens (both Fedora and UEFI)
+    fn handle_downloading_input(&mut self, key: KeyEvent) -> InputResult {
+        // During download, only allow viewing progress
+        // Ctrl+C is handled globally to abort
+        if self.download_state.phase == DownloadPhase::Complete {
+            match key.code {
+                KeyCode::Enter => {
+                    // Move to next screen
+                    if self.current_screen == Screen::DownloadingFedora {
+                        self.current_screen = self.next_screen_after_fedora_download();
+                    } else {
+                        // After UEFI download, start installation
+                        self.start_installation();
+                        self.current_screen = Screen::Progress;
+                    }
+                    InputResult::Continue
+                }
+                _ => InputResult::Continue,
+            }
+        } else if self.download_state.phase == DownloadPhase::Failed {
+            match key.code {
+                KeyCode::Enter | KeyCode::Esc => {
+                    // Go back to confirmation to retry
+                    self.current_screen = Screen::Confirmation;
+                    self.confirmation_input.clear();
+                    InputResult::Continue
+                }
+                _ => InputResult::Continue,
+            }
+        } else {
+            InputResult::Continue
         }
     }
 
@@ -737,6 +861,64 @@ impl App {
         }
     }
 
+    /// Update download state from channel
+    pub fn update_download(&mut self) {
+        if let Some(ref rx) = self.download_rx {
+            while let Ok(update) = rx.try_recv() {
+                match update {
+                    DownloadUpdate::Started {
+                        description,
+                        total_bytes,
+                    } => {
+                        self.download_state.is_downloading = true;
+                        self.download_state.description = description;
+                        self.download_state.total_bytes = total_bytes;
+                        self.download_state.phase = DownloadPhase::Downloading;
+                    }
+                    DownloadUpdate::Progress {
+                        current_bytes,
+                        speed,
+                        eta,
+                    } => {
+                        self.download_state.current_bytes = current_bytes;
+                        self.download_state.speed_bytes_per_sec = speed;
+                        self.download_state.eta_seconds = eta;
+                    }
+                    DownloadUpdate::Extracting => {
+                        self.download_state.phase = DownloadPhase::Extracting;
+                    }
+                    DownloadUpdate::Complete => {
+                        self.download_state.is_downloading = false;
+                        self.download_state.is_complete = true;
+                        self.download_state.phase = DownloadPhase::Complete;
+                    }
+                    DownloadUpdate::Error(err) => {
+                        self.download_state.is_downloading = false;
+                        self.download_state.error = Some(err);
+                        self.download_state.phase = DownloadPhase::Failed;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Set up download channel and return sender
+    pub fn setup_download_channel(&mut self) -> Sender<DownloadUpdate> {
+        let (tx, rx) = mpsc::channel();
+        self.download_rx = Some(rx);
+        self.download_state = DownloadState::default();
+        tx
+    }
+
+    /// Check if downloads are needed
+    pub fn needs_fedora_download(&self) -> bool {
+        self.image_source_selection == ImageSource::DownloadFedora
+    }
+
+    pub fn needs_uefi_download(&self) -> bool {
+        self.download_uefi_firmware
+    }
+
     /// Get the flash configuration if wizard completed
     pub fn get_flash_config(&self) -> Option<FlashConfig> {
         if self.current_screen != Screen::Progress && self.current_screen != Screen::Complete {
@@ -753,11 +935,22 @@ impl App {
             .get(self.selected_locale_index)
             .cloned()?;
 
+        // Use downloaded paths if available, otherwise use user input
+        let image_path = self
+            .downloaded_image_path
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(self.image_input.value()));
+
+        let uefi_path = self
+            .downloaded_uefi_path
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(self.uefi_input.value()));
+
         Some(FlashConfig {
-            image: PathBuf::from(self.image_input.value()),
+            image: image_path,
             disk,
             scheme: self.options.partition_scheme,
-            uefi_dir: PathBuf::from(self.uefi_input.value()),
+            uefi_dir: uefi_path,
             dry_run: self.options.dry_run || self.dry_run_cli,
             auto_unmount: self.options.auto_unmount,
             watch: self.watch,

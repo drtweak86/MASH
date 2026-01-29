@@ -5,8 +5,11 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::mpsc::Sender;
 use std::time::Instant;
 use zip::ZipArchive;
+
+use crate::tui::DownloadUpdate;
 
 // GitHub API types for deserialization
 #[derive(Debug, Deserialize)]
@@ -335,5 +338,227 @@ pub fn download_fedora_image(
 
     eprintln!("   ✅ Decompression complete");
     info!("Decompressed Fedora image to {}", raw_path.display());
+    Ok(raw_path)
+}
+
+// ============================================================================
+// TUI-integrated download functions with channel-based progress
+// ============================================================================
+
+/// Download with progress sent to a channel (for TUI)
+fn download_with_channel(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    dest_file: &mut File,
+    description: &str,
+    tx: &Sender<DownloadUpdate>,
+) -> Result<u64> {
+    let response = client
+        .get(url)
+        .send()?
+        .error_for_status()
+        .context(format!("Failed to download from {}", url))?;
+
+    let total_size = response.content_length();
+
+    // Send start notification
+    let _ = tx.send(DownloadUpdate::Started {
+        description: description.to_string(),
+        total_bytes: total_size,
+    });
+
+    let mut reader = response;
+    let mut downloaded: u64 = 0;
+    let mut buffer = [0u8; 8192];
+    let start_time = Instant::now();
+    let mut last_update = Instant::now();
+
+    loop {
+        let bytes_read = reader.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+
+        dest_file.write_all(&buffer[..bytes_read])?;
+        downloaded += bytes_read as u64;
+
+        // Send progress updates every 100ms
+        if last_update.elapsed().as_millis() >= 100 {
+            let elapsed = start_time.elapsed().as_secs_f64();
+            let speed = if elapsed > 0.0 {
+                (downloaded as f64 / elapsed) as u64
+            } else {
+                0
+            };
+
+            let eta = if let Some(total) = total_size {
+                if speed > 0 {
+                    (total - downloaded) / speed
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+
+            let _ = tx.send(DownloadUpdate::Progress {
+                current_bytes: downloaded,
+                speed,
+                eta,
+            });
+
+            last_update = Instant::now();
+        }
+    }
+
+    Ok(downloaded)
+}
+
+/// Download UEFI firmware with TUI progress updates
+pub fn download_uefi_firmware_with_progress(
+    destination_dir: &Path,
+    tx: Sender<DownloadUpdate>,
+) -> Result<PathBuf> {
+    info!("Starting UEFI firmware download (TUI mode)...");
+
+    fs::create_dir_all(destination_dir).with_context(|| {
+        format!(
+            "Failed to create destination directory: {}",
+            destination_dir.display()
+        )
+    })?;
+
+    let github_api_url = "https://api.github.com/repos/pftf/RPi4/releases/latest";
+
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("mash-installer")
+        .build()?;
+
+    let response: GithubRelease = client
+        .get(github_api_url)
+        .send()?
+        .json()
+        .context("Failed to parse GitHub API response for UEFI firmware releases")?;
+
+    let asset = response
+        .assets
+        .iter()
+        .find(|a| a.name.starts_with("RPi4_UEFI_Firmware_") && a.name.ends_with(".zip"))
+        .ok_or_else(|| {
+            anyhow!("Could not find RPi4_UEFI_Firmware_vX.Y.zip asset in latest release")
+        })?;
+
+    let download_url = &asset.browser_download_url;
+    let temp_zip_path = destination_dir.join("uefi_firmware.zip");
+
+    let mut temp_zip_file = File::create(&temp_zip_path)?;
+    download_with_channel(
+        &client,
+        download_url,
+        &mut temp_zip_file,
+        &format!("UEFI Firmware ({})", asset.name),
+        &tx,
+    )?;
+
+    // Send extracting status
+    let _ = tx.send(DownloadUpdate::Extracting);
+
+    let file = File::open(&temp_zip_path)?;
+    let mut archive = ZipArchive::new(file)?;
+
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let outpath = match file.enclosed_name() {
+            Some(path) => destination_dir.join(path),
+            None => continue,
+        };
+
+        if (*file.name()).ends_with('/') {
+            fs::create_dir_all(&outpath)?;
+        } else {
+            if let Some(p) = outpath.parent() {
+                if !p.exists() {
+                    fs::create_dir_all(p)?;
+                }
+            }
+            let mut outfile = File::create(&outpath)?;
+            io::copy(&mut file, &mut outfile)?;
+        }
+    }
+
+    fs::remove_file(&temp_zip_path)?;
+
+    let _ = tx.send(DownloadUpdate::Complete);
+    info!(
+        "UEFI firmware download complete to {}",
+        destination_dir.display()
+    );
+
+    Ok(destination_dir.to_path_buf())
+}
+
+/// Download Fedora image with TUI progress updates
+pub fn download_fedora_image_with_progress(
+    destination_dir: &Path,
+    version: &str,
+    edition: &str,
+    tx: Sender<DownloadUpdate>,
+) -> Result<PathBuf> {
+    info!("Starting Fedora image download (TUI mode)...");
+
+    fs::create_dir_all(destination_dir).with_context(|| {
+        format!(
+            "Failed to create destination directory: {}",
+            destination_dir.display()
+        )
+    })?;
+
+    let arch = "aarch64";
+    let filename = format!("Fedora-{}-{}-{}.raw.xz", edition, version, arch);
+    let url = format!(
+        "https://download.fedoraproject.org/pub/fedora/linux/releases/{}/Spins/{}/images/{}",
+        version, arch, filename
+    );
+
+    let dest_path = destination_dir.join(&filename);
+
+    if !dest_path.exists() {
+        let client = reqwest::blocking::Client::builder()
+            .user_agent("mash-installer")
+            .timeout(std::time::Duration::from_secs(3600))
+            .build()?;
+
+        let mut dest_file = File::create(&dest_path)?;
+        download_with_channel(
+            &client,
+            &url,
+            &mut dest_file,
+            &format!("Fedora {} {} (aarch64)", version, edition),
+            &tx,
+        )?;
+    }
+
+    // Decompress
+    let raw_path = destination_dir.join(format!("Fedora-{}-{}-{}.raw", edition, version, arch));
+
+    if !raw_path.exists() {
+        let _ = tx.send(DownloadUpdate::Extracting);
+
+        let status = Command::new("unxz")
+            .args(["-T0", "-fkv", dest_path.to_str().unwrap()])
+            .status()
+            .context("Failed to run unxz")?;
+
+        if !status.success() {
+            let _ = tx.send(DownloadUpdate::Error(
+                "unxz decompression failed".to_string(),
+            ));
+            return Err(anyhow!("unxz failed"));
+        }
+    }
+
+    let _ = tx.send(DownloadUpdate::Complete);
+    info!("Fedora image download complete to {}", raw_path.display());
+
     Ok(raw_path)
 }

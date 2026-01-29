@@ -1,6 +1,6 @@
 //! UI rendering for the TUI
 
-use super::app::{App, ImageEditionOption, ImageSource, ImageVersionOption, Screen};
+use super::app::{App, DownloadPhase, ImageEditionOption, ImageSource, ImageVersionOption, Screen};
 use super::input::InputMode;
 use super::progress::Phase;
 use super::widgets::CheckboxState;
@@ -31,12 +31,14 @@ pub fn draw(f: &mut Frame, app: &App) {
     match app.current_screen {
         Screen::Welcome => draw_welcome(f, app, chunks[1]),
         Screen::DiskSelection => draw_disk_selection(f, app, chunks[1]),
-        Screen::DownloadSourceSelection => draw_download_source_selection(f, app, chunks[1]), // New screen
+        Screen::DownloadSourceSelection => draw_download_source_selection(f, app, chunks[1]),
         Screen::ImageSelection => draw_image_selection(f, app, chunks[1]),
         Screen::UefiDirectory => draw_uefi_selection(f, app, chunks[1]),
         Screen::LocaleSelection => draw_locale_selection(f, app, chunks[1]),
         Screen::Options => draw_options(f, app, chunks[1]),
         Screen::Confirmation => draw_confirmation(f, app, chunks[1]),
+        Screen::DownloadingFedora => draw_downloading(f, app, chunks[1], "Fedora Image"),
+        Screen::DownloadingUefi => draw_downloading(f, app, chunks[1], "UEFI Firmware"),
         Screen::Progress => draw_progress(f, app, chunks[1]),
         Screen::Complete => draw_complete(f, app, chunks[1]),
     }
@@ -74,7 +76,7 @@ fn draw_help_bar(f: &mut Frame, app: &App, area: Rect) {
     let help_text = match app.current_screen {
         Screen::Welcome => "⏎ Enter: Start | Esc/q: Quit",
         Screen::DiskSelection => "↑↓: Select | ⏎ Enter: Confirm | r: Refresh | Esc: Back",
-        Screen::DownloadSourceSelection => "↑↓: Select | ⏎ Enter: Confirm | Esc: Back", // New help
+        Screen::DownloadSourceSelection => "↑↓: Select | ⏎ Enter: Confirm | Esc: Back",
         Screen::ImageSelection => match app.image_source_selection {
             ImageSource::LocalFile => {
                 if app.image_input.mode == InputMode::Editing {
@@ -101,6 +103,15 @@ fn draw_help_bar(f: &mut Frame, app: &App, area: Rect) {
         Screen::LocaleSelection => "↑↓: Select | ⏎/Tab: Next | Esc: Back",
         Screen::Options => "↑↓: Navigate | Space/⏎: Toggle | Tab: Next | Esc: Back",
         Screen::Confirmation => "Type 'YES I KNOW' to confirm | Esc: Back",
+        Screen::DownloadingFedora | Screen::DownloadingUefi => {
+            if app.download_state.phase == DownloadPhase::Complete {
+                "⏎ Enter: Continue"
+            } else if app.download_state.phase == DownloadPhase::Failed {
+                "⏎/Esc: Go back and retry"
+            } else {
+                "Downloading... Ctrl+C: Abort"
+            }
+        }
         Screen::Progress => "Ctrl+C: Abort",
         Screen::Complete => "⏎/Esc/q: Exit",
     };
@@ -754,6 +765,188 @@ fn draw_confirmation(f: &mut Frame, app: &App, area: Rect) {
         .title(" ⚠️ Confirm Installation ⚠️ ")
         .border_style(Style::default().fg(Color::Red));
     f.render_widget(outer, area);
+}
+
+fn draw_downloading(f: &mut Frame, app: &App, area: Rect, download_type: &str) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(5), // Title/description
+            Constraint::Length(5), // Progress bar
+            Constraint::Length(5), // Stats
+            Constraint::Min(5),    // Status/messages
+        ])
+        .margin(1)
+        .split(area);
+
+    // Title and description
+    let description = match app.download_state.phase {
+        DownloadPhase::NotStarted => format!("⏳ Preparing to download {}...", download_type),
+        DownloadPhase::Downloading => {
+            if app.download_state.description.is_empty() {
+                format!("📥 Downloading {}...", download_type)
+            } else {
+                app.download_state.description.clone()
+            }
+        }
+        DownloadPhase::Extracting => format!("📦 Extracting {}...", download_type),
+        DownloadPhase::Complete => format!("✅ {} download complete!", download_type),
+        DownloadPhase::Failed => format!("❌ {} download failed!", download_type),
+    };
+
+    let title_style = match app.download_state.phase {
+        DownloadPhase::Complete => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+        DownloadPhase::Failed => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        _ => Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    };
+
+    let title_block = Paragraph::new(description)
+        .style(title_style)
+        .alignment(Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" 📥 Downloading {} ", download_type)),
+        );
+    f.render_widget(title_block, chunks[0]);
+
+    // Progress bar
+    let (percent, progress_label) = if let Some(total) = app.download_state.total_bytes {
+        let pct = if total > 0 {
+            ((app.download_state.current_bytes as f64 / total as f64) * 100.0) as u16
+        } else {
+            0
+        };
+        let label = format!(
+            "{}% - {} / {}",
+            pct,
+            format_bytes(app.download_state.current_bytes),
+            format_bytes(total)
+        );
+        (pct, label)
+    } else {
+        let label = format!(
+            "Downloaded: {}",
+            format_bytes(app.download_state.current_bytes)
+        );
+        (0, label)
+    };
+
+    let gauge_style = match app.download_state.phase {
+        DownloadPhase::Complete => Style::default().fg(Color::Green),
+        DownloadPhase::Failed => Style::default().fg(Color::Red),
+        DownloadPhase::Extracting => Style::default().fg(Color::Yellow),
+        _ => Style::default().fg(Color::Cyan),
+    };
+
+    let gauge = Gauge::default()
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" 📊 Progress "),
+        )
+        .gauge_style(gauge_style)
+        .percent(percent.min(100))
+        .label(progress_label);
+    f.render_widget(gauge, chunks[1]);
+
+    // Stats panel
+    let speed_str = format_bytes(app.download_state.speed_bytes_per_sec);
+    let eta_str = if app.download_state.eta_seconds > 0 {
+        format!("{}s", app.download_state.eta_seconds)
+    } else {
+        "calculating...".to_string()
+    };
+
+    let stats_text = vec![
+        Line::from(format!("⚡ Speed: {}/s", speed_str)),
+        Line::from(format!("🎯 ETA: {}", eta_str)),
+    ];
+
+    let stats = Paragraph::new(stats_text)
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::ALL).title(" 📈 Stats "));
+    f.render_widget(stats, chunks[2]);
+
+    // Status/error messages
+    let status_content = if let Some(ref err) = app.download_state.error {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("❌ Error: {}", err),
+                Style::default().fg(Color::Red),
+            )),
+            Line::from(""),
+            Line::from("Press Enter or Esc to go back and retry."),
+        ]
+    } else if app.download_state.phase == DownloadPhase::Complete {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "✅ Download complete!",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from("Press Enter to continue..."),
+        ]
+    } else {
+        // Animated spinner during download
+        let spinner = match (app.animation_tick / 3) % 4 {
+            0 => "⠋",
+            1 => "⠙",
+            2 => "⠹",
+            _ => "⠸",
+        };
+        vec![
+            Line::from(""),
+            Line::from(format!("{} Downloading... Please wait.", spinner)),
+            Line::from(""),
+            Line::from(Span::styled(
+                "⚠️  Large files may take several minutes",
+                Style::default().fg(Color::Yellow),
+            )),
+        ]
+    };
+
+    let status = Paragraph::new(status_content)
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::ALL).title(" 📝 Status "));
+    f.render_widget(status, chunks[3]);
+
+    // Outer block
+    let outer_style = match app.download_state.phase {
+        DownloadPhase::Complete => Style::default().fg(Color::Green),
+        DownloadPhase::Failed => Style::default().fg(Color::Red),
+        _ => Style::default().fg(Color::Cyan),
+    };
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" 📥 {} Download ", download_type))
+        .border_style(outer_style);
+    f.render_widget(outer, area);
+}
+
+/// Format bytes into human-readable string
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
 }
 
 fn draw_progress(f: &mut Frame, app: &App, area: Rect) {

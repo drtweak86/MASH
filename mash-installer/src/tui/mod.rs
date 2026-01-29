@@ -4,6 +4,7 @@
 //! - Multi-screen wizard flow
 //! - Disk and image selection
 //! - Locale configuration
+//! - Download progress screens
 //! - Live progress dashboard
 //! - SSH-friendly operation (no X11 required)
 
@@ -13,9 +14,9 @@ pub mod progress;
 mod ui;
 mod widgets;
 
-pub use app::{App, FlashConfig, ImageSource, Screen};
+pub use app::{App, DownloadPhase, DownloadUpdate, FlashConfig, ImageSource, Screen};
 
-use crate::{cli::Cli, errors::Result};
+use crate::{cli::Cli, download, errors::Result};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
@@ -23,6 +24,8 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
+use std::path::PathBuf;
+use std::thread;
 use std::time::Duration;
 
 /// Run the TUI wizard
@@ -77,7 +80,45 @@ pub fn run(cli: &Cli, watch: bool, dry_run: bool) -> Result<Option<app::FlashCon
 
 /// Main application loop (wizard screens)
 fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> Result<bool> {
+    let mut download_thread: Option<thread::JoinHandle<anyhow::Result<PathBuf>>> = None;
+    let mut last_screen = app.current_screen;
+
     loop {
+        // Check for screen transitions that need download threads
+        if app.current_screen != last_screen {
+            // Screen changed - check if we need to start a download
+            match app.current_screen {
+                Screen::DownloadingFedora => {
+                    // Start Fedora download thread
+                    let tx = app.setup_download_channel();
+                    let dest_dir = app.mash_root.join("downloads").join("images");
+                    let version = app::ImageVersionOption::all()[app.selected_image_version_index]
+                        .version_str()
+                        .to_string();
+                    let edition = app::ImageEditionOption::all()[app.selected_image_edition_index]
+                        .edition_str()
+                        .to_string();
+
+                    download_thread = Some(thread::spawn(move || {
+                        download::download_fedora_image_with_progress(
+                            &dest_dir, &version, &edition, tx,
+                        )
+                    }));
+                }
+                Screen::DownloadingUefi => {
+                    // Start UEFI download thread
+                    let tx = app.setup_download_channel();
+                    let dest_dir = app.mash_root.join("downloads").join("uefi");
+
+                    download_thread = Some(thread::spawn(move || {
+                        download::download_uefi_firmware_with_progress(&dest_dir, tx)
+                    }));
+                }
+                _ => {}
+            }
+            last_screen = app.current_screen;
+        }
+
         // Draw UI
         terminal.draw(|f| ui::draw(f, app))?;
 
@@ -103,8 +144,41 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
         // Increment animation tick for spinners and effects
         app.animation_tick = app.animation_tick.wrapping_add(1);
 
+        // Check for download updates
+        app.update_download();
+
         // Check for progress updates if in progress screen
         app.update_progress();
+
+        // Check if download thread completed and handle result
+        if let Some(handle) = download_thread.take() {
+            if handle.is_finished() {
+                match handle.join() {
+                    Ok(Ok(path)) => {
+                        // Download succeeded - store the path
+                        if app.current_screen == Screen::DownloadingFedora {
+                            app.downloaded_image_path = Some(path);
+                        } else if app.current_screen == Screen::DownloadingUefi {
+                            app.downloaded_uefi_path = Some(path);
+                        }
+                        // Phase is already set to Complete by the download thread
+                    }
+                    Ok(Err(e)) => {
+                        // Download failed
+                        app.download_state.phase = DownloadPhase::Failed;
+                        app.download_state.error = Some(e.to_string());
+                    }
+                    Err(_) => {
+                        // Thread panicked
+                        app.download_state.phase = DownloadPhase::Failed;
+                        app.download_state.error = Some("Download thread crashed".to_string());
+                    }
+                }
+            } else {
+                // Thread still running, put it back
+                download_thread = Some(handle);
+            }
+        }
     }
 }
 
