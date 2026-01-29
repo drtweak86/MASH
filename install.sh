@@ -207,37 +207,37 @@ extract_archive() {
 install_binaries() {
     log_info "🔧 Installing..."
 
-    # We extract into $TEMP_DIR and run from there
     # Release layout is typically:
     #   mash-${ARCH}/mash-${ARCH} (new)
     #   mash-installer-${ARCH}/mash-installer-${ARCH} (legacy)
     local cli=""
 
-    # Try new naming first
-    cli="$(find . -maxdepth 6 -type f -name "mash-${ARCH}" -perm -111 -print -quit 2>/dev/null || true)"
+    # Try new naming first (search in TEMP_DIR where archive was extracted)
+    cli="$(find "$TEMP_DIR" -maxdepth 6 -type f -name "mash-${ARCH}" -print -quit 2>/dev/null || true)"
 
-    # Fall back to any executable named mash (not mash-installer)
+    # Fall back to any file named mash (not mash-installer)
     if [[ -z "${cli:-}" ]]; then
-        cli="$(find . -maxdepth 6 -type f -name "mash" -perm -111 -print -quit 2>/dev/null || true)"
+        cli="$(find "$TEMP_DIR" -maxdepth 6 -type f -name "mash" -print -quit 2>/dev/null || true)"
     fi
 
     # Fall back to legacy naming
     if [[ -z "${cli:-}" ]]; then
-        cli="$(find . -maxdepth 6 -type f -name "mash-installer-${ARCH}" -perm -111 -print -quit 2>/dev/null || true)"
+        cli="$(find "$TEMP_DIR" -maxdepth 6 -type f -name "mash-installer-${ARCH}" -print -quit 2>/dev/null || true)"
     fi
 
-    # Fallback: anything executable named mash-installer* (covers naming drift)
+    # Fallback: anything named mash-installer* (covers naming drift)
     if [[ -z "${cli:-}" ]]; then
-        cli="$(find . -maxdepth 6 -type f -name "mash-installer*" -perm -111 -print -quit 2>/dev/null || true)"
+        cli="$(find "$TEMP_DIR" -maxdepth 6 -type f -name "mash-installer*" -print -quit 2>/dev/null || true)"
     fi
 
     if [[ -z "${cli:-}" ]]; then
         log_error "Could not find 'mash' binary inside the release archive."
-        log_info "Archive contents (top-level):"
-        find . -maxdepth 3 -type f -print
+        log_info "Archive contents:"
+        find "$TEMP_DIR" -maxdepth 3 -type f -print
         exit 1
     fi
 
+    chmod +x "$cli"
     install -m 0755 "$cli" "$INSTALL_DIR/mash"
     log_success "✅ Installed: $INSTALL_DIR/mash"
 }
