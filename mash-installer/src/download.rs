@@ -247,21 +247,59 @@ pub fn download_fedora_image(
     })?;
 
     let arch = "aarch64";
-    let filename = format!("Fedora-{}-{}-{}.raw.xz", edition, version, arch);
+    // Fedora ARM spin filename format: Fedora-{Edition}-Disk-{version}-{patch}.{arch}.raw.xz
+    let (spin_name, category) = match edition {
+        "KDE" => ("KDE-Mobile-Disk", "Spins"),
+        "Xfce" => ("Xfce-Disk", "Spins"),
+        "LXQt" => ("LXQt-Disk", "Spins"),
+        "Minimal" => ("Minimal", "Spins"),
+        "Server" => ("Server-Host-Generic", "Server"),
+        _ => ("Minimal", "Spins"),
+    };
 
-    // Try multiple URL patterns (Fedora changes these occasionally)
-    let url_patterns = [
-        // Standard releases path
-        format!(
-            "https://download.fedoraproject.org/pub/fedora/linux/releases/{}/Spins/{}/images/{}",
-            version, arch, filename
-        ),
-        // Alternative: direct mirror
-        format!(
-            "https://mirrors.fedoraproject.org/mirrorlist?repo=fedora-{}&arch={}",
-            version, arch
-        ),
-    ];
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("mash-installer")
+        .timeout(std::time::Duration::from_secs(3600))
+        .build()?;
+
+    // Try common patch versions
+    let patch_versions = ["1.6", "1.5", "1.4", "1.3", "1.2", "1.1"];
+    let mut found_url = None;
+    let mut found_filename = String::new();
+
+    eprintln!(
+        "   🔍 Searching for Fedora {} {} image...",
+        version, edition
+    );
+
+    for patch in &patch_versions {
+        let filename = format!("Fedora-{}-{}-{}.{}.raw.xz", spin_name, version, patch, arch);
+        let url = format!(
+            "https://download.fedoraproject.org/pub/fedora/linux/releases/{}/{}/{}/images/{}",
+            version, category, arch, filename
+        );
+
+        if let Ok(resp) = client.head(&url).send() {
+            if resp.status().is_success() || resp.status().is_redirection() {
+                found_url = Some(url);
+                found_filename = filename;
+                eprintln!("   ✅ Found: {}", found_filename);
+                break;
+            }
+        }
+    }
+
+    let (url, filename) = match found_url {
+        Some(u) => (u, found_filename),
+        None => {
+            return Err(anyhow!(
+                "Could not find Fedora {} {} image for aarch64. \
+                 The image may not be available for this version/edition.",
+                version,
+                edition
+            ));
+        }
+    };
 
     let dest_path = destination_dir.join(&filename);
 
@@ -274,46 +312,15 @@ pub fn download_fedora_image(
         eprintln!("   File: {}", filename);
         eprintln!("   ⚠️  This is a large download (~2-3 GB). Please be patient.\n");
 
-        let client = reqwest::blocking::Client::builder()
-            .user_agent("mash-installer")
-            .timeout(std::time::Duration::from_secs(3600)) // 1 hour timeout for large file
-            .build()?;
-
-        let mut last_error = None;
-        let mut success = false;
-
-        for url in &url_patterns {
-            info!("Trying URL: {}", url);
-
-            match File::create(&dest_path) {
-                Ok(mut dest_file) => {
-                    match download_with_progress(&client, url, &mut dest_file, "Fedora Image") {
-                        Ok(_) => {
-                            success = true;
-                            break;
-                        }
-                        Err(e) => {
-                            eprintln!("   ⚠️  URL failed, trying next mirror...");
-                            last_error = Some(e);
-                            let _ = fs::remove_file(&dest_path); // Clean up partial download
-                        }
-                    }
-                }
-                Err(e) => {
-                    last_error = Some(e.into());
-                }
-            }
-        }
-
-        if !success {
-            return Err(last_error.unwrap_or_else(|| anyhow!("All download URLs failed")));
-        }
+        let mut dest_file = File::create(&dest_path)?;
+        download_with_progress(&client, &url, &mut dest_file, "Fedora Image")?;
     }
 
     info!("Fedora image download complete to {}", dest_path.display());
 
     // Decompress .raw.xz to .raw (required for losetup)
-    let raw_path = destination_dir.join(format!("Fedora-{}-{}-{}.raw", edition, version, arch));
+    let raw_filename = filename.trim_end_matches(".xz");
+    let raw_path = destination_dir.join(raw_filename);
 
     if raw_path.exists() {
         eprintln!("\n   ℹ️  Raw image already exists, skipping decompression");
@@ -514,20 +521,62 @@ pub fn download_fedora_image_with_progress(
     })?;
 
     let arch = "aarch64";
-    let filename = format!("Fedora-{}-{}-{}.raw.xz", edition, version, arch);
-    let url = format!(
-        "https://download.fedoraproject.org/pub/fedora/linux/releases/{}/Spins/{}/images/{}",
-        version, arch, filename
-    );
+    // Fedora ARM spin filename format: Fedora-{Edition}-Disk-{version}-1.6.{arch}.raw.xz
+    // Edition mapping for ARM spins
+    let (spin_name, category) = match edition {
+        "KDE" => ("KDE-Mobile-Disk", "Spins"),
+        "Xfce" => ("Xfce-Disk", "Spins"),
+        "LXQt" => ("LXQt-Disk", "Spins"),
+        "Minimal" => ("Minimal", "Spins"),
+        "Server" => ("Server-Host-Generic", "Server"),
+        _ => ("Minimal", "Spins"), // Fallback to Minimal
+    };
+
+    // Try common patch versions (1.6, 1.5, 1.4, etc.)
+    let patch_versions = ["1.6", "1.5", "1.4", "1.3", "1.2", "1.1"];
+    let mut found_url = None;
+    let mut found_filename = String::new();
+
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("mash-installer")
+        .timeout(std::time::Duration::from_secs(3600))
+        .build()?;
+
+    for patch in &patch_versions {
+        let filename = format!("Fedora-{}-{}-{}.{}.raw.xz", spin_name, version, patch, arch);
+        let url = format!(
+            "https://download.fedoraproject.org/pub/fedora/linux/releases/{}/{}/{}/images/{}",
+            version, category, arch, filename
+        );
+
+        // Check if URL exists with HEAD request
+        if let Ok(resp) = client.head(&url).send() {
+            if resp.status().is_success() || resp.status().is_redirection() {
+                found_url = Some(url);
+                found_filename = filename;
+                break;
+            }
+        }
+    }
+
+    let (url, filename) = match found_url {
+        Some(u) => (u, found_filename),
+        None => {
+            let _ = tx.send(DownloadUpdate::Error(format!(
+                "Could not find Fedora {} {} image for aarch64",
+                version, edition
+            )));
+            return Err(anyhow!(
+                "Could not find Fedora {} {} image for aarch64",
+                version,
+                edition
+            ));
+        }
+    };
 
     let dest_path = destination_dir.join(&filename);
 
     if !dest_path.exists() {
-        let client = reqwest::blocking::Client::builder()
-            .user_agent("mash-installer")
-            .timeout(std::time::Duration::from_secs(3600))
-            .build()?;
-
         let mut dest_file = File::create(&dest_path)?;
         download_with_channel(
             &client,
@@ -538,8 +587,9 @@ pub fn download_fedora_image_with_progress(
         )?;
     }
 
-    // Decompress
-    let raw_path = destination_dir.join(format!("Fedora-{}-{}-{}.raw", edition, version, arch));
+    // Decompress - the raw file has the same base name without .xz
+    let raw_filename = filename.trim_end_matches(".xz");
+    let raw_path = destination_dir.join(raw_filename);
 
     if !raw_path.exists() {
         let _ = tx.send(DownloadUpdate::Extracting);

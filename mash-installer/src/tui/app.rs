@@ -125,31 +125,45 @@ impl ImageVersionOption {
     }
 }
 
-/// Available Fedora image editions for download
+/// Available Fedora image editions for download (ARM aarch64)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageEditionOption {
     Kde,
-    Workstation,
-    // Add more editions as needed
+    Xfce,
+    LXQt,
+    Minimal,
+    Server,
 }
 
 impl ImageEditionOption {
     pub fn display(&self) -> &'static str {
         match self {
-            ImageEditionOption::Kde => "KDE Desktop",
-            ImageEditionOption::Workstation => "Workstation (GNOME)",
+            ImageEditionOption::Kde => "KDE Plasma Mobile",
+            ImageEditionOption::Xfce => "Xfce Desktop",
+            ImageEditionOption::LXQt => "LXQt Desktop",
+            ImageEditionOption::Minimal => "Minimal (no desktop)",
+            ImageEditionOption::Server => "Server",
         }
     }
 
     pub fn edition_str(&self) -> &'static str {
         match self {
             ImageEditionOption::Kde => "KDE",
-            ImageEditionOption::Workstation => "Workstation",
+            ImageEditionOption::Xfce => "Xfce",
+            ImageEditionOption::LXQt => "LXQt",
+            ImageEditionOption::Minimal => "Minimal",
+            ImageEditionOption::Server => "Server",
         }
     }
 
     pub fn all() -> &'static [ImageEditionOption] {
-        &[ImageEditionOption::Kde, ImageEditionOption::Workstation]
+        &[
+            ImageEditionOption::Kde,
+            ImageEditionOption::Xfce,
+            ImageEditionOption::LXQt,
+            ImageEditionOption::Minimal,
+            ImageEditionOption::Server,
+        ]
     }
 }
 
