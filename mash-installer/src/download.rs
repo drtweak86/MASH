@@ -59,11 +59,7 @@ fn download_with_progress(
 
     // Print header
     if let Some(total) = total_size {
-        eprintln!(
-            "\n📥 {} ({}):",
-            description,
-            format_bytes(total)
-        );
+        eprintln!("\n📥 {} ({}):", description, format_bytes(total));
     } else {
         eprintln!("\n📥 {}:", description);
     }
@@ -151,8 +147,7 @@ pub fn download_uefi_firmware(destination_dir: &Path) -> Result<()> {
     })?;
 
     // Step 1: Get latest release info from GitHub API
-    let github_api_url =
-        "https://api.github.com/repos/pftf/RPi4/releases/latest";
+    let github_api_url = "https://api.github.com/repos/pftf/RPi4/releases/latest";
     info!(
         "Fetching latest UEFI firmware release info from: {}",
         github_api_url
@@ -236,7 +231,10 @@ pub fn download_fedora_image(
     edition: &str,
 ) -> Result<PathBuf> {
     info!("Starting Fedora image download...");
-    eprintln!("\n🐧 Downloading Fedora {} {} for Raspberry Pi 4...", version, edition);
+    eprintln!(
+        "\n🐧 Downloading Fedora {} {} for Raspberry Pi 4...",
+        version, edition
+    );
 
     fs::create_dir_all(destination_dir).with_context(|| {
         format!(
@@ -312,10 +310,7 @@ pub fn download_fedora_image(
     info!("Fedora image download complete to {}", dest_path.display());
 
     // Decompress .raw.xz to .raw (required for losetup)
-    let raw_path = destination_dir.join(format!(
-        "Fedora-{}-{}-{}.raw",
-        edition, version, arch
-    ));
+    let raw_path = destination_dir.join(format!("Fedora-{}-{}-{}.raw", edition, version, arch));
 
     if raw_path.exists() {
         eprintln!("\n   ℹ️  Raw image already exists, skipping decompression");
