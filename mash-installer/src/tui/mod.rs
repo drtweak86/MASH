@@ -29,6 +29,17 @@ use std::time::Duration;
 
 /// Run the TUI wizard
 pub fn run(cli: &Cli, watch: bool, dry_run: bool) -> Result<()> {
+    use std::io::IsTerminal;
+
+    // Check if we have a real terminal
+    if !std::io::stdout().is_terminal() {
+        anyhow::bail!(
+            "No TTY detected. The TUI requires an interactive terminal.\n\
+             Try running directly in a terminal (not piped or via script).\n\
+             If using sudo, try: sudo -E mash"
+        );
+    }
+
     // Set up terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();

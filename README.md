@@ -1,4 +1,4 @@
-# MASH 🐀🍕 v1.1.22
+# MASH 🐀🍕 v1.1.23
 
 **Minimal, Automated, Self‑Hosting installer for Fedora on Raspberry Pi**
 
