@@ -138,7 +138,7 @@ fn download_with_progress(
     Ok(downloaded)
 }
 
-pub fn download_uefi_firmware(destination_dir: &Path) -> Result<()> {
+pub fn download_uefi_firmware(destination_dir: &Path) -> Result<PathBuf> {
     info!("Starting UEFI firmware download...");
     eprintln!("\n🔧 Downloading UEFI Firmware for Raspberry Pi 4...");
 
@@ -225,7 +225,7 @@ pub fn download_uefi_firmware(destination_dir: &Path) -> Result<()> {
         "UEFI firmware download and extraction complete to {}",
         destination_dir.display()
     );
-    Ok(())
+    Ok(destination_dir.to_path_buf())
 }
 
 pub fn download_fedora_image(
@@ -493,9 +493,7 @@ pub fn download_uefi_firmware_with_progress(
         }
     }
 
-    fs::remove_file(&temp_zip_path)?;
-
-    let _ = tx.send(DownloadUpdate::Complete);
+    let _ = tx.send(DownloadUpdate::Complete(destination_dir.to_path_buf()));
     info!(
         "UEFI firmware download complete to {}",
         destination_dir.display()
@@ -607,7 +605,7 @@ pub fn download_fedora_image_with_progress(
         }
     }
 
-    let _ = tx.send(DownloadUpdate::Complete);
+    let _ = tx.send(DownloadUpdate::Complete(raw_path.clone()));
     info!("Fedora image download complete to {}", raw_path.display());
 
     Ok(raw_path)
