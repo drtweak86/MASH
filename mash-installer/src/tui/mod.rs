@@ -13,7 +13,7 @@ pub mod progress;
 mod ui;
 mod widgets;
 
-pub use app::App;
+pub use app::{App, FlashConfig, ImageSource, Screen};
 
 use crate::{cli::Cli, errors::Result};
 use crossterm::{
@@ -23,12 +23,10 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
-use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
 /// Run the TUI wizard
-pub fn run(cli: &Cli, watch: bool, dry_run: bool) -> Result<()> {
+pub fn run(cli: &Cli, watch: bool, dry_run: bool) -> Result<Option<app::FlashConfig>> {
     use std::io::IsTerminal;
 
     // Check if we have a real terminal
@@ -51,7 +49,7 @@ pub fn run(cli: &Cli, watch: bool, dry_run: bool) -> Result<()> {
     let mut app = App::new(cli, watch, dry_run);
 
     // Main loop
-    let result = run_app(&mut terminal, &mut app);
+    let wizard_result = run_app(&mut terminal, &mut app);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -63,85 +61,15 @@ pub fn run(cli: &Cli, watch: bool, dry_run: bool) -> Result<()> {
     terminal.show_cursor()?;
 
     // Handle result
-    match result {
+    match wizard_result {
         Ok(true) => {
-            // User completed the wizard, run the flash
-            if let Some(config) = app.get_flash_config() {
-                // Create progress channel
-                let (tx, rx) = mpsc::channel();
-
-                // Store receiver in app for progress updates
-                // We need to run flash in a separate thread to keep TUI responsive
-
-                // Re-enable terminal for progress display
-                enable_raw_mode()?;
-                let mut stdout = io::stdout();
-                execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-                let backend = CrosstermBackend::new(stdout);
-                let mut terminal = Terminal::new(backend)?;
-
-                // Reset app to progress screen
-                app.current_screen = app::Screen::Progress;
-                app.progress = progress::ProgressState::default();
-                app.progress_rx = Some(rx);
-
-                // Spawn flash thread
-                let image = config.image.clone();
-                let disk = config.disk.clone();
-                let uefi_dir = config.uefi_dir.clone();
-                let scheme = config.scheme;
-                let flash_dry_run = config.dry_run;
-                let auto_unmount = config.auto_unmount;
-                let locale = app.selected_locale().cloned();
-                let early_ssh = config.early_ssh;
-                let efi_size = config.efi_size.clone();
-                let boot_size = config.boot_size.clone();
-                let root_end = config.root_end.clone();
-
-                let flash_handle = thread::spawn(move || {
-                    crate::flash::run_with_progress(
-                        &image,
-                        &disk,
-                        scheme,
-                        &uefi_dir,
-                        flash_dry_run,
-                        auto_unmount,
-                        true, // yes_i_know - already confirmed in TUI
-                        locale,
-                        early_ssh,
-                        Some(tx),
-                        &efi_size,
-                        &boot_size,
-                        &root_end,
-                    )
-                });
-
-                // Run progress display loop
-                let _ = run_progress_loop(&mut terminal, &mut app);
-
-                // Wait for flash to complete
-                let flash_result = flash_handle
-                    .join()
-                    .map_err(|_| anyhow::anyhow!("Flash thread panicked"))?;
-
-                // Restore terminal
-                disable_raw_mode()?;
-                execute!(
-                    terminal.backend_mut(),
-                    LeaveAlternateScreen,
-                    DisableMouseCapture
-                )?;
-                terminal.show_cursor()?;
-
-                // Return flash result
-                flash_result?;
-            }
-            Ok(())
+            // User completed the wizard, return the config
+            Ok(app.get_flash_config())
         }
         Ok(false) => {
             // User cancelled
             log::info!("Installation cancelled by user.");
-            Ok(())
+            Ok(None)
         }
         Err(e) => Err(e),
     }
@@ -181,7 +109,8 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
 }
 
 /// Progress display loop (runs during flash)
-fn run_progress_loop(
+pub fn run_progress_loop(
+    // Make public
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
 ) -> Result<()> {

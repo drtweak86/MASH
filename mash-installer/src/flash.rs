@@ -21,6 +21,7 @@ use crate::cli::PartitionScheme;
 use crate::errors::MashError;
 use crate::locale::LocaleConfig;
 use crate::tui::progress::{Phase, ProgressUpdate};
+use crate::tui::FlashConfig;
 
 /// Mount points for the installation
 struct MountPoints {
@@ -108,6 +109,10 @@ pub struct FlashContext {
     pub efi_size: String,
     pub boot_size: String,
     pub root_end: String,
+    pub download_uefi_firmware: bool,                    // Add this
+    pub image_source_selection: crate::tui::ImageSource, // Add this
+    pub image_version: String,                           // Add this
+    pub image_edition: String,                           // Add this
 }
 
 impl FlashContext {
@@ -157,59 +162,60 @@ pub fn run(
     boot_size: &str,
     root_end: &str,
 ) -> Result<()> {
-    run_with_progress(
-        image,
-        disk,
+    // Create a temporary FlashConfig for CLI run
+    let cli_flash_config = FlashConfig {
+        image: image.to_path_buf(),
+        disk: disk.to_string(),
         scheme,
-        uefi_dir,
+        uefi_dir: uefi_dir.to_path_buf(),
         dry_run,
         auto_unmount,
-        yes_i_know,
+        watch: false, // No watch mode for CLI
         locale,
         early_ssh,
-        None,
-        efi_size,
-        boot_size,
-        root_end,
+        progress_tx: None, // No progress reporting for simple CLI run
+        efi_size: efi_size.to_string(),
+        boot_size: boot_size.to_string(),
+        root_end: root_end.to_string(),
+        download_uefi_firmware: false, // Not applicable for direct CLI flash
+        image_source_selection: crate::tui::ImageSource::LocalFile, // Not applicable for direct CLI flash
+        image_version: String::new(), // Not applicable for direct CLI flash
+        image_edition: String::new(), // Not applicable for direct CLI flash
+    };
+
+    run_with_progress(
+        &cli_flash_config,
+        yes_i_know, // yes_i_know is still a separate parameter for safety
+        None,       // progress_tx is handled by FlashConfig now
     )
 }
 
 /// Full run function with progress reporting
 pub fn run_with_progress(
-    image: &Path,
-    disk: &str,
-    scheme: PartitionScheme,
-    uefi_dir: &Path,
-    dry_run: bool,
-    auto_unmount: bool,
-    yes_i_know: bool,
-    locale: Option<LocaleConfig>,
-    early_ssh: bool,
-    progress_tx: Option<Sender<ProgressUpdate>>,
-    efi_size: &str,
-    boot_size: &str,
-    root_end: &str,
+    config: &FlashConfig,
+    yes_i_know: bool, // Still required separately for explicit confirmation
+    progress_tx: Option<Sender<ProgressUpdate>>, // Explicitly passed for thread ownership
 ) -> Result<()> {
     info!("🍠 MASH Full-Loop Installer: Fedora KDE + UEFI Boot for RPi4");
     info!("📋 GPT layout with 4 partitions (EFI, BOOT, ROOT/btrfs, DATA)");
 
-    let disk = normalize_disk(disk);
+    let disk = normalize_disk(&config.disk);
     info!("💾 Target disk: {}", disk);
-    info!("📀 Image: {}", image.display());
-    info!("🔧 UEFI dir: {}", uefi_dir.display());
-    info!("📏 EFI size: {}", efi_size);
-    info!("📏 BOOT size: {}", boot_size);
-    info!("📏 ROOT end: {}", root_end);
+    info!("📀 Image: {}", config.image.display());
+    info!("🔧 UEFI dir: {}", config.uefi_dir.display());
+    info!("📏 EFI size: {}", config.efi_size);
+    info!("📏 BOOT size: {}", config.boot_size);
+    info!("📏 ROOT end: {}", config.root_end);
 
     // Validate inputs
-    if !image.exists() {
-        bail!("Image file not found: {}", image.display());
+    if !config.image.exists() {
+        bail!("Image file not found: {}", config.image.display());
     }
-    if !uefi_dir.exists() {
-        bail!("UEFI directory not found: {}", uefi_dir.display());
+    if !config.uefi_dir.exists() {
+        bail!("UEFI directory not found: {}", config.uefi_dir.display());
     }
     // Check for required UEFI files
-    let rpi_efi = uefi_dir.join("RPI_EFI.fd");
+    let rpi_efi = config.uefi_dir.join("RPI_EFI.fd");
     if !rpi_efi.exists() {
         bail!("Missing required UEFI file: {}", rpi_efi.display());
     }
@@ -218,7 +224,7 @@ pub fn run_with_progress(
     }
 
     // Safety check
-    if !yes_i_know && !dry_run {
+    if !yes_i_know && !config.dry_run {
         return Err(MashError::MissingYesIKnow.into());
     }
 
@@ -232,20 +238,24 @@ pub fn run_with_progress(
     fs::create_dir_all(&work_dir)?;
 
     let mut ctx = FlashContext {
-        image: image.to_path_buf(),
+        image: config.image.clone(),
         disk: disk.clone(),
-        scheme,
-        uefi_dir: uefi_dir.to_path_buf(),
-        dry_run,
-        auto_unmount,
-        locale,
-        early_ssh,
-        progress_tx,
+        scheme: config.scheme,
+        uefi_dir: config.uefi_dir.clone(),
+        dry_run: config.dry_run,
+        auto_unmount: config.auto_unmount,
+        locale: config.locale.clone(),
+        early_ssh: config.early_ssh,
+        progress_tx, // Use the passed progress_tx
         work_dir: work_dir.clone(),
         loop_device: None,
-        efi_size: efi_size.to_string(),
-        boot_size: boot_size.to_string(),
-        root_end: root_end.to_string(),
+        efi_size: config.efi_size.clone(),
+        boot_size: config.boot_size.clone(),
+        root_end: config.root_end.clone(),
+        download_uefi_firmware: config.download_uefi_firmware,
+        image_source_selection: config.image_source_selection,
+        image_version: config.image_version.clone(),
+        image_edition: config.image_edition.clone(),
     };
 
     // If the image is an .xz file, decompress it

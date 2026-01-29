@@ -1,6 +1,6 @@
 //! UI rendering for the TUI
 
-use super::app::{App, Screen};
+use super::app::{App, ImageEditionOption, ImageSource, ImageVersionOption, Screen};
 use super::input::InputMode;
 use super::progress::Phase;
 use super::widgets::CheckboxState;
@@ -31,6 +31,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     match app.current_screen {
         Screen::Welcome => draw_welcome(f, app, chunks[1]),
         Screen::DiskSelection => draw_disk_selection(f, app, chunks[1]),
+        Screen::DownloadSourceSelection => draw_download_source_selection(f, app, chunks[1]), // New screen
         Screen::ImageSelection => draw_image_selection(f, app, chunks[1]),
         Screen::UefiDirectory => draw_uefi_selection(f, app, chunks[1]),
         Screen::LocaleSelection => draw_locale_selection(f, app, chunks[1]),
@@ -73,18 +74,28 @@ fn draw_help_bar(f: &mut Frame, app: &App, area: Rect) {
     let help_text = match app.current_screen {
         Screen::Welcome => "⏎ Enter: Start | Esc/q: Quit",
         Screen::DiskSelection => "↑↓: Select | ⏎ Enter: Confirm | r: Refresh | Esc: Back",
-        Screen::ImageSelection => {
-            if app.image_input.mode == InputMode::Editing {
-                "⏎ Enter: Confirm | Esc: Cancel editing"
-            } else {
-                "⏎/e/i: Edit | Tab: Next | Esc: Back"
+        Screen::DownloadSourceSelection => "↑↓: Select | ⏎ Enter: Confirm | Esc: Back", // New help
+        Screen::ImageSelection => match app.image_source_selection {
+            ImageSource::LocalFile => {
+                if app.image_input.mode == InputMode::Editing {
+                    "⏎ Enter: Confirm | Esc: Cancel editing"
+                } else {
+                    "⏎/e/i: Edit | Tab: Next | Esc: Back"
+                }
             }
-        }
+            ImageSource::DownloadFedora => {
+                "↑↓: Select option | ←→: Toggle focus | ⏎/Tab: Next | Esc: Back"
+            }
+        },
         Screen::UefiDirectory => {
-            if app.uefi_input.mode == InputMode::Editing {
-                "⏎ Enter: Confirm | Esc: Cancel editing"
+            if !app.download_uefi_firmware {
+                if app.uefi_input.mode == InputMode::Editing {
+                    "⏎ Enter: Confirm | Esc: Cancel editing | d: Toggle download"
+                } else {
+                    "⏎/e/i: Edit | Tab: Next | Esc: Back | d: Toggle download"
+                }
             } else {
-                "⏎/e/i: Edit | Tab: Next | Esc: Back"
+                "d: Toggle local input | ⏎/Tab: Next | Esc: Back"
             }
         }
         Screen::LocaleSelection => "↑↓: Select | ⏎/Tab: Next | Esc: Back",
@@ -194,123 +205,271 @@ fn draw_disk_selection(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+fn draw_download_source_selection(f: &mut Frame, app: &App, area: Rect) {
+    let sources = [ImageSource::LocalFile, ImageSource::DownloadFedora];
+
+    let items: Vec<ListItem> = sources
+        .iter()
+        .enumerate()
+        .map(|(i, source): (usize, &ImageSource)| {
+            let style = if i == app.selected_image_source_index {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            let prefix = if i == app.selected_image_source_index {
+                "👉 "
+            } else {
+                "   "
+            };
+
+            ListItem::new(format!("{}{}", prefix, source.display())).style(style)
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" ⬇️ Select Image Source ")
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
+
+    f.render_widget(list, area);
+}
+
 fn draw_image_selection(f: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Min(3),
-        ])
-        .margin(1)
-        .split(area);
+    match app.image_source_selection {
+        ImageSource::LocalFile => {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3),
+                    Constraint::Length(3),
+                    Constraint::Min(3),
+                ])
+                .margin(1)
+                .split(area);
 
-    // Input field
-    let input_style = if app.image_input.mode == InputMode::Editing {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default()
-    };
+            // Input field
+            let input_style = if app.image_input.mode == InputMode::Editing {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            };
 
-    let input = Paragraph::new(app.image_input.value())
-        .style(input_style)
-        .block(
-            Block::default()
+            let input = Paragraph::new(app.image_input.value())
+                .style(input_style)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(format!(
+                            " 📀 {} {} ",
+                            app.image_input.placeholder,
+                            if app.image_input.mode == InputMode::Editing {
+                                "✏️"
+                            } else {
+                                ""
+                            }
+                        ))
+                        .border_style(if app.image_input.mode == InputMode::Editing {
+                            Style::default().fg(Color::Yellow)
+                        } else {
+                            Style::default()
+                        }),
+                );
+
+            f.render_widget(input, chunks[0]);
+
+            // Show cursor when editing
+            if app.image_input.mode == InputMode::Editing {
+                f.set_cursor_position((
+                    chunks[0].x + app.image_input.cursor() as u16 + 1,
+                    chunks[0].y + 1,
+                ));
+            }
+
+            // Error message
+            if let Some(ref err) = app.image_error {
+                let error = Paragraph::new(format!("❌ {}", err))
+                    .style(Style::default().fg(Color::Red))
+                    .block(Block::default().borders(Borders::ALL).title(" ⚠️ Error "));
+                f.render_widget(error, chunks[1]);
+            }
+
+            // Help text
+            let help = Paragraph::new(
+                "📝 Enter the full path to a Fedora .raw image file.\n\
+                 📦 The image will be loop-mounted and copied to the target disk.",
+            )
+            .wrap(Wrap { trim: true })
+            .block(Block::default().borders(Borders::ALL).title(" 💡 Help "));
+
+            f.render_widget(help, chunks[2]);
+
+            // Outer block
+            let outer = Block::default()
                 .borders(Borders::ALL)
-                .title(format!(
-                    " 📀 {} {} ",
-                    app.image_input.placeholder,
-                    if app.image_input.mode == InputMode::Editing {
-                        "✏️"
+                .title(" 📀 Select Image File ");
+            f.render_widget(outer, area);
+        }
+        ImageSource::DownloadFedora => {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(6), // Version list
+                    Constraint::Length(6), // Edition list
+                    Constraint::Min(3),    // Help text
+                ])
+                .margin(1)
+                .split(area);
+
+            // Version selection
+            let version_items: Vec<ListItem> = ImageVersionOption::all()
+                .iter()
+                .enumerate()
+                .map(|(i, version): (usize, &ImageVersionOption)| {
+                    let style = if i == app.selected_image_version_index && app.options_focus == 0 {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
                     } else {
-                        ""
-                    }
-                ))
-                .border_style(if app.image_input.mode == InputMode::Editing {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default()
-                }),
-        );
+                        Style::default()
+                    };
+                    let prefix = if i == app.selected_image_version_index && app.options_focus == 0
+                    {
+                        "👉 "
+                    } else {
+                        "   "
+                    };
+                    ListItem::new(format!("{}{}", prefix, version.display())).style(style)
+                })
+                .collect();
 
-    f.render_widget(input, chunks[0]);
+            let version_list = List::new(version_items).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" 🚀 Select Fedora Version ")
+                    .border_style(if app.options_focus == 0 {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    }),
+            );
+            f.render_widget(version_list, chunks[0]);
 
-    // Show cursor when editing
-    if app.image_input.mode == InputMode::Editing {
-        f.set_cursor_position((
-            chunks[0].x + app.image_input.cursor() as u16 + 1,
-            chunks[0].y + 1,
-        ));
+            // Edition selection
+            let edition_items: Vec<ListItem> = ImageEditionOption::all()
+                .iter()
+                .enumerate()
+                .map(|(i, edition): (usize, &ImageEditionOption)| {
+                    let style = if i == app.selected_image_edition_index && app.options_focus == 1 {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
+                    let prefix = if i == app.selected_image_edition_index && app.options_focus == 1
+                    {
+                        "👉 "
+                    } else {
+                        "   "
+                    };
+                    ListItem::new(format!("{}{}", prefix, edition.display())).style(style)
+                })
+                .collect();
+
+            let edition_list = List::new(edition_items).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" 🖥️ Select Fedora Edition ")
+                    .border_style(if app.options_focus == 1 {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    }),
+            );
+            f.render_widget(edition_list, chunks[1]);
+
+            // Help text
+            let help = Paragraph::new(
+                "↑↓: Select option | ←→: Toggle focus between Version/Edition\n\
+                 ⏎/Tab: Next | Esc: Back\n\
+                 Images will be downloaded to 'mash_root/downloads/images'.",
+            )
+            .wrap(Wrap { trim: true })
+            .block(Block::default().borders(Borders::ALL).title(" 💡 Help "));
+
+            f.render_widget(help, chunks[2]);
+
+            // Outer block
+            let outer = Block::default()
+                .borders(Borders::ALL)
+                .title(" 🌐 Download Fedora Image ");
+            f.render_widget(outer, area);
+        }
     }
-
-    // Error message
-    if let Some(ref err) = app.image_error {
-        let error = Paragraph::new(format!("❌ {}", err))
-            .style(Style::default().fg(Color::Red))
-            .block(Block::default().borders(Borders::ALL).title(" ⚠️ Error "));
-        f.render_widget(error, chunks[1]);
-    }
-
-    // Help text
-    let help = Paragraph::new(
-        "📝 Enter the full path to a Fedora .raw image file.\n\
-         📦 The image will be loop-mounted and copied to the target disk.",
-    )
-    .wrap(Wrap { trim: true })
-    .block(Block::default().borders(Borders::ALL).title(" 💡 Help "));
-
-    f.render_widget(help, chunks[2]);
-
-    // Outer block
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .title(" 📀 Select Image File ");
-    f.render_widget(outer, area);
 }
 
 fn draw_uefi_selection(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Min(3),
+            Constraint::Length(3), // Input/Download option
+            Constraint::Length(3), // Error message
+            Constraint::Min(3),    // Help text
         ])
         .margin(1)
         .split(area);
 
-    // Input field
-    let input_style = if app.uefi_input.mode == InputMode::Editing {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default()
-    };
+    // UEFI Input / Download option
+    let uefi_option_widget = if !app.download_uefi_firmware {
+        // Input field for local UEFI directory
+        let input_style = if app.uefi_input.mode == InputMode::Editing {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
+        };
 
-    let input = Paragraph::new(app.uefi_input.value())
-        .style(input_style)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(
-                    " 🔧 {} {} ",
-                    app.uefi_input.placeholder,
-                    if app.uefi_input.mode == InputMode::Editing {
-                        "✏️"
+        Paragraph::new(app.uefi_input.value())
+            .style(input_style)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(
+                        " 🔧 {} {} ",
+                        app.uefi_input.placeholder,
+                        if app.uefi_input.mode == InputMode::Editing {
+                            "✏️"
+                        } else {
+                            ""
+                        }
+                    ))
+                    .border_style(if app.uefi_input.mode == InputMode::Editing {
+                        Style::default().fg(Color::Yellow)
                     } else {
-                        ""
-                    }
-                ))
-                .border_style(if app.uefi_input.mode == InputMode::Editing {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default()
-                }),
-        );
+                        Style::default()
+                    }),
+            )
+    } else {
+        // Displaying download option
+        let checkbox = CheckboxState::from(app.download_uefi_firmware);
+        Paragraph::new(format!("{} Download UEFI firmware", checkbox.symbol()))
+            .style(Style::default().fg(Color::Green))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" ⬇️ UEFI Firmware Source ")
+                    .border_style(Style::default().fg(Color::Green)),
+            )
+    };
+    f.render_widget(uefi_option_widget, chunks[0]);
 
-    f.render_widget(input, chunks[0]);
-
-    // Show cursor when editing
-    if app.uefi_input.mode == InputMode::Editing {
+    // Show cursor when editing, only if not downloading
+    if !app.download_uefi_firmware && app.uefi_input.mode == InputMode::Editing {
         f.set_cursor_position((
             chunks[0].x + app.uefi_input.cursor() as u16 + 1,
             chunks[0].y + 1,
@@ -326,19 +485,38 @@ fn draw_uefi_selection(f: &mut Frame, app: &App, area: Rect) {
     }
 
     // Help text
-    let help = Paragraph::new(
-        "📁 Directory containing UEFI files for Raspberry Pi 4.\n\
-         🎩 These will be copied onto the EFI partition.",
-    )
+    let help = if !app.download_uefi_firmware {
+        Paragraph::new(
+            "📁 Enter the directory containing UEFI files for Raspberry Pi 4.\n\
+             🎩 These will be copied onto the EFI partition.\n\
+             Press 'd' to toggle downloading UEFI firmware from GitHub.",
+        )
+    } else {
+        Paragraph::new(
+            "⬇️ UEFI firmware will be downloaded from GitHub to 'mash_root/downloads/uefi'.\n\
+             Press 'd' to toggle entering a local UEFI directory.",
+        )
+    }
     .wrap(Wrap { trim: true })
     .block(Block::default().borders(Borders::ALL).title(" 💡 Help "));
 
     f.render_widget(help, chunks[2]);
 
     // Outer block
+    let outer_title = if app.download_uefi_firmware {
+        " 🌐 Download UEFI Firmware "
+    } else {
+        " 🔧 UEFI Configuration "
+    };
+    let outer_border_style = if app.download_uefi_firmware {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default()
+    };
     let outer = Block::default()
         .borders(Borders::ALL)
-        .title(" 🔧 UEFI Configuration ");
+        .title(outer_title)
+        .border_style(outer_border_style);
     f.render_widget(outer, area);
 }
 

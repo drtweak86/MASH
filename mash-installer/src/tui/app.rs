@@ -15,6 +15,7 @@ use super::widgets::DiskInfo;
 pub enum Screen {
     Welcome,
     DiskSelection,
+    DownloadSourceSelection, // New screen
     ImageSelection,
     UefiDirectory,
     LocaleSelection,
@@ -29,6 +30,7 @@ impl Screen {
         match self {
             Screen::Welcome => "🥋 Enter the Dojo",
             Screen::DiskSelection => "💾 Select Target Disk",
+            Screen::DownloadSourceSelection => "⬇️ Select Image Source", // New title
             Screen::ImageSelection => "📀 Select Image File",
             Screen::UefiDirectory => "🔧 UEFI Configuration",
             Screen::LocaleSelection => "🌍 Locale & Keymap",
@@ -42,7 +44,8 @@ impl Screen {
     pub fn next(&self) -> Option<Screen> {
         match self {
             Screen::Welcome => Some(Screen::DiskSelection),
-            Screen::DiskSelection => Some(Screen::ImageSelection),
+            Screen::DiskSelection => Some(Screen::DownloadSourceSelection), // Flow changed
+            Screen::DownloadSourceSelection => Some(Screen::ImageSelection), // Flow changed
             Screen::ImageSelection => Some(Screen::UefiDirectory),
             Screen::UefiDirectory => Some(Screen::LocaleSelection),
             Screen::LocaleSelection => Some(Screen::Options),
@@ -57,7 +60,8 @@ impl Screen {
         match self {
             Screen::Welcome => None,
             Screen::DiskSelection => Some(Screen::Welcome),
-            Screen::ImageSelection => Some(Screen::DiskSelection),
+            Screen::DownloadSourceSelection => Some(Screen::DiskSelection), // Flow changed
+            Screen::ImageSelection => Some(Screen::DownloadSourceSelection), // Flow changed
             Screen::UefiDirectory => Some(Screen::ImageSelection),
             Screen::LocaleSelection => Some(Screen::UefiDirectory),
             Screen::Options => Some(Screen::LocaleSelection),
@@ -65,6 +69,78 @@ impl Screen {
             Screen::Progress => None, // Can't go back during progress
             Screen::Complete => None,
         }
+    }
+}
+
+/// Options for image source selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageSource {
+    LocalFile,
+    DownloadFedora,
+}
+
+impl ImageSource {
+    pub fn display(&self) -> &'static str {
+        match self {
+            ImageSource::LocalFile => "Local Image File (.raw)",
+            ImageSource::DownloadFedora => "Download Fedora Image",
+        }
+    }
+}
+
+/// Available Fedora image versions for download
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageVersionOption {
+    F43,
+    F42,
+    // Add more versions as needed
+}
+
+impl ImageVersionOption {
+    pub fn display(&self) -> &'static str {
+        match self {
+            ImageVersionOption::F43 => "Fedora 43",
+            ImageVersionOption::F42 => "Fedora 42",
+        }
+    }
+
+    pub fn version_str(&self) -> &'static str {
+        match self {
+            ImageVersionOption::F43 => "43",
+            ImageVersionOption::F42 => "42",
+        }
+    }
+
+    pub fn all() -> &'static [ImageVersionOption] {
+        &[ImageVersionOption::F43, ImageVersionOption::F42]
+    }
+}
+
+/// Available Fedora image editions for download
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageEditionOption {
+    Kde,
+    Workstation,
+    // Add more editions as needed
+}
+
+impl ImageEditionOption {
+    pub fn display(&self) -> &'static str {
+        match self {
+            ImageEditionOption::Kde => "KDE Desktop",
+            ImageEditionOption::Workstation => "Workstation (GNOME)",
+        }
+    }
+
+    pub fn edition_str(&self) -> &'static str {
+        match self {
+            ImageEditionOption::Kde => "KDE",
+            ImageEditionOption::Workstation => "Workstation",
+        }
+    }
+
+    pub fn all() -> &'static [ImageEditionOption] {
+        &[ImageEditionOption::Kde, ImageEditionOption::Workstation]
     }
 }
 
@@ -105,12 +181,16 @@ pub struct FlashConfig {
     pub dry_run: bool,
     pub auto_unmount: bool,
     pub watch: bool,
-    pub locale: LocaleConfig,
+    pub locale: Option<LocaleConfig>,
     pub early_ssh: bool,
     pub progress_tx: Option<Sender<super::progress::ProgressUpdate>>,
     pub efi_size: String,
     pub boot_size: String,
     pub root_end: String,
+    pub download_uefi_firmware: bool, // New field to indicate UEFI firmware download
+    pub image_source_selection: ImageSource, // New field to indicate image source
+    pub image_version: String,        // New field for selected Fedora version
+    pub image_edition: String,        // New field for selected Fedora edition
 }
 
 /// Application state
@@ -127,7 +207,14 @@ pub struct App {
     pub available_disks: Vec<DiskInfo>,
     pub selected_disk_index: usize,
 
-    // Image selection
+    // Image source selection
+    pub image_source_selection: ImageSource,
+    pub selected_image_source_index: usize, // 0 for LocalFile, 1 for DownloadFedora
+    pub selected_image_version_index: usize,
+    pub selected_image_edition_index: usize,
+    pub download_uefi_firmware: bool, // Option to download UEFI firmware
+
+    // Image selection (local file path)
     pub image_input: InputField,
     pub image_error: Option<String>,
 
@@ -186,6 +273,13 @@ impl App {
             available_disks,
             selected_disk_index: 0,
 
+            // New fields for image source selection
+            image_source_selection: ImageSource::LocalFile,
+            selected_image_source_index: 0,
+            selected_image_version_index: 0, // Default to first version
+            selected_image_edition_index: 0, // Default to first edition
+            download_uefi_firmware: false,   // Default to not downloading UEFI firmware
+
             image_input: InputField::new(
                 default_image_dir.to_string_lossy().to_string(),
                 "Path to Fedora .raw image",
@@ -236,6 +330,7 @@ impl App {
         match self.current_screen {
             Screen::Welcome => self.handle_welcome_input(key),
             Screen::DiskSelection => self.handle_disk_selection_input(key),
+            Screen::DownloadSourceSelection => self.handle_download_source_selection_input(key), // New handler
             Screen::ImageSelection => self.handle_image_selection_input(key),
             Screen::UefiDirectory => self.handle_uefi_input(key),
             Screen::LocaleSelection => self.handle_locale_selection_input(key),
@@ -273,7 +368,7 @@ impl App {
             }
             KeyCode::Enter => {
                 if !self.available_disks.is_empty() {
-                    self.current_screen = Screen::ImageSelection;
+                    self.current_screen = Screen::DownloadSourceSelection; // Changed next screen
                 }
                 InputResult::Continue
             }
@@ -293,54 +388,148 @@ impl App {
         }
     }
 
+    // New handler for download source selection
+    fn handle_download_source_selection_input(&mut self, key: KeyEvent) -> InputResult {
+        let max_source_index = 1; // 0: LocalFile, 1: DownloadFedora
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.selected_image_source_index > 0 {
+                    self.selected_image_source_index -= 1;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.selected_image_source_index < max_source_index {
+                    self.selected_image_source_index += 1;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Enter => {
+                self.image_source_selection = match self.selected_image_source_index {
+                    0 => ImageSource::LocalFile,
+                    1 => ImageSource::DownloadFedora,
+                    _ => unreachable!(), // Should not happen with max_source_index check
+                };
+                self.current_screen = Screen::ImageSelection;
+                InputResult::Continue
+            }
+            KeyCode::Esc => {
+                if let Some(prev) = self.current_screen.prev() {
+                    self.current_screen = prev;
+                }
+                InputResult::Continue
+            }
+            _ => InputResult::Continue,
+        }
+    }
+
     fn handle_image_selection_input(&mut self, key: KeyEvent) -> InputResult {
-        // Handle text input
-        if self.image_input.mode == InputMode::Editing {
-            match key.code {
-                KeyCode::Enter => {
-                    // Validate path
-                    let path = PathBuf::from(self.image_input.value());
-                    if path.exists() && path.is_file() {
-                        self.image_error = None;
-                        self.image_input.mode = InputMode::Normal;
-                        self.current_screen = Screen::UefiDirectory;
-                    } else if path.is_dir() {
-                        // If it's a directory, look for .raw files
-                        self.image_error =
-                            Some("Please select a .raw file, not a directory".into());
-                    } else {
-                        self.image_error = Some(format!("File not found: {}", path.display()));
+        // This screen now behaves differently based on image_source_selection
+        match self.image_source_selection {
+            ImageSource::LocalFile => {
+                // Existing logic for local file input
+                if self.image_input.mode == InputMode::Editing {
+                    match key.code {
+                        KeyCode::Enter => {
+                            // Validate path
+                            let path = PathBuf::from(self.image_input.value());
+                            if path.exists() && path.is_file() {
+                                self.image_error = None;
+                                self.image_input.mode = InputMode::Normal;
+                                self.current_screen = Screen::UefiDirectory;
+                            } else if path.is_dir() {
+                                // If it's a directory, look for .raw files
+                                self.image_error =
+                                    Some("Please select a .raw file, not a directory".into());
+                            } else {
+                                self.image_error =
+                                    Some(format!("File not found: {}", path.display()));
+                            }
+                            InputResult::Continue
+                        }
+                        KeyCode::Esc => {
+                            self.image_input.mode = InputMode::Normal;
+                            InputResult::Continue
+                        }
+                        _ => {
+                            self.image_input.handle_key(key);
+                            self.image_error = None;
+                            InputResult::Continue
+                        }
                     }
-                    InputResult::Continue
-                }
-                KeyCode::Esc => {
-                    self.image_input.mode = InputMode::Normal;
-                    InputResult::Continue
-                }
-                _ => {
-                    self.image_input.handle_key(key);
-                    self.image_error = None;
-                    InputResult::Continue
+                } else {
+                    match key.code {
+                        KeyCode::Enter | KeyCode::Char('e') | KeyCode::Char('i') => {
+                            self.image_input.mode = InputMode::Editing;
+                            InputResult::Continue
+                        }
+                        KeyCode::Esc => {
+                            if let Some(prev) = self.current_screen.prev() {
+                                self.current_screen = prev;
+                            }
+                            InputResult::Continue
+                        }
+                        KeyCode::Tab => {
+                            // Skip validation and move to next screen
+                            self.current_screen = Screen::UefiDirectory;
+                            InputResult::Continue
+                        }
+                        _ => InputResult::Continue,
+                    }
                 }
             }
-        } else {
-            match key.code {
-                KeyCode::Enter | KeyCode::Char('e') | KeyCode::Char('i') => {
-                    self.image_input.mode = InputMode::Editing;
-                    InputResult::Continue
-                }
-                KeyCode::Esc => {
-                    if let Some(prev) = self.current_screen.prev() {
-                        self.current_screen = prev;
+            ImageSource::DownloadFedora => {
+                // Logic for selecting Fedora version/edition for download
+                let max_version_index = ImageVersionOption::all().len().saturating_sub(1);
+                let max_edition_index = ImageEditionOption::all().len().saturating_sub(1);
+
+                match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if self.options_focus == 0 {
+                            // Navigating versions
+                            if self.selected_image_version_index > 0 {
+                                self.selected_image_version_index -= 1;
+                            }
+                        } else {
+                            // Navigating editions
+                            if self.selected_image_edition_index > 0 {
+                                self.selected_image_edition_index -= 1;
+                            }
+                        }
+                        InputResult::Continue
                     }
-                    InputResult::Continue
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if self.options_focus == 0 {
+                            // Navigating versions
+                            if self.selected_image_version_index < max_version_index {
+                                self.selected_image_version_index += 1;
+                            }
+                        } else {
+                            // Navigating editions
+                            if self.selected_image_edition_index < max_edition_index {
+                                self.selected_image_edition_index += 1;
+                            }
+                        }
+                        InputResult::Continue
+                    }
+                    KeyCode::Left | KeyCode::Right => {
+                        // Toggle focus between version and edition selection
+                        self.options_focus = (self.options_focus + 1) % 2;
+                        InputResult::Continue
+                    }
+                    KeyCode::Enter | KeyCode::Tab => {
+                        // Proceed to UEFI Directory screen
+                        self.current_screen = Screen::UefiDirectory;
+                        InputResult::Continue
+                    }
+                    KeyCode::Esc => {
+                        if let Some(prev) = self.current_screen.prev() {
+                            self.current_screen = prev;
+                        }
+                        InputResult::Continue
+                    }
+                    _ => InputResult::Continue,
                 }
-                KeyCode::Tab => {
-                    // Skip validation and move to next screen
-                    self.current_screen = Screen::UefiDirectory;
-                    InputResult::Continue
-                }
-                _ => InputResult::Continue,
             }
         }
     }
@@ -371,6 +560,11 @@ impl App {
             }
         } else {
             match key.code {
+                KeyCode::Char('d') => {
+                    // New: Toggle download UEFI firmware
+                    self.download_uefi_firmware = !self.download_uefi_firmware;
+                    InputResult::Continue
+                }
                 KeyCode::Enter | KeyCode::Char('e') | KeyCode::Char('i') => {
                     self.uefi_input.mode = InputMode::Editing;
                     InputResult::Continue
@@ -567,12 +761,20 @@ impl App {
             dry_run: self.options.dry_run || self.dry_run_cli,
             auto_unmount: self.options.auto_unmount,
             watch: self.watch,
-            locale,
+            locale: Some(locale),
             early_ssh: self.options.early_ssh,
             progress_tx: None, // Will be set up by the caller
             efi_size: self.efi_size_cli.clone(),
             boot_size: self.boot_size_cli.clone(),
             root_end: self.root_end_cli.clone(),
+            download_uefi_firmware: self.download_uefi_firmware,
+            image_source_selection: self.image_source_selection,
+            image_version: ImageVersionOption::all()[self.selected_image_version_index]
+                .version_str()
+                .to_string(),
+            image_edition: ImageEditionOption::all()[self.selected_image_edition_index]
+                .edition_str()
+                .to_string(),
         })
     }
 
