@@ -1281,6 +1281,10 @@ mod tests {
             efi_size: "512M".to_string(),
             boot_size: "1G".to_string(),
             root_end: "100%".to_string(),
+            download_uefi_firmware: false,
+            image_source_selection: crate::tui::ImageSource::LocalFile,
+            image_version: String::new(),
+            image_edition: String::new(),
         };
         assert_eq!(ctx.partition_path(1), "/dev/sda1");
         assert_eq!(ctx.partition_path(4), "/dev/sda4");
