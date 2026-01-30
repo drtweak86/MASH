@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 /// Installation phases
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
+    DownloadImage,
+    DownloadUefi,
     Partition,
     Format,
     CopyRoot,
@@ -21,6 +23,8 @@ impl Phase {
     /// Get the jovial emoji-enhanced phase name
     pub fn name(&self) -> &'static str {
         match self {
+            Phase::DownloadImage => "⬇️ Downloading Fedora image",
+            Phase::DownloadUefi => "⬇️ Downloading UEFI bundle",
             Phase::Partition => "🔪 Slicing up the disk",
             Phase::Format => "✨ Making it sparkly clean",
             Phase::CopyRoot => "📦 Moving the big stuff",
@@ -36,25 +40,29 @@ impl Phase {
 
     pub fn number(&self) -> usize {
         match self {
-            Phase::Partition => 1,
-            Phase::Format => 2,
-            Phase::CopyRoot => 3,
-            Phase::CopyBoot => 4,
-            Phase::CopyEfi => 5,
-            Phase::UefiConfig => 6,
-            Phase::LocaleConfig => 7,
-            Phase::Fstab => 8,
-            Phase::StageDojo => 9,
-            Phase::Cleanup => 10,
+            Phase::DownloadImage => 1,
+            Phase::DownloadUefi => 2,
+            Phase::Partition => 3,
+            Phase::Format => 4,
+            Phase::CopyRoot => 5,
+            Phase::CopyBoot => 6,
+            Phase::CopyEfi => 7,
+            Phase::UefiConfig => 8,
+            Phase::LocaleConfig => 9,
+            Phase::Fstab => 10,
+            Phase::StageDojo => 11,
+            Phase::Cleanup => 12,
         }
     }
 
     pub fn total() -> usize {
-        10
+        12
     }
 
     pub fn all() -> &'static [Phase] {
         &[
+            Phase::DownloadImage,
+            Phase::DownloadUefi,
             Phase::Partition,
             Phase::Format,
             Phase::CopyRoot,
@@ -71,6 +79,7 @@ impl Phase {
     /// Get the spinner frames for this phase type
     pub fn spinners(&self) -> &'static [&'static str] {
         match self {
+            Phase::DownloadImage | Phase::DownloadUefi => &["⬇️", "📥", "📦", "✅"],
             // Disk operations
             Phase::Partition | Phase::Format => &["💿", "📀", "💾", "🖴"],
             // Copy operations
@@ -99,6 +108,8 @@ pub enum ProgressUpdate {
     PhaseStarted(Phase),
     /// Completed a phase
     PhaseCompleted(Phase),
+    /// Skipped a phase
+    PhaseSkipped(Phase),
     /// Rsync progress update (percent, bytes_per_sec, files_done, files_total)
     RsyncProgress {
         percent: f64,
@@ -123,6 +134,8 @@ pub struct ProgressState {
     pub current_phase: Option<Phase>,
     /// Completed phases
     pub completed_phases: Vec<Phase>,
+    /// Skipped phases
+    pub skipped_phases: Vec<Phase>,
     /// Overall progress percentage (0-100)
     pub overall_percent: f64,
     /// Current phase progress percentage (0-100)
@@ -163,6 +176,7 @@ impl Default for ProgressState {
         Self {
             current_phase: None,
             completed_phases: Vec::new(),
+            skipped_phases: Vec::new(),
             overall_percent: 0.0,
             phase_percent: 0.0,
             rsync_speed: 0.0,
@@ -204,6 +218,12 @@ impl ProgressState {
                     self.completed_phases.push(phase);
                 }
                 self.phase_percent = 100.0;
+                self.update_overall_progress();
+            }
+            ProgressUpdate::PhaseSkipped(phase) => {
+                if !self.skipped_phases.contains(&phase) {
+                    self.skipped_phases.push(phase);
+                }
                 self.update_overall_progress();
             }
             ProgressUpdate::RsyncProgress {
@@ -252,7 +272,7 @@ impl ProgressState {
     }
 
     fn update_overall_progress(&mut self) {
-        let completed = self.completed_phases.len() as f64;
+        let completed = (self.completed_phases.len() + self.skipped_phases.len()) as f64;
         let current_contribution = if self.current_phase.is_some() {
             self.phase_percent / 100.0
         } else {
@@ -331,6 +351,8 @@ impl ProgressState {
     pub fn phase_symbol(&self, phase: Phase) -> &'static str {
         if self.completed_phases.contains(&phase) {
             "✅" // Completed
+        } else if self.skipped_phases.contains(&phase) {
+            "⏭️" // Skipped
         } else if self.current_phase == Some(phase) {
             "⏳" // In progress
         } else {
@@ -369,6 +391,9 @@ mod tests {
 
         state.apply_update(ProgressUpdate::PhaseCompleted(Phase::Partition));
         assert!(state.completed_phases.contains(&Phase::Partition));
+
+        state.apply_update(ProgressUpdate::PhaseSkipped(Phase::Format));
+        assert!(state.skipped_phases.contains(&Phase::Format));
 
         state.apply_update(ProgressUpdate::Complete);
         assert!(state.is_complete);

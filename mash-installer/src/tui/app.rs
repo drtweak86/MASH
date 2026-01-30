@@ -128,6 +128,8 @@ impl ExecutionStep {
     /// Map from flash.rs Phase to ExecutionStep
     pub fn from_phase(phase: Phase) -> Self {
         match phase {
+            Phase::DownloadImage => ExecutionStep::DownloadImage,
+            Phase::DownloadUefi => ExecutionStep::DownloadUefi,
             Phase::Partition => ExecutionStep::Partition,
             Phase::Format => ExecutionStep::Format,
             Phase::CopyRoot => ExecutionStep::CopyRoot,

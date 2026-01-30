@@ -376,6 +376,8 @@ pub struct App {
     pub error_message: Option<String>,
     pub image_source_path: String,
     pub uefi_source_path: String,
+    pub downloaded_image_path: Option<PathBuf>,
+    pub downloaded_uefi_dir: Option<PathBuf>,
     pub confirmation_input: String,
     pub cancel_requested: Arc<std::sync::atomic::AtomicBool>,
     pub customize_error_field: Option<CustomizeField>,
@@ -590,6 +592,8 @@ impl App {
             error_message: None,
             image_source_path: "/tmp/fedora.raw".to_string(),
             uefi_source_path: "/tmp/uefi".to_string(),
+            downloaded_image_path: None,
+            downloaded_uefi_dir: None,
             confirmation_input: String::new(),
             cancel_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             customize_error_field: None,
@@ -1312,9 +1316,13 @@ impl App {
 
         Some(FlashConfig {
             image: self
-                .images
-                .get(self.image_index)
-                .map(|image| image.path.clone())
+                .downloaded_image_path
+                .clone()
+                .or_else(|| {
+                    self.images
+                        .get(self.image_index)
+                        .map(|image| image.path.clone())
+                })
                 .unwrap_or_else(|| PathBuf::from(self.image_source_path.clone())),
             disk: self
                 .disks
@@ -1326,9 +1334,9 @@ impl App {
                 .get(self.scheme_index)
                 .unwrap_or(&PartitionScheme::Mbr),
             uefi_dir: self
-                .uefi_dirs
-                .get(self.uefi_index)
-                .cloned()
+                .downloaded_uefi_dir
+                .clone()
+                .or_else(|| self.uefi_dirs.get(self.uefi_index).cloned())
                 .unwrap_or_else(|| PathBuf::from(self.uefi_source_path.clone())),
             dry_run: true,
             auto_unmount: self
@@ -1661,5 +1669,31 @@ mod tests {
     fn validate_partition_plan_accepts_defaults() {
         let result = validate_partition_plan(&plan("1024MiB", "2048MiB", "1800GiB"));
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn download_flags_follow_source_selection() {
+        let mut app = App::new();
+        app.image_source_index = 0;
+        let config = app.build_flash_config().expect("config");
+        assert_eq!(config.image_source_selection, ImageSource::LocalFile);
+
+        app.image_source_index = 1;
+        let config = app.build_flash_config().expect("config");
+        assert_eq!(config.image_source_selection, ImageSource::DownloadFedora);
+    }
+
+    #[test]
+    fn download_uefi_flag_follows_option() {
+        let mut app = App::new();
+        if let Some(option) = app
+            .options
+            .iter_mut()
+            .find(|option| option.label == "Download UEFI firmware")
+        {
+            option.enabled = true;
+        }
+        let config = app.build_flash_config().expect("config");
+        assert!(config.download_uefi_firmware);
     }
 }

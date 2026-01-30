@@ -16,8 +16,9 @@ mod widgets;
 pub mod flash_config; // Declare the new module
 pub use flash_config::{FlashConfig, ImageSource}; // Update the pub use statement
 
+use crate::download;
 use crate::tui::progress::{Phase, ProgressUpdate};
-use crate::{cli::Cli, errors::Result, flash};
+use crate::{cli::Cli, errors::Result};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -25,10 +26,10 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
+use std::path::PathBuf;
 use std::sync::mpsc;
 
 use std::time::Duration;
-use std::time::Instant;
 
 /// Run the TUI wizard
 pub fn run(_cli: &Cli, _watch: bool, _dry_run: bool) -> Result<new_app::InputResult> {
@@ -85,7 +86,7 @@ pub fn run_new_ui(
     app: &mut new_app::App,
 ) -> Result<new_app::InputResult> {
     // Return InputResult for handling in run()
-    let mut flash_result_rx: Option<mpsc::Receiver<Result<()>>> = None;
+    let mut flash_result_rx: Option<mpsc::Receiver<Result<DownloadOutcome>>> = None;
     loop {
         // Draw UI
         terminal.draw(|f| new_ui::draw(f, app))?;
@@ -108,22 +109,14 @@ pub fn run_new_ui(
                             continue;
                         }
                         app.is_running = true;
-                        app.status_message = "🛠️ Flashing started...".to_string();
+                        app.status_message = "⬇️ Starting downloads...".to_string();
                         let (tx, rx) = mpsc::channel();
                         flash_result_rx = Some(rx);
-                        let yes_i_know = app.destructive_armed;
                         let cancel_flag = app.cancel_requested.clone();
-                        if config.dry_run {
-                            std::thread::spawn(move || {
-                                let result = simulate_flash_run(&config, cancel_flag);
-                                let _ = tx.send(result);
-                            });
-                        } else {
-                            std::thread::spawn(move || {
-                                let result = flash::run_with_progress(&config, yes_i_know);
-                                let _ = tx.send(result);
-                            });
-                        }
+                        std::thread::spawn(move || {
+                            let result = run_download_pipeline(&config, cancel_flag);
+                            let _ = tx.send(result);
+                        });
                     }
                     _ => {} // Continue, StartDownload are handled by app internally for now
                 }
@@ -154,12 +147,19 @@ pub fn run_new_ui(
         if let Some(ref rx) = flash_result_rx {
             if let Ok(result) = rx.try_recv() {
                 match result {
-                    Ok(()) => {
-                        app.status_message = "🎉 Flashing finished.".to_string();
+                    Ok(outcome) => {
+                        if outcome.cancelled {
+                            app.error_message = Some("Download cancelled.".to_string());
+                            app.status_message = "🛑 Download cancelled.".to_string();
+                        } else {
+                            app.downloaded_image_path = outcome.image_path;
+                            app.downloaded_uefi_dir = outcome.uefi_dir;
+                            app.status_message = "✅ Downloads complete.".to_string();
+                        }
                     }
                     Err(err) => {
-                        app.error_message = Some(format!("Flash failed: {}", err));
-                        app.status_message = "❌ Flashing failed.".to_string();
+                        app.error_message = Some(format!("Download failed: {}", err));
+                        app.status_message = "❌ Download failed.".to_string();
                     }
                 }
             }
@@ -167,10 +167,16 @@ pub fn run_new_ui(
     }
 }
 
-fn simulate_flash_run(
+struct DownloadOutcome {
+    image_path: Option<PathBuf>,
+    uefi_dir: Option<PathBuf>,
+    cancelled: bool,
+}
+
+fn run_download_pipeline(
     config: &FlashConfig,
     cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
-) -> Result<()> {
+) -> Result<DownloadOutcome> {
     let tx = config.progress_tx.clone();
     let send = |update: ProgressUpdate| {
         if let Some(ref tx) = tx {
@@ -178,25 +184,151 @@ fn simulate_flash_run(
         }
     };
 
-    send(ProgressUpdate::Status(
-        "🧪 Dry-run execution started.".to_string(),
-    ));
+    let mut downloaded_image = None;
+    let mut downloaded_uefi = None;
+    let download_root = PathBuf::from("/tmp/mash-downloads");
+
+    if config.image_source_selection == ImageSource::DownloadFedora {
+        send(ProgressUpdate::PhaseStarted(Phase::DownloadImage));
+        send(ProgressUpdate::Status(
+            "⬇️ Downloading Fedora image...".to_string(),
+        ));
+        let images_dir = download_root.join("images");
+        let mut stage = |msg: &str| {
+            send(ProgressUpdate::Status(msg.to_string()));
+        };
+        let mut progress = |progress: download::DownloadProgress| {
+            if let Some(total) = progress.total {
+                let percent = (progress.downloaded as f64 / total as f64) * 100.0;
+                let speed_mbps = progress.speed_bytes_per_sec as f64 / (1024.0 * 1024.0);
+                send(ProgressUpdate::RsyncProgress {
+                    percent,
+                    speed_mbps,
+                    files_done: 0,
+                    files_total: 0,
+                });
+            }
+            !cancel_flag.load(std::sync::atomic::Ordering::Relaxed)
+        };
+        match download::download_fedora_image_with_progress(
+            &images_dir,
+            &config.image_version,
+            &config.image_edition,
+            &mut progress,
+            &mut stage,
+            Some(cancel_flag.as_ref()),
+        ) {
+            Ok(path) => {
+                downloaded_image = Some(path);
+                send(ProgressUpdate::PhaseCompleted(Phase::DownloadImage));
+            }
+            Err(err) => {
+                send(ProgressUpdate::Status("🧹 Cleaning up...".to_string()));
+                cleanup_fedora_artifacts(&images_dir, &config.image_version, &config.image_edition);
+                if err.to_string().to_lowercase().contains("cancel") {
+                    send(ProgressUpdate::Error("Cancelled".to_string()));
+                    return Ok(DownloadOutcome {
+                        image_path: None,
+                        uefi_dir: None,
+                        cancelled: true,
+                    });
+                }
+                send(ProgressUpdate::Error(err.to_string()));
+                return Err(err);
+            }
+        }
+    } else {
+        send(ProgressUpdate::PhaseSkipped(Phase::DownloadImage));
+    }
+
+    if config.download_uefi_firmware {
+        send(ProgressUpdate::PhaseStarted(Phase::DownloadUefi));
+        send(ProgressUpdate::Status(
+            "⬇️ Downloading UEFI bundle...".to_string(),
+        ));
+        let uefi_dir = download_root.join("uefi");
+        let mut stage = |msg: &str| {
+            send(ProgressUpdate::Status(msg.to_string()));
+        };
+        let mut progress = |progress: download::DownloadProgress| {
+            if let Some(total) = progress.total {
+                let percent = (progress.downloaded as f64 / total as f64) * 100.0;
+                let speed_mbps = progress.speed_bytes_per_sec as f64 / (1024.0 * 1024.0);
+                send(ProgressUpdate::RsyncProgress {
+                    percent,
+                    speed_mbps,
+                    files_done: 0,
+                    files_total: 0,
+                });
+            }
+            !cancel_flag.load(std::sync::atomic::Ordering::Relaxed)
+        };
+        match download::download_uefi_firmware_with_progress(
+            &uefi_dir,
+            &mut progress,
+            &mut stage,
+            Some(cancel_flag.as_ref()),
+        ) {
+            Ok(path) => {
+                downloaded_uefi = Some(path);
+                send(ProgressUpdate::PhaseCompleted(Phase::DownloadUefi));
+            }
+            Err(err) => {
+                send(ProgressUpdate::Status("🧹 Cleaning up...".to_string()));
+                cleanup_uefi_artifacts(&uefi_dir);
+                if err.to_string().to_lowercase().contains("cancel") {
+                    send(ProgressUpdate::Error("Cancelled".to_string()));
+                    return Ok(DownloadOutcome {
+                        image_path: downloaded_image,
+                        uefi_dir: None,
+                        cancelled: true,
+                    });
+                }
+                send(ProgressUpdate::Error(err.to_string()));
+                return Err(err);
+            }
+        }
+    } else {
+        send(ProgressUpdate::PhaseSkipped(Phase::DownloadUefi));
+    }
+
     for phase in Phase::all() {
         if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
-            send(ProgressUpdate::Error("Cancelled".to_string()));
-            return Ok(());
-        }
-        send(ProgressUpdate::PhaseStarted(*phase));
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_millis(200) {
-            if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                send(ProgressUpdate::Error("Cancelled".to_string()));
-                return Ok(());
+            send(ProgressUpdate::Status("🧹 Cleaning up...".to_string()));
+            if let Some(ref path) = downloaded_image {
+                let _ = std::fs::remove_file(path);
             }
-            std::thread::sleep(Duration::from_millis(50));
+            if let Some(ref path) = downloaded_uefi {
+                let _ = std::fs::remove_dir_all(path);
+            }
+            send(ProgressUpdate::Error("Cancelled".to_string()));
+            return Ok(DownloadOutcome {
+                image_path: None,
+                uefi_dir: None,
+                cancelled: true,
+            });
         }
-        send(ProgressUpdate::PhaseCompleted(*phase));
+        if matches!(phase, Phase::DownloadImage | Phase::DownloadUefi) {
+            continue;
+        }
+        send(ProgressUpdate::PhaseSkipped(*phase));
     }
     send(ProgressUpdate::Complete);
-    Ok(())
+    Ok(DownloadOutcome {
+        image_path: downloaded_image,
+        uefi_dir: downloaded_uefi,
+        cancelled: false,
+    })
+}
+
+fn cleanup_fedora_artifacts(base: &std::path::Path, version: &str, edition: &str) {
+    let arch = "aarch64";
+    let raw_name = format!("Fedora-{}-{}-{}.raw", edition, version, arch);
+    let xz_name = format!("Fedora-{}-{}-{}.raw.xz", edition, version, arch);
+    let _ = std::fs::remove_file(base.join(raw_name));
+    let _ = std::fs::remove_file(base.join(xz_name));
+}
+
+fn cleanup_uefi_artifacts(base: &std::path::Path) {
+    let _ = std::fs::remove_dir_all(base);
 }
