@@ -1,6 +1,6 @@
 //! New UI module for the single-screen TUI
 
-use crate::tui::new_app::{App, StepState};
+use crate::tui::new_app::App;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
