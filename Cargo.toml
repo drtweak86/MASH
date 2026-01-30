@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = [
+    "mash-installer",
+    "tools/mash-release",
+    "tools/mash-tools",
+]
