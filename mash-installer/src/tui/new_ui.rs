@@ -118,14 +118,27 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
             items.push("⌨️ Press Enter to begin.".to_string());
         }
         InstallStepType::DiskSelection => {
-            items.push("💽 Disk list not available yet.".to_string());
-            items.push("ℹ️ Placeholder: Select Target Disk options will render here.".to_string());
-            items.push("⌨️ Use Enter to continue for now.".to_string());
+            items.push("💽 Select a target disk:".to_string());
+            let options = app
+                .disks
+                .iter()
+                .map(|disk| format!("{} ({})", disk.path, disk.size))
+                .collect::<Vec<_>>();
+            push_options(&mut items, &options, app.disk_index);
         }
         InstallStepType::DiskConfirmation => {
-            items.push("⚠️ No target disk selected yet.".to_string());
-            items.push("ℹ️ Expected from disk scan selection in DiskSelection.".to_string());
-            items.push("⌨️ Confirm disk choice will render here.".to_string());
+            let disk = app.disks.get(app.disk_index);
+            items.push("⚠️ Confirm target disk selection:".to_string());
+            if let Some(disk) = disk {
+                items.push(format!("Selected: {} ({})", disk.path, disk.size));
+            } else {
+                items.push("No disk selected.".to_string());
+            }
+            push_options(
+                &mut items,
+                &["Confirm and continue".to_string(), "Go back".to_string()],
+                0,
+            );
         }
         InstallStepType::BackupConfirmation => {
             items.push("⚠️ This will erase data on the selected disk.".to_string());
@@ -133,56 +146,125 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
             if app.backup_confirmed {
                 items.push("✅ Backup confirmed.".to_string());
             }
+            push_options(
+                &mut items,
+                &[
+                    "No, go back".to_string(),
+                    "Yes, I have a backup".to_string(),
+                ],
+                app.backup_choice_index,
+            );
         }
         InstallStepType::PartitionScheme => {
-            items.push("🧩 Partition schemes not loaded yet.".to_string());
-            items.push("ℹ️ Expected from defaults or user configuration.".to_string());
-            items.push("⌨️ Scheme options will render here.".to_string());
+            items.push("🧩 Select a partition scheme:".to_string());
+            let options = app
+                .partition_schemes
+                .iter()
+                .map(|scheme| scheme.to_string())
+                .collect::<Vec<_>>();
+            push_options(&mut items, &options, app.scheme_index);
         }
         InstallStepType::PartitionLayout => {
-            items.push("📐 Partition layout not calculated yet.".to_string());
-            items.push("ℹ️ Expected from selected scheme and disk size.".to_string());
-            items.push("⌨️ Layout preview will render here.".to_string());
+            items.push("📐 Select a partition layout:".to_string());
+            push_options(&mut items, &app.partition_layouts, app.layout_index);
         }
         InstallStepType::PartitionCustomize => {
-            items.push("🛠️ Custom partition options not loaded yet.".to_string());
-            items.push("ℹ️ Expected from partition layout details.".to_string());
-            items.push("⌨️ Customization controls will render here.".to_string());
+            items.push("🛠️ Customize partitions:".to_string());
+            push_options(
+                &mut items,
+                &app.partition_customizations,
+                app.customize_index,
+            );
         }
         InstallStepType::DownloadSourceSelection => {
-            items.push("📥 Image sources not loaded yet.".to_string());
-            items.push("ℹ️ Expected from defaults or download configuration.".to_string());
-            items.push("⌨️ Source options will render here.".to_string());
+            items.push("📥 Select image source:".to_string());
+            let options = app
+                .image_sources
+                .iter()
+                .map(|source| source.label.clone())
+                .collect::<Vec<_>>();
+            push_options(&mut items, &options, app.image_source_index);
         }
         InstallStepType::ImageSelection => {
-            items.push("🖼️ Image list not loaded yet.".to_string());
-            items.push("ℹ️ Expected from download list or local file picker.".to_string());
-            items.push("⌨️ Image selection options will render here.".to_string());
+            items.push("🖼️ Select Fedora image:".to_string());
+            let options = app
+                .images
+                .iter()
+                .map(|image| image.label.clone())
+                .collect::<Vec<_>>();
+            push_options(&mut items, &options, app.image_index);
         }
         InstallStepType::UefiDirectory => {
-            items.push("📁 UEFI directory not set yet.".to_string());
-            items.push("ℹ️ Expected from local directory selection or download.".to_string());
-            items.push("⌨️ UEFI directory picker will render here.".to_string());
+            items.push("📁 Select UEFI directory:".to_string());
+            let options = app
+                .uefi_dirs
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>();
+            push_options(&mut items, &options, app.uefi_index);
         }
         InstallStepType::LocaleSelection => {
-            items.push("🗣️ Locale options not loaded yet.".to_string());
-            items.push("ℹ️ Expected from locale defaults or system list.".to_string());
-            items.push("⌨️ Locale and keymap options will render here.".to_string());
+            items.push("🗣️ Select locale and keymap:".to_string());
+            push_options(&mut items, &app.locales, app.locale_index);
         }
         InstallStepType::Options => {
-            items.push("⚙️ Installation options not loaded yet.".to_string());
-            items.push("ℹ️ Expected from defaults and user selections.".to_string());
-            items.push("⌨️ Option toggles will render here.".to_string());
+            items.push("⚙️ Installation options:".to_string());
+            let options = app
+                .options
+                .iter()
+                .map(|option| {
+                    format!(
+                        "[{}] {}",
+                        if option.enabled { "x" } else { " " },
+                        option.label
+                    )
+                })
+                .collect::<Vec<_>>();
+            push_options(&mut items, &options, app.options_index);
         }
         InstallStepType::FirstBootUser => {
-            items.push("🧑‍💻 First boot will prompt you to create a user.".to_string());
-            items.push("🔐 Autologin will be disabled for safety.".to_string());
-            items.push("ℹ️ Press Enter to continue.".to_string());
+            items.push("🧑‍💻 First-boot user setup:".to_string());
+            push_options(&mut items, &app.first_boot_options, app.first_boot_index);
         }
         InstallStepType::Confirmation => {
-            items.push("✅ Confirmation summary not built yet.".to_string());
-            items.push("ℹ️ Expected from selected disk, image, and options.".to_string());
-            items.push("⌨️ Final confirmation details will render here.".to_string());
+            items.push("✅ Review configuration summary:".to_string());
+            if let Some(disk) = app.disks.get(app.disk_index) {
+                items.push(format!("Disk: {} ({})", disk.path, disk.size));
+            }
+            if let Some(image) = app.images.get(app.image_index) {
+                items.push(format!("Image: {}", image.label));
+            }
+            if let Some(source) = app.image_sources.get(app.image_source_index) {
+                items.push(format!("Source: {}", source.label));
+            }
+            if let Some(layout) = app.partition_layouts.get(app.layout_index) {
+                items.push(format!("Layout: {}", layout));
+            }
+            if let Some(uefi_dir) = app.uefi_dirs.get(app.uefi_index) {
+                items.push(format!("UEFI: {}", uefi_dir.display()));
+            }
+            if let Some(locale) = app.locales.get(app.locale_index) {
+                items.push(format!("Locale: {}", locale));
+            }
+            items.push("Options:".to_string());
+            for option in &app.options {
+                items.push(format!(
+                    "  - {}: {}",
+                    option.label,
+                    if option.enabled {
+                        "Enabled"
+                    } else {
+                        "Disabled"
+                    }
+                ));
+            }
+            items.push(format!(
+                "First boot: {}",
+                app.first_boot_options
+                    .get(app.first_boot_index)
+                    .cloned()
+                    .unwrap_or_else(|| "Prompt to create user".to_string())
+            ));
         }
         InstallStepType::DownloadingFedora => {
             items.push("⬇️ Download progress not available yet.".to_string());
@@ -213,6 +295,17 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
     items
 }
 
+fn push_options(items: &mut Vec<String>, options: &[String], selected: usize) {
+    if options.is_empty() {
+        items.push("ℹ️ No options available.".to_string());
+        return;
+    }
+    for (index, option) in options.iter().enumerate() {
+        let marker = if index == selected { "▶" } else { " " };
+        items.push(format!("{} {}", marker, option));
+    }
+}
+
 fn expected_actions(step: InstallStepType) -> String {
     match step {
         InstallStepType::BackupConfirmation => "Y/N, Esc, q".to_string(),
@@ -221,6 +314,17 @@ fn expected_actions(step: InstallStepType) -> String {
         InstallStepType::DownloadingFedora | InstallStepType::DownloadingUefi => {
             "Wait, q".to_string()
         }
+        InstallStepType::Options => "Up/Down, Space, Enter, Esc, q".to_string(),
+        InstallStepType::DiskSelection
+        | InstallStepType::DiskConfirmation
+        | InstallStepType::PartitionScheme
+        | InstallStepType::PartitionLayout
+        | InstallStepType::PartitionCustomize
+        | InstallStepType::DownloadSourceSelection
+        | InstallStepType::ImageSelection
+        | InstallStepType::UefiDirectory
+        | InstallStepType::LocaleSelection
+        | InstallStepType::FirstBootUser => "Up/Down, Enter, Esc, q".to_string(),
         _ => "Enter, Esc, q".to_string(),
     }
 }
