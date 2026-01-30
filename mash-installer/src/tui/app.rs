@@ -2,16 +2,14 @@
 
 use crate::cli::{Cli, PartitionScheme};
 use crate::locale::LocaleConfig;
-use crossterm::event::{KeyCode, KeyEvent};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::input::{InputField, InputMode};
-use super::progress::{Phase, ProgressState};
-use super::widgets::DiskInfo;
+use super::progress::Phase; // Keep Phase as it's used in ExecutionStep
+// Remaining modules (input, progress, widgets) are still needed for FlashConfig and ExecutionStep to compile.
 
 // ============================================================================
 // Configuration Steps (user input phase)
@@ -489,6 +487,7 @@ pub struct FlashConfig {
 // Application state
 // ============================================================================
 
+#[allow(dead_code)] // Legacy App struct, no longer used by new UI
 pub struct App {
     pub current_step: InstallStep,
     pub installation_state: InstallationState,
