@@ -132,6 +132,17 @@ pub fn draw(f: &mut Frame, app: &App) {
                 "⌨️ Image selection options will render here.".to_string(),
             ));
         }
+        InstallStepType::UefiDirectory => {
+            items.push(ListItem::new(
+                "📁 UEFI directory not set yet.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "ℹ️ Expected from local directory selection or download.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "⌨️ UEFI directory picker will render here.".to_string(),
+            ));
+        }
         InstallStepType::FirstBootUser => {
             items.push(ListItem::new(
                 "🧑‍💻 First boot will prompt you to create a user.".to_string(),
