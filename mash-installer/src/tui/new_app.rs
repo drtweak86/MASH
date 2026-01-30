@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 use crate::cli::PartitionScheme;
+use crate::locale::LOCALES;
 use crate::tui::flash_config::{FlashConfig, ImageSource};
 use clap::ValueEnum;
 use crossterm::event::{KeyCode, KeyEvent}; // New import for KeyEvent
@@ -448,6 +449,20 @@ impl App {
                 .collect()
         };
 
+        let locales = if flags.locales {
+            data_sources::collect_locales()
+        } else {
+            Vec::new()
+        };
+        let locales = if locales.is_empty() {
+            LOCALES
+                .iter()
+                .map(|locale| format!("{}:{}", locale.lang, locale.keymap))
+                .collect()
+        } else {
+            locales
+        };
+
         Self {
             current_step_type: InstallStepType::Welcome, // NEW
             partition_plan: None,
@@ -500,11 +515,7 @@ impl App {
                 PathBuf::from("/opt/uefi-firmware"),
             ],
             uefi_index: 0,
-            locales: vec![
-                "en_US.UTF-8:us".to_string(),
-                "en_GB.UTF-8:uk".to_string(),
-                "de_DE.UTF-8:de".to_string(),
-            ],
+            locales,
             locale_index: 0,
             options: vec![
                 OptionToggle {

@@ -1,5 +1,6 @@
 //! Read-only data sources for TUI (Phase B3)
 
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -182,10 +183,104 @@ pub fn collect_remote_images() -> Vec<ImageMeta> {
     images
 }
 
+pub fn collect_locales() -> Vec<String> {
+    let locales = load_supported_locales();
+    if locales.is_empty() {
+        return Vec::new();
+    }
+    let layouts = load_xkb_layouts();
+    locales
+        .into_iter()
+        .map(|locale| {
+            let keymap = derive_keymap(&locale, &layouts);
+            format!("{}:{}", locale, keymap)
+        })
+        .collect()
+}
+
 fn env_flag(name: &str) -> bool {
     match env::var(name) {
         Ok(value) => matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"),
         Err(_) => false,
+    }
+}
+
+fn load_supported_locales() -> Vec<String> {
+    let content = fs::read_to_string("/usr/share/i18n/SUPPORTED").unwrap_or_default();
+    let mut locales = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let locale = line.split_whitespace().next().unwrap_or("");
+        if locale.is_empty() || !locale.contains("UTF-8") {
+            continue;
+        }
+        locales.push(locale.to_string());
+    }
+    locales
+}
+
+fn load_xkb_layouts() -> HashSet<String> {
+    let content = fs::read_to_string("/usr/share/X11/xkb/rules/base.lst").unwrap_or_default();
+    let mut layouts = HashSet::new();
+    let mut in_layouts = false;
+    for line in content.lines() {
+        let line = line.trim_end();
+        if line.starts_with('!') {
+            in_layouts = line.contains("layout");
+            continue;
+        }
+        if !in_layouts {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        if let Some(code) = parts.next() {
+            layouts.insert(code.to_lowercase());
+        }
+    }
+    layouts
+}
+
+fn derive_keymap(locale: &str, layouts: &HashSet<String>) -> String {
+    let base = locale
+        .split('.')
+        .next()
+        .unwrap_or(locale)
+        .split('@')
+        .next()
+        .unwrap_or(locale);
+    let mut parts = base.split('_');
+    let lang = parts.next().unwrap_or("en").to_lowercase();
+    let country = parts.next().unwrap_or("").to_uppercase();
+    let country_layout = normalize_country_layout(&country);
+    if !country_layout.is_empty() && layouts.contains(&country_layout) {
+        return country_layout;
+    }
+    if layouts.contains(&lang) {
+        return lang;
+    }
+    if layouts.contains("us") {
+        return "us".to_string();
+    }
+    "us".to_string()
+}
+
+fn normalize_country_layout(country: &str) -> String {
+    match country {
+        "GB" => "gb".to_string(),
+        "US" => "us".to_string(),
+        "DE" => "de".to_string(),
+        "FR" => "fr".to_string(),
+        "ES" => "es".to_string(),
+        "IT" => "it".to_string(),
+        "NL" => "nl".to_string(),
+        "PT" => "pt".to_string(),
+        "SE" => "se".to_string(),
+        "NO" => "no".to_string(),
+        "DK" => "dk".to_string(),
+        _ => country.to_lowercase(),
     }
 }
 
