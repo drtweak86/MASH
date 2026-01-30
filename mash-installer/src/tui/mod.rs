@@ -12,7 +12,8 @@ pub mod progress;
 mod ui;
 mod widgets;
 
-pub use app::{FlashConfig, ImageSource};
+pub mod flash_config; // Declare the new module
+pub use flash_config::{FlashConfig, ImageSource}; // Update the pub use statement
 
 use crate::{cli::Cli, errors::Result};
 use crossterm::{

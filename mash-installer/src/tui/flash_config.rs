@@ -1,0 +1,114 @@
+use crate::cli::PartitionScheme;
+use crate::locale::LocaleConfig;
+use std::path::PathBuf;
+use std::sync::mpsc::Sender;
+
+use super::progress::ProgressUpdate;
+
+/// Options for image source selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageSource {
+    LocalFile,
+    DownloadFedora,
+}
+
+impl ImageSource {
+    pub fn display(&self) -> &'static str {
+        match self {
+            ImageSource::LocalFile => "Local Image File (.raw)",
+            ImageSource::DownloadFedora => "Download Fedora Image",
+        }
+    }
+}
+
+/// Available Fedora image versions for download
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageVersionOption {
+    F43,
+    F42,
+    // Add more versions as needed
+}
+
+impl ImageVersionOption {
+    pub fn display(&self) -> &'static str {
+        match self {
+            ImageVersionOption::F43 => "Fedora 43",
+            ImageVersionOption::F42 => "Fedora 42",
+        }
+    }
+
+    pub fn version_str(&self) -> &'static str {
+        match self {
+            ImageVersionOption::F43 => "43",
+            ImageVersionOption::F42 => "42",
+        }
+    }
+
+    pub fn all() -> &'static [ImageVersionOption] {
+        &[ImageVersionOption::F43, ImageVersionOption::F42]
+    }
+}
+
+/// Available Fedora image editions for download (ARM aarch64)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageEditionOption {
+    Kde,
+    Xfce,
+    LXQt,
+    Minimal,
+    Server,
+}
+
+impl ImageEditionOption {
+    pub fn display(&self) -> &'static str {
+        match self {
+            ImageEditionOption::Kde => "KDE Plasma Mobile",
+            ImageEditionOption::Xfce => "Xfce Desktop",
+            ImageEditionOption::LXQt => "LXQt Desktop",
+            ImageEditionOption::Minimal => "Minimal (no desktop)",
+            ImageEditionOption::Server => "Server",
+        }
+    }
+
+    pub fn edition_str(&self) -> &'static str {
+        match self {
+            ImageEditionOption::Kde => "KDE",
+            ImageEditionOption::Xfce => "Xfce",
+            ImageEditionOption::LXQt => "LXQt",
+            ImageEditionOption::Minimal => "Minimal",
+            ImageEditionOption::Server => "Server",
+        }
+    }
+
+    pub fn all() -> &'static [ImageEditionOption] {
+        &[
+            ImageEditionOption::Kde,
+            ImageEditionOption::Xfce,
+            ImageEditionOption::LXQt,
+            ImageEditionOption::Minimal,
+            ImageEditionOption::Server,
+        ]
+    }
+}
+
+/// Flash configuration collected from the wizard
+#[derive(Debug, Clone)]
+pub struct FlashConfig {
+    pub image: PathBuf,
+    pub disk: String,
+    pub scheme: PartitionScheme,
+    pub uefi_dir: PathBuf,
+    pub dry_run: bool,
+    pub auto_unmount: bool,
+    pub watch: bool,
+    pub locale: Option<LocaleConfig>,
+    pub early_ssh: bool,
+    pub progress_tx: Option<Sender<ProgressUpdate>>,
+    pub efi_size: String,
+    pub boot_size: String,
+    pub root_end: String,
+    pub download_uefi_firmware: bool, // New field to indicate UEFI firmware download
+    pub image_source_selection: ImageSource, // New field to indicate image source
+    pub image_version: String,        // New field for selected Fedora version
+    pub image_edition: String,        // New field for selected Fedora edition
+}
