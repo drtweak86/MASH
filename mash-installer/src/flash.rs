@@ -362,6 +362,8 @@ fn run_installation(ctx: &mut FlashContext) -> Result<()> {
     if ctx.early_ssh {
         enable_early_ssh(&mounts.dst_root_subvol)?;
     }
+    enable_first_boot_setup(ctx, &mounts.dst_root_subvol)?;
+    disable_autologin(ctx, &mounts.dst_root_subvol)?;
     ctx.complete_phase(Phase::LocaleConfig);
 
     // Phase 8: Generate fstab
@@ -1008,6 +1010,163 @@ fn configure_locale(ctx: &FlashContext, target_root: &Path) -> Result<()> {
         crate::locale::patch_locale(target_root, locale, false)?;
     } else {
         ctx.status("🗣️ Using default locale settings");
+    }
+    Ok(())
+}
+
+fn enable_first_boot_setup(ctx: &FlashContext, target_root: &Path) -> Result<()> {
+    ctx.status("🧑‍💻 Enabling first-boot user setup...");
+    let sysconfig = target_root.join("etc/sysconfig/initial-setup");
+    if sysconfig.exists() {
+        let content = fs::read_to_string(&sysconfig)?;
+        let mut out = Vec::new();
+        let mut found = false;
+        for line in content.lines() {
+            if line.trim_start().starts_with("RUN_FIRSTBOOT=") {
+                out.push("RUN_FIRSTBOOT=YES".to_string());
+                found = true;
+            } else {
+                out.push(line.to_string());
+            }
+        }
+        if !found {
+            out.push("RUN_FIRSTBOOT=YES".to_string());
+        }
+        fs::write(&sysconfig, out.join("\n") + "\n")?;
+    }
+
+    enable_service(
+        target_root,
+        "initial-setup.service",
+        "multi-user.target.wants",
+    )?;
+    enable_service(
+        target_root,
+        "initial-setup-graphical.service",
+        "graphical.target.wants",
+    )?;
+    Ok(())
+}
+
+fn enable_service(target_root: &Path, service: &str, target_dir: &str) -> Result<()> {
+    let unit = target_root.join("usr/lib/systemd/system").join(service);
+    if !unit.exists() {
+        return Ok(());
+    }
+    let wants_dir = target_root.join("etc/systemd/system").join(target_dir);
+    fs::create_dir_all(&wants_dir)?;
+    let link = wants_dir.join(service);
+    if !link.exists() {
+        std::os::unix::fs::symlink(format!("/usr/lib/systemd/system/{}", service), &link)?;
+    }
+    Ok(())
+}
+
+fn disable_autologin(ctx: &FlashContext, target_root: &Path) -> Result<()> {
+    ctx.status("🛑 Disabling autologin...");
+    disable_gdm_autologin(target_root)?;
+    disable_sddm_autologin(target_root)?;
+    disable_lightdm_autologin(target_root)?;
+    Ok(())
+}
+
+fn disable_gdm_autologin(target_root: &Path) -> Result<()> {
+    let path = target_root.join("etc/gdm/custom.conf");
+    if !path.exists() {
+        return Ok(());
+    }
+    let content = fs::read_to_string(&path)?;
+    let mut out = Vec::new();
+    for line in content.lines() {
+        if line.trim_start().starts_with("AutomaticLoginEnable") {
+            out.push("AutomaticLoginEnable=false".to_string());
+        } else if line.trim_start().starts_with("AutomaticLogin=") {
+            out.push(format!("#{}", line));
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    fs::write(path, out.join("\n") + "\n")?;
+    Ok(())
+}
+
+fn disable_sddm_autologin(target_root: &Path) -> Result<()> {
+    let mut files = Vec::new();
+    let main = target_root.join("etc/sddm.conf");
+    if main.exists() {
+        files.push(main);
+    }
+    let dir = target_root.join("etc/sddm.conf.d");
+    if dir.exists() {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            if entry
+                .path()
+                .extension()
+                .map(|e| e == "conf")
+                .unwrap_or(false)
+            {
+                files.push(entry.path());
+            }
+        }
+    }
+    for path in files {
+        let content = fs::read_to_string(&path)?;
+        let mut out = Vec::new();
+        let mut in_autologin = false;
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                in_autologin = trimmed.eq_ignore_ascii_case("[Autologin]");
+                out.push(line.to_string());
+                continue;
+            }
+            if in_autologin {
+                if trimmed.starts_with("User=")
+                    || trimmed.starts_with("Session=")
+                    || trimmed.starts_with("Relogin=")
+                {
+                    continue;
+                }
+            }
+            out.push(line.to_string());
+        }
+        fs::write(&path, out.join("\n") + "\n")?;
+    }
+    Ok(())
+}
+
+fn disable_lightdm_autologin(target_root: &Path) -> Result<()> {
+    let mut files = Vec::new();
+    let main = target_root.join("etc/lightdm/lightdm.conf");
+    if main.exists() {
+        files.push(main);
+    }
+    let dir = target_root.join("etc/lightdm/lightdm.conf.d");
+    if dir.exists() {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            if entry
+                .path()
+                .extension()
+                .map(|e| e == "conf")
+                .unwrap_or(false)
+            {
+                files.push(entry.path());
+            }
+        }
+    }
+    for path in files {
+        let content = fs::read_to_string(&path)?;
+        let mut out = Vec::new();
+        for line in content.lines() {
+            if line.trim_start().starts_with("autologin-user=") {
+                out.push(format!("#{}", line));
+            } else {
+                out.push(line.to_string());
+            }
+        }
+        fs::write(&path, out.join("\n") + "\n")?;
     }
     Ok(())
 }

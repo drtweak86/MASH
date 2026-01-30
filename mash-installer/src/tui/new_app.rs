@@ -104,8 +104,6 @@ impl Drop for Cleanup {
     }
 }
 
-
-
 // ============================================================================
 // Result of handling input
 // ============================================================================
@@ -200,7 +198,7 @@ impl InstallStepType {
             InstallStepType::FirstBootUser => Some(InstallStepType::Confirmation),
             InstallStepType::Confirmation => None,
             InstallStepType::DownloadingFedora => None, // Execution steps do not have 'next' in this flow
-            InstallStepType::DownloadingUefi => None,   // Execution steps do not have 'next' in this flow
+            InstallStepType::DownloadingUefi => None, // Execution steps do not have 'next' in this flow
             InstallStepType::Flashing => Some(InstallStepType::Complete),
             InstallStepType::Complete => None,
         }
@@ -249,7 +247,6 @@ impl InstallStepType {
     }
 }
 
-
 // ============================================================================
 // App
 // ============================================================================
@@ -257,34 +254,6 @@ impl InstallStepType {
 use super::progress::ProgressState; // New import
 
 // ...
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UserCreationField {
-    Username,
-    Password,
-    PasswordConfirm,
-}
-
-#[derive(Debug, Clone)]
-pub struct UserCreation {
-    pub username: String,
-    pub password: String,
-    pub password_confirm: String,
-    pub active_field: UserCreationField,
-    pub is_complete: bool,
-}
-
-impl Default for UserCreation {
-    fn default() -> Self {
-        Self {
-            username: String::new(),
-            password: String::new(),
-            password_confirm: String::new(),
-            active_field: UserCreationField::Username,
-            is_complete: false,
-        }
-    }
-}
 
 /// Application state
 pub struct App {
@@ -298,7 +267,6 @@ pub struct App {
     pub flash_progress_receiver: Option<Receiver<super::progress::ProgressUpdate>>, // NEW
     pub progress_state: Arc<Mutex<ProgressState>>,
     pub backup_confirmed: bool,
-    pub user_creation: UserCreation,
     pub is_running: bool,
     pub status_message: String,
     pub error_message: Option<String>,
@@ -322,13 +290,12 @@ impl App {
             partition_plan: None,
             resolved_layout: None,
             cleanup: Cleanup { tasks: Vec::new() },
-            progress_rx: Some(rx), // Existing
-            progress_tx: Some(tx), // Existing
+            progress_rx: Some(rx),                 // Existing
+            progress_tx: Some(tx),                 // Existing
             flash_progress_sender: Some(flash_tx), // NEW
-            flash_progress_receiver: None, // handled by background thread
+            flash_progress_receiver: None,         // handled by background thread
             progress_state,
             backup_confirmed: false,
-            user_creation: UserCreation::default(),
             is_running: false,
             status_message: "👋 Welcome to MASH!".to_string(),
             error_message: None,
@@ -340,7 +307,6 @@ impl App {
         match self.current_step_type {
             InstallStepType::Welcome => self.handle_welcome_input(key),
             InstallStepType::BackupConfirmation => self.handle_backup_confirmation_input(key),
-            InstallStepType::FirstBootUser => self.handle_first_boot_user_input(key),
             step if step.is_config_step() => self.handle_generic_config_input(key),
             InstallStepType::Flashing => self.handle_flashing_input(key),
             _ => InputResult::Continue, // Default: just continue if no specific handler
@@ -353,7 +319,7 @@ impl App {
                 self.current_step_type = InstallStepType::DiskSelection;
                 self.error_message = None;
                 InputResult::Continue
-            },
+            }
             KeyCode::Esc | KeyCode::Char('q') => InputResult::Quit,
             _ => InputResult::Continue,
         }
@@ -368,11 +334,6 @@ impl App {
                             Some("Backup confirmation required before installation.".to_string());
                         return InputResult::Continue;
                     }
-                    if !self.user_creation.is_complete {
-                        self.error_message =
-                            Some("First-boot user must be created before installation.".to_string());
-                        return InputResult::Continue;
-                    }
                     self.is_running = true;
                     self.current_step_type = InstallStepType::Flashing;
                     self.status_message = "🛠️ Starting installation...".to_string();
@@ -385,13 +346,13 @@ impl App {
                     self.current_step_type = next;
                 }
                 InputResult::Continue
-            },
+            }
             KeyCode::Esc => {
                 if let Some(prev) = self.current_step_type.prev() {
                     self.current_step_type = prev;
                 }
                 InputResult::Continue
-            },
+            }
             KeyCode::Char('q') => InputResult::Quit,
             _ => InputResult::Continue,
         }
@@ -406,7 +367,7 @@ impl App {
                     self.current_step_type = next;
                 }
                 InputResult::Continue
-            },
+            }
             KeyCode::Char('n') | KeyCode::Char('N') => {
                 self.backup_confirmed = false;
                 self.error_message = Some("Backup confirmation required to proceed.".to_string());
@@ -414,76 +375,14 @@ impl App {
                     self.current_step_type = prev;
                 }
                 InputResult::Continue
-            },
+            }
             KeyCode::Esc => {
                 if let Some(prev) = self.current_step_type.prev() {
                     self.current_step_type = prev;
                 }
                 InputResult::Continue
-            },
+            }
             KeyCode::Char('q') => InputResult::Quit,
-            _ => InputResult::Continue,
-        }
-    }
-
-    fn handle_first_boot_user_input(&mut self, key: KeyEvent) -> InputResult {
-        match key.code {
-            KeyCode::Tab => {
-                self.user_creation.active_field = match self.user_creation.active_field {
-                    UserCreationField::Username => UserCreationField::Password,
-                    UserCreationField::Password => UserCreationField::PasswordConfirm,
-                    UserCreationField::PasswordConfirm => UserCreationField::Username,
-                };
-                self.error_message = None;
-                InputResult::Continue
-            },
-            KeyCode::Backspace => {
-                let target = match self.user_creation.active_field {
-                    UserCreationField::Username => &mut self.user_creation.username,
-                    UserCreationField::Password => &mut self.user_creation.password,
-                    UserCreationField::PasswordConfirm => &mut self.user_creation.password_confirm,
-                };
-                target.pop();
-                self.error_message = None;
-                InputResult::Continue
-            },
-            KeyCode::Enter => {
-                if self.user_creation.username.trim().is_empty() {
-                    self.error_message = Some("Username is required.".to_string());
-                    return InputResult::Continue;
-                }
-                if self.user_creation.password.is_empty() {
-                    self.error_message = Some("Password is required.".to_string());
-                    return InputResult::Continue;
-                }
-                if self.user_creation.password != self.user_creation.password_confirm {
-                    self.error_message = Some("Passwords do not match.".to_string());
-                    return InputResult::Continue;
-                }
-                self.user_creation.is_complete = true;
-                self.error_message = None;
-                if let Some(next) = self.current_step_type.next() {
-                    self.current_step_type = next;
-                }
-                InputResult::Continue
-            },
-            KeyCode::Esc => {
-                if let Some(prev) = self.current_step_type.prev() {
-                    self.current_step_type = prev;
-                }
-                InputResult::Continue
-            },
-            KeyCode::Char('q') => InputResult::Quit,
-            KeyCode::Char(c) => {
-                let target = match self.user_creation.active_field {
-                    UserCreationField::Username => &mut self.user_creation.username,
-                    UserCreationField::Password => &mut self.user_creation.password,
-                    UserCreationField::PasswordConfirm => &mut self.user_creation.password_confirm,
-                };
-                target.push(c);
-                self.error_message = None;
-                InputResult::Continue
-            },
             _ => InputResult::Continue,
         }
     }
@@ -498,7 +397,7 @@ impl App {
             KeyCode::Enter if is_complete => {
                 self.current_step_type = InstallStepType::Complete;
                 InputResult::Complete
-            },
+            }
             KeyCode::Char('q') => InputResult::Quit,
             _ => InputResult::Continue,
         }
@@ -523,19 +422,19 @@ impl App {
             disk: "/dev/sda".to_string(), // Placeholder
             scheme: PartitionScheme::Mbr, // Placeholder
             uefi_dir: PathBuf::from("/tmp/placeholder_uefi"),
-            dry_run: false, // Placeholder
-            auto_unmount: true, // Placeholder
-            watch: false, // Placeholder
-            locale: None, // Placeholder
-            early_ssh: false, // Placeholder
+            dry_run: false,                                  // Placeholder
+            auto_unmount: true,                              // Placeholder
+            watch: false,                                    // Placeholder
+            locale: None,                                    // Placeholder
+            early_ssh: false,                                // Placeholder
             progress_tx: self.flash_progress_sender.clone(), // This is the critical change!
-            efi_size: "1024MiB".to_string(), // Placeholder
-            boot_size: "2048MiB".to_string(), // Placeholder
-            root_end: "1800GiB".to_string(), // Placeholder
-            download_uefi_firmware: false, // Placeholder
-            image_source_selection: ImageSource::LocalFile, // Placeholder
-            image_version: "43".to_string(), // Placeholder
-            image_edition: "KDE".to_string(), // Placeholder
+            efi_size: "1024MiB".to_string(),                 // Placeholder
+            boot_size: "2048MiB".to_string(),                // Placeholder
+            root_end: "1800GiB".to_string(),                 // Placeholder
+            download_uefi_firmware: false,                   // Placeholder
+            image_source_selection: ImageSource::LocalFile,  // Placeholder
+            image_version: "43".to_string(),                 // Placeholder
+            image_edition: "KDE".to_string(),                // Placeholder
         })
     }
 }

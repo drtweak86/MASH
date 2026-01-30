@@ -114,11 +114,7 @@ fn main() -> anyhow::Result<()> {
                 image_edition: image_edition.clone(),
             };
 
-            flash::run_with_progress(
-                &cli_flash_config,
-                *yes_i_know,
-                None, // No progress_tx for direct CLI
-            )?;
+            flash::run_with_progress(&cli_flash_config, *yes_i_know)?;
             return Ok(()); // Exit after CLI flash
         }
     }

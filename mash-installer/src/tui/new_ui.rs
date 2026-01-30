@@ -1,6 +1,6 @@
 //! New UI module for the single-screen TUI
 
-use crate::tui::new_app::{App, InstallStepType, UserCreationField};
+use crate::tui::new_app::{App, InstallStepType};
 use crate::tui::progress::{Phase, ProgressState};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
@@ -49,42 +49,13 @@ pub fn draw(f: &mut Frame, app: &App) {
             }
         }
         InstallStepType::FirstBootUser => {
-            let active = app.user_creation.active_field;
-            let username_prefix = if active == UserCreationField::Username {
-                "👉"
-            } else {
-                "  "
-            };
-            let password_prefix = if active == UserCreationField::Password {
-                "👉"
-            } else {
-                "  "
-            };
-            let confirm_prefix = if active == UserCreationField::PasswordConfirm {
-                "👉"
-            } else {
-                "  "
-            };
-            let masked_password = "*".repeat(app.user_creation.password.len());
-            let masked_confirm = "*".repeat(app.user_creation.password_confirm.len());
             items.push(ListItem::new(
-                "🧑‍💻 Create your first-boot user (no autologin).".to_string(),
+                "🧑‍💻 First boot will prompt you to create a user.".to_string(),
             ));
-            items.push(ListItem::new(format!(
-                "{} 👤 Username: {}",
-                username_prefix, app.user_creation.username
-            )));
-            items.push(ListItem::new(format!(
-                "{} 🔒 Password: {}",
-                password_prefix, masked_password
-            )));
-            items.push(ListItem::new(format!(
-                "{} 🔒 Confirm: {}",
-                confirm_prefix, masked_confirm
-            )));
             items.push(ListItem::new(
-                "⌨️ Type to edit, Tab to switch, Enter to continue.".to_string(),
+                "🔐 Autologin will be disabled for safety.".to_string(),
             ));
+            items.push(ListItem::new("ℹ️ Press Enter to continue.".to_string()));
         }
         _ => {
             items.push(ListItem::new(
@@ -125,8 +96,8 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     // Status line
     let status_message = status_message(app, &progress_state);
-    let status =
-        Paragraph::new(status_message).block(Block::default().borders(Borders::ALL).title("Status"));
+    let status = Paragraph::new(status_message)
+        .block(Block::default().borders(Borders::ALL).title("Status"));
     f.render_widget(status, chunks[3]);
 }
 
@@ -151,7 +122,13 @@ fn phase_line(progress_state: &ProgressState) -> String {
         Some(phase) => {
             let phase_number = phase.number();
             let total = Phase::total();
-            format!("{} Phase {}/{}: {}", progress_state.phase_symbol(phase), phase_number, total, phase.name())
+            format!(
+                "{} Phase {}/{}: {}",
+                progress_state.phase_symbol(phase),
+                phase_number,
+                total,
+                phase.name()
+            )
         }
         None => "⏳ Phase: waiting for telemetry...".to_string(),
     }
@@ -170,5 +147,8 @@ fn progress_detail(
     } else {
         "💤 Speed: waiting...".to_string()
     };
-    format!("{}\n{} | {} | {}", phase_line, overall_line, eta_line, speed_line)
+    format!(
+        "{}\n{} | {} | {}",
+        phase_line, overall_line, eta_line, speed_line
+    )
 }
