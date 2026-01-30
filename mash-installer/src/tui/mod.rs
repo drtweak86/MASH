@@ -15,7 +15,7 @@ mod widgets;
 pub mod flash_config; // Declare the new module
 pub use flash_config::{FlashConfig, ImageSource}; // Update the pub use statement
 
-use crate::{cli::Cli, errors::Result};
+use crate::{cli::Cli, errors::Result, flash};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
@@ -23,6 +23,7 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
+use std::sync::mpsc;
 
 use std::time::Duration;
 
@@ -71,6 +72,7 @@ pub fn run_new_ui(
     app: &mut new_app::App,
 ) -> Result<new_app::InputResult> {
     // Return InputResult for handling in run()
+    let mut flash_result_rx: Option<mpsc::Receiver<Result<()>>> = None;
     loop {
         // Draw UI
         terminal.draw(|f| new_ui::draw(f, app))?;
@@ -83,7 +85,21 @@ pub fn run_new_ui(
                 match input_result {
                     new_app::InputResult::Quit => return Ok(new_app::InputResult::Quit),
                     new_app::InputResult::Complete => return Ok(new_app::InputResult::Complete),
-                    _ => {} // Continue, StartFlash, StartDownload are handled by app internally for now
+                    new_app::InputResult::StartFlash(config) => {
+                        if app.is_running {
+                            continue;
+                        }
+                        app.is_running = true;
+                        app.status_message = "🛠️ Flashing started...".to_string();
+                        let (tx, rx) = mpsc::channel();
+                        flash_result_rx = Some(rx);
+                        let yes_i_know = app.backup_confirmed;
+                        std::thread::spawn(move || {
+                            let result = flash::run_with_progress(&config, yes_i_know);
+                            let _ = tx.send(result);
+                        });
+                    }
+                    _ => {} // Continue, StartDownload are handled by app internally for now
                 }
             }
         }
@@ -97,12 +113,17 @@ pub fn run_new_ui(
             }
         }
 
-        // NEW: Check for flash_progress_receiver updates
-        if let Some(ref rx) = app.flash_progress_receiver {
-            while let Ok(update) = rx.try_recv() {
-                // Here, you would parse the ProgressUpdate and update app.progress or app.status_message
-                // For now, let's just update the status message as a placeholder.
-                app.status_message = format!("Flash Progress: {:?}", update); // Placeholder
+        if let Some(ref rx) = flash_result_rx {
+            if let Ok(result) = rx.try_recv() {
+                match result {
+                    Ok(()) => {
+                        app.status_message = "🎉 Flashing finished.".to_string();
+                    }
+                    Err(err) => {
+                        app.error_message = Some(format!("Flash failed: {}", err));
+                        app.status_message = "❌ Flashing failed.".to_string();
+                    }
+                }
             }
         }
     }
