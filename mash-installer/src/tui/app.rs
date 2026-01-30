@@ -1,4 +1,6 @@
 //! Application state machine for the TUI wizard
+#![allow(dead_code)]
+#![allow(clippy::collapsible_else_if)]
 
 use crate::cli::{Cli, PartitionScheme};
 use crate::locale::LocaleConfig;
@@ -512,7 +514,7 @@ pub enum InputResult {
     Continue,
     Quit,
     Complete,
-    StartFlash(FlashConfig), // New: to signal main.rs to start flashing
+    StartFlash(FlashConfig),     // New: to signal main.rs to start flashing
     StartDownload(DownloadType), // New: to signal main.rs to start a download
 }
 
@@ -801,7 +803,9 @@ impl App {
             InstallStep::PartitionScheme => self.handle_partition_scheme_input(key),
             InstallStep::PartitionLayout => self.handle_partition_layout_input(key),
             InstallStep::PartitionCustomize => self.handle_partition_customize_input(key),
-            InstallStep::DownloadSourceSelection => self.handle_download_source_selection_input(key),
+            InstallStep::DownloadSourceSelection => {
+                self.handle_download_source_selection_input(key)
+            }
             InstallStep::ImageSelection => self.handle_image_selection_input(key),
             InstallStep::UefiDirectory => self.handle_uefi_input(key),
             InstallStep::LocaleSelection => self.handle_locale_selection_input(key),
@@ -1133,8 +1137,7 @@ impl App {
                             if self.selected_image_version_index < max_version_index {
                                 self.selected_image_version_index += 1;
                             }
-                        }
-                        else {
+                        } else {
                             if self.selected_image_edition_index < max_edition_index {
                                 self.selected_image_edition_index += 1;
                             }
@@ -1404,8 +1407,6 @@ impl App {
         })
     }
 
-
-
     /// Handler for downloading steps (both Fedora and UEFI)
     fn handle_download_input(&mut self, key: KeyEvent) -> InputResult {
         // During download, allow viewing progress or exiting on Esc/q/Ctrl+C
@@ -1497,7 +1498,9 @@ impl App {
                         self.download_state.phase = DownloadPhase::Complete;
 
                         match self.current_step {
-                            InstallStep::DownloadingFedora => self.downloaded_image_path = Some(path),
+                            InstallStep::DownloadingFedora => {
+                                self.downloaded_image_path = Some(path)
+                            }
                             InstallStep::DownloadingUefi => self.downloaded_uefi_path = Some(path),
                             _ => {} // Should not happen
                         }
@@ -1527,8 +1530,7 @@ impl App {
     /// Get the flash configuration if wizard completed
     pub fn get_flash_config(&self) -> Option<FlashConfig> {
         // If not in flashing or complete state, config is not ready
-        if self.current_step != InstallStep::Flashing
-            && self.current_step != InstallStep::Complete
+        if self.current_step != InstallStep::Flashing && self.current_step != InstallStep::Complete
         {
             return None;
         }

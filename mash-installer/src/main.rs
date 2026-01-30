@@ -9,14 +9,6 @@
 use anyhow::Context;
 use clap::Parser;
 
-use crossterm::{
-    execute,
-    terminal::{enable_raw_mode, EnterAlternateScreen},
-};
-use ratatui::{backend::CrosstermBackend, Terminal};
-use std::path::PathBuf;
-use std::{io, sync::mpsc, thread};
-
 mod cli;
 mod download;
 mod errors;
@@ -92,12 +84,16 @@ fn main() -> anyhow::Result<()> {
             let cli_flash_config = tui::FlashConfig {
                 image: final_image_path
                     .as_ref()
-                    .context("Image path is required (provide --image or use --download-image)")?.clone(),
+                    .context("Image path is required (provide --image or use --download-image)")?
+                    .clone(),
                 disk: disk.clone(),
                 scheme: *scheme,
-                uefi_dir: final_uefi_dir.as_ref().context(
-                    "UEFI directory is required (provide --uefi-dir or use --download-uefi)",
-                )?.clone(),
+                uefi_dir: final_uefi_dir
+                    .as_ref()
+                    .context(
+                        "UEFI directory is required (provide --uefi-dir or use --download-uefi)",
+                    )?
+                    .clone(),
                 dry_run: cli.dry_run,
                 auto_unmount: *auto_unmount,
                 watch: cli.watch,
@@ -108,7 +104,11 @@ fn main() -> anyhow::Result<()> {
                 boot_size: boot_size.clone(),
                 root_end: root_end.clone(),
                 download_uefi_firmware: *download_uefi,
-                image_source_selection: if *download_image { tui::ImageSource::DownloadFedora } else { tui::ImageSource::LocalFile },
+                image_source_selection: if *download_image {
+                    tui::ImageSource::DownloadFedora
+                } else {
+                    tui::ImageSource::LocalFile
+                },
                 image_version: image_version.clone(),
                 image_edition: image_edition.clone(),
             };

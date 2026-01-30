@@ -2,14 +2,13 @@
 
 use crate::tui::new_app::App;
 use ratatui::{
-    backend::Backend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
     widgets::{Block, Borders, Gauge, List, ListItem},
     Frame,
 };
 
-pub fn draw<B: Backend>(f: &mut Frame<B>, app: &App) {
+pub fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
@@ -22,7 +21,7 @@ pub fn draw<B: Backend>(f: &mut Frame<B>, app: &App) {
             ]
             .as_ref(),
         )
-        .split(f.size());
+        .split(f.area());
 
     // Title
     let title = Block::default()
@@ -57,8 +56,5 @@ pub fn draw<B: Backend>(f: &mut Frame<B>, app: &App) {
 
     // Status line
     let status_message = app.status_message.as_str();
-    f.render_widget(
-        Block::default().title(status_message),
-        chunks[3],
-    );
+    f.render_widget(Block::default().title(status_message), chunks[3]);
 }

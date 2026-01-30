@@ -1,8 +1,8 @@
 //! New application state machine for the single-screen TUI
 
+#![allow(dead_code)]
+
 use crate::cli::PartitionScheme;
-use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 
 // ============================================================================
@@ -24,7 +24,6 @@ pub enum StepState {
 // ============================================================================
 
 /// Represents an installation step
-#[derive(Debug)]
 pub struct InstallStep {
     pub name: String,
     pub state: StepState,

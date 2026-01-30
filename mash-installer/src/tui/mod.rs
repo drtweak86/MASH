@@ -6,15 +6,13 @@
 
 mod app;
 mod input;
+mod new_app;
+mod new_ui;
 pub mod progress;
 mod ui;
 mod widgets;
-mod new_app;
-mod new_ui;
 
-pub use app::{
-    App, DownloadType, DownloadUpdate, FlashConfig, ImageSource, InputResult, InstallStep,
-};
+pub use app::{DownloadUpdate, FlashConfig, ImageSource};
 
 use crate::{cli::Cli, errors::Result};
 use crossterm::{
@@ -24,11 +22,11 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
 /// Run the TUI wizard
-pub fn run(cli: &Cli, watch: bool, dry_run: bool) -> Result<app::InputResult> {
+pub fn run(_cli: &Cli, _watch: bool, _dry_run: bool) -> Result<app::InputResult> {
     use std::io::IsTerminal;
 
     // Check if we have a real terminal
@@ -60,9 +58,8 @@ pub fn run(cli: &Cli, watch: bool, dry_run: bool) -> Result<app::InputResult> {
         task: Box::new(|| Ok(())),
     });
 
-
     // Main loop
-    let wizard_result = run_new_ui(&mut terminal, &mut app);
+    let _wizard_result = run_new_ui(&mut terminal, &mut app);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -78,32 +75,35 @@ pub fn run(cli: &Cli, watch: bool, dry_run: bool) -> Result<app::InputResult> {
 }
 
 /// Main application loop (single screen)
-pub fn run_new_ui(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut new_app::App) -> Result<()> {
+pub fn run_new_ui(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut new_app::App,
+) -> Result<()> {
     let tx = app.progress_tx.clone().unwrap();
+    let steps_len = app.steps.len();
 
     // Spawn a thread to simulate work
     thread::spawn(move || {
-        for i in 0..app.steps.len() {
-            tx.send(new_app::ProgressEvent {
+        for i in 0..steps_len {
+            let _ = tx.send(new_app::ProgressEvent {
                 step_id: i,
                 message: "Starting...".to_string(),
                 progress: 0.0,
-            }).unwrap();
+            });
             thread::sleep(Duration::from_secs(1));
-            tx.send(new_app::ProgressEvent {
+            let _ = tx.send(new_app::ProgressEvent {
                 step_id: i,
                 message: "In progress...".to_string(),
                 progress: 0.5,
-            }).unwrap();
+            });
             thread::sleep(Duration::from_secs(1));
-            tx.send(new_app::ProgressEvent {
+            let _ = tx.send(new_app::ProgressEvent {
                 step_id: i,
                 message: "Done.".to_string(),
                 progress: 1.0,
-            }).unwrap();
+            });
         }
     });
-
 
     loop {
         // Draw UI
