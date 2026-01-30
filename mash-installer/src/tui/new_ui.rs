@@ -206,11 +206,28 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
                 "Use Tab/↑/↓ to select • Type to edit • Backspace to delete • Enter to continue."
                     .to_string(),
             );
-            push_options(
-                &mut items,
-                &app.partition_customizations,
-                app.customize_index,
-            );
+            let options = app
+                .partition_customizations
+                .iter()
+                .enumerate()
+                .map(|(idx, option)| {
+                    let field = match idx {
+                        0 => Some(crate::tui::new_app::CustomizeField::Efi),
+                        1 => Some(crate::tui::new_app::CustomizeField::Boot),
+                        2 => Some(crate::tui::new_app::CustomizeField::Root),
+                        _ => None,
+                    };
+                    if field.is_some() && app.customize_error_field == field {
+                        format!("❌ {}", option)
+                    } else {
+                        option.clone()
+                    }
+                })
+                .collect::<Vec<_>>();
+            push_options(&mut items, &options, app.customize_index);
+            if let Some(error) = &app.error_message {
+                items.push(format!("❌ {}", error));
+            }
         }
         InstallStepType::DownloadSourceSelection => {
             items.push("📥 Select image source:".to_string());
@@ -434,6 +451,9 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
     }
 
     if let Some(error) = &app.error_message {
+        if app.current_step_type == InstallStepType::PartitionCustomize {
+            return items;
+        }
         items.push(format!("❌ {}", error));
     }
 

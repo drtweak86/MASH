@@ -91,6 +91,13 @@ pub struct Partition {
     pub flags: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomizeField {
+    Efi,
+    Boot,
+    Root,
+}
+
 // ============================================================================
 // Resolved Layout
 // ============================================================================
@@ -371,6 +378,7 @@ pub struct App {
     pub uefi_source_path: String,
     pub confirmation_input: String,
     pub cancel_requested: Arc<std::sync::atomic::AtomicBool>,
+    pub customize_error_field: Option<CustomizeField>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -584,6 +592,7 @@ impl App {
             uefi_source_path: "/tmp/uefi".to_string(),
             confirmation_input: String::new(),
             cancel_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            customize_error_field: None,
         }
         .with_partition_defaults()
     }
@@ -835,6 +844,17 @@ impl App {
             }
             KeyCode::Enter => {
                 if self.confirmation_input == "FLASH" {
+                    match validate_partition_plan(&self.build_partition_plan()) {
+                        Ok(()) => {
+                            self.error_message = None;
+                            self.customize_error_field = None;
+                        }
+                        Err(err) => {
+                            self.error_message = Some(err.message);
+                            self.customize_error_field = err.field;
+                            return InputResult::Continue;
+                        }
+                    }
                     self.destructive_armed = true;
                     self.error_message = None;
                     self.confirmation_input.clear();
@@ -1063,21 +1083,34 @@ impl App {
                 InputResult::Continue
             }
             KeyCode::Char(c) if c.is_ascii_alphanumeric() || c == '.' => {
+                self.error_message = None;
+                self.customize_error_field = None;
                 if self.apply_customize_edit(Some(c)) {
                     self.refresh_partition_customizations();
                 }
                 InputResult::Continue
             }
             KeyCode::Backspace => {
+                self.error_message = None;
+                self.customize_error_field = None;
                 if self.apply_customize_edit(None) {
                     self.refresh_partition_customizations();
                 }
                 InputResult::Continue
             }
             KeyCode::Enter => {
-                self.error_message = None;
-                if let Some(next) = self.current_step_type.next() {
-                    self.current_step_type = next;
+                match validate_partition_plan(&self.build_partition_plan()) {
+                    Ok(()) => {
+                        self.error_message = None;
+                        self.customize_error_field = None;
+                        if let Some(next) = self.current_step_type.next() {
+                            self.current_step_type = next;
+                        }
+                    }
+                    Err(err) => {
+                        self.error_message = Some(err.message);
+                        self.customize_error_field = err.field;
+                    }
                 }
                 InputResult::Continue
             }
@@ -1190,6 +1223,41 @@ impl App {
             format!("ROOT {}", self.root_end),
             "DATA remainder".to_string(),
         ];
+    }
+
+    fn build_partition_plan(&self) -> PartitionPlan {
+        PartitionPlan {
+            scheme: *self
+                .partition_schemes
+                .get(self.scheme_index)
+                .unwrap_or(&PartitionScheme::Mbr),
+            partitions: vec![
+                Partition {
+                    name: "EFI".to_string(),
+                    size: self.efi_size.clone(),
+                    format: "vfat".to_string(),
+                    flags: vec!["esp".to_string()],
+                },
+                Partition {
+                    name: "BOOT".to_string(),
+                    size: self.boot_size.clone(),
+                    format: "ext4".to_string(),
+                    flags: Vec::new(),
+                },
+                Partition {
+                    name: "ROOT".to_string(),
+                    size: self.root_end.clone(),
+                    format: "btrfs".to_string(),
+                    flags: Vec::new(),
+                },
+                Partition {
+                    name: "DATA".to_string(),
+                    size: "remainder".to_string(),
+                    format: "ext4".to_string(),
+                    flags: Vec::new(),
+                },
+            ],
+        }
     }
 
     fn with_partition_defaults(mut self) -> Self {
@@ -1306,6 +1374,125 @@ impl App {
     }
 }
 
+struct ValidationError {
+    message: String,
+    field: Option<CustomizeField>,
+}
+
+fn validate_partition_plan(plan: &PartitionPlan) -> Result<(), ValidationError> {
+    let mut efi = None;
+    let mut boot = None;
+    let mut root_end = None;
+
+    for part in &plan.partitions {
+        match part.name.to_ascii_uppercase().as_str() {
+            "EFI" => efi = Some(part.size.clone()),
+            "BOOT" => boot = Some(part.size.clone()),
+            "ROOT" => root_end = Some(part.size.clone()),
+            _ => {}
+        }
+    }
+
+    let efi = efi.ok_or_else(|| ValidationError {
+        message: "EFI size is required.".to_string(),
+        field: Some(CustomizeField::Efi),
+    })?;
+    let boot = boot.ok_or_else(|| ValidationError {
+        message: "BOOT size is required.".to_string(),
+        field: Some(CustomizeField::Boot),
+    })?;
+    let root_end = root_end.ok_or_else(|| ValidationError {
+        message: "ROOT end is required.".to_string(),
+        field: Some(CustomizeField::Root),
+    })?;
+
+    if root_end.contains('%') {
+        return Err(ValidationError {
+            message: "ROOT end must be an absolute size (e.g., 1800GiB), not a percentage."
+                .to_string(),
+            field: Some(CustomizeField::Root),
+        });
+    }
+
+    let efi_mib = parse_size_mib(&efi).map_err(|message| ValidationError {
+        message: format!("EFI size invalid: {}", message),
+        field: Some(CustomizeField::Efi),
+    })?;
+    let boot_mib = parse_size_mib(&boot).map_err(|message| ValidationError {
+        message: format!("BOOT size invalid: {}", message),
+        field: Some(CustomizeField::Boot),
+    })?;
+    let root_mib = parse_size_mib(&root_end).map_err(|message| ValidationError {
+        message: format!("ROOT end invalid: {}", message),
+        field: Some(CustomizeField::Root),
+    })?;
+
+    if efi_mib < 512 {
+        return Err(ValidationError {
+            message: "EFI must be at least 512MiB.".to_string(),
+            field: Some(CustomizeField::Efi),
+        });
+    }
+    if boot_mib < 512 {
+        return Err(ValidationError {
+            message: "BOOT must be at least 512MiB.".to_string(),
+            field: Some(CustomizeField::Boot),
+        });
+    }
+
+    let efi_end = efi_mib;
+    let boot_end = efi_mib + boot_mib;
+
+    if boot_end <= efi_end {
+        return Err(ValidationError {
+            message: "BOOT must end after EFI.".to_string(),
+            field: Some(CustomizeField::Boot),
+        });
+    }
+    if root_mib <= boot_end {
+        return Err(ValidationError {
+            message: "ROOT end must be greater than BOOT end.".to_string(),
+            field: Some(CustomizeField::Root),
+        });
+    }
+
+    Ok(())
+}
+
+fn parse_size_mib(raw: &str) -> Result<u64, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("size is empty".to_string());
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let (num_str, suffix) = if let Some(rest) = lower.strip_suffix("mib") {
+        (rest, "mib")
+    } else if let Some(rest) = lower.strip_suffix("mb") {
+        (rest, "mb")
+    } else if let Some(rest) = lower.strip_suffix('m') {
+        (rest, "m")
+    } else if let Some(rest) = lower.strip_suffix("gib") {
+        (rest, "gib")
+    } else if let Some(rest) = lower.strip_suffix("gb") {
+        (rest, "gb")
+    } else if let Some(rest) = lower.strip_suffix('g') {
+        (rest, "g")
+    } else {
+        return Err("missing unit (use M/MiB or G/GiB)".to_string());
+    };
+
+    let value: u64 = num_str
+        .trim()
+        .parse()
+        .map_err(|_| "invalid number".to_string())?;
+    let mib = match suffix {
+        "mib" | "mb" | "m" => value,
+        "gib" | "gb" | "g" => value.saturating_mul(1024),
+        _ => return Err("unknown unit".to_string()),
+    };
+    Ok(mib)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1412,5 +1599,67 @@ mod tests {
         let result = app.handle_input(key(KeyCode::Enter));
         assert!(matches!(result, InputResult::StartFlash(_)));
         assert_eq!(app.current_step_type, InstallStepType::Flashing);
+    }
+
+    fn plan(efi: &str, boot: &str, root: &str) -> PartitionPlan {
+        PartitionPlan {
+            scheme: PartitionScheme::Mbr,
+            partitions: vec![
+                Partition {
+                    name: "EFI".to_string(),
+                    size: efi.to_string(),
+                    format: "vfat".to_string(),
+                    flags: vec!["esp".to_string()],
+                },
+                Partition {
+                    name: "BOOT".to_string(),
+                    size: boot.to_string(),
+                    format: "ext4".to_string(),
+                    flags: Vec::new(),
+                },
+                Partition {
+                    name: "ROOT".to_string(),
+                    size: root.to_string(),
+                    format: "btrfs".to_string(),
+                    flags: Vec::new(),
+                },
+                Partition {
+                    name: "DATA".to_string(),
+                    size: "remainder".to_string(),
+                    format: "ext4".to_string(),
+                    flags: Vec::new(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn validate_partition_plan_rejects_small_efi() {
+        let result = validate_partition_plan(&plan("256M", "1024M", "1800G"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_partition_plan_rejects_small_boot() {
+        let result = validate_partition_plan(&plan("1024M", "256M", "1800G"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_partition_plan_rejects_root_before_boot() {
+        let result = validate_partition_plan(&plan("1024M", "2048M", "2500M"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_partition_plan_rejects_root_percent() {
+        let result = validate_partition_plan(&plan("1024M", "2048M", "100%"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_partition_plan_accepts_defaults() {
+        let result = validate_partition_plan(&plan("1024MiB", "2048MiB", "1800GiB"));
+        assert!(result.is_ok());
     }
 }
