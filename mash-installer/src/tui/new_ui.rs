@@ -185,6 +185,15 @@ pub fn draw(f: &mut Frame, app: &App) {
                 "⌨️ Final confirmation details will render here.".to_string(),
             ));
         }
+        InstallStepType::DownloadingFedora => {
+            items.push(ListItem::new(
+                "⬇️ Download progress not available yet.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "ℹ️ Expected from downloader telemetry.".to_string(),
+            ));
+            items.push(ListItem::new("⌨️ Download status will render here.".to_string()));
+        }
         _ => {
             items.push(ListItem::new(
                 "ℹ️ Enter to continue - Esc to go back - q to quit".to_string(),
