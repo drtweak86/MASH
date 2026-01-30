@@ -55,6 +55,17 @@ pub fn draw(f: &mut Frame, app: &App) {
                 "⌨️ Use Enter to continue for now.".to_string(),
             ));
         }
+        InstallStepType::DiskConfirmation => {
+            items.push(ListItem::new(
+                "⚠️ No target disk selected yet.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "ℹ️ Expected from disk scan selection in DiskSelection.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "⌨️ Confirm disk choice will render here.".to_string(),
+            ));
+        }
         InstallStepType::BackupConfirmation => {
             items.push(ListItem::new(
                 "⚠️ This will erase data on the selected disk.".to_string(),
