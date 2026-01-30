@@ -305,6 +305,7 @@ impl InstallStepType {
 // App
 // ============================================================================
 
+use super::data_sources;
 use super::progress::ProgressState; // New import
 
 // ...
@@ -376,6 +377,36 @@ impl App {
                 }
             }
         });
+        let flags = data_sources::data_flags();
+        let real_disks = if flags.disks {
+            data_sources::scan_disks()
+        } else {
+            Vec::new()
+        };
+        let disks = if real_disks.is_empty() {
+            vec![
+                DiskOption {
+                    label: "USB Disk 32GB".to_string(),
+                    path: "/dev/sda".to_string(),
+                    size: "32 GB".to_string(),
+                },
+                DiskOption {
+                    label: "NVMe Disk 512GB".to_string(),
+                    path: "/dev/nvme0n1".to_string(),
+                    size: "512 GB".to_string(),
+                },
+            ]
+        } else {
+            real_disks
+                .into_iter()
+                .map(|disk| DiskOption {
+                    label: disk.name,
+                    path: disk.path,
+                    size: data_sources::human_size(disk.size_bytes),
+                })
+                .collect()
+        };
+
         Self {
             current_step_type: InstallStepType::Welcome, // NEW
             partition_plan: None,
@@ -393,18 +424,7 @@ impl App {
                 "Review wizard steps".to_string(),
             ],
             welcome_index: 0,
-            disks: vec![
-                DiskOption {
-                    label: "USB Disk 32GB".to_string(),
-                    path: "/dev/sda".to_string(),
-                    size: "32 GB".to_string(),
-                },
-                DiskOption {
-                    label: "NVMe Disk 512GB".to_string(),
-                    path: "/dev/nvme0n1".to_string(),
-                    size: "512 GB".to_string(),
-                },
-            ],
+            disks,
             disk_index: 0,
             disk_confirm_index: 0,
             partition_schemes: vec![PartitionScheme::Mbr, PartitionScheme::Gpt],

@@ -5,6 +5,7 @@
 //! - Live progress dashboard
 
 mod app;
+mod data_sources;
 mod input;
 mod new_app;
 mod new_ui;
