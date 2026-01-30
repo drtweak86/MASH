@@ -99,6 +99,17 @@ pub fn draw(f: &mut Frame, app: &App) {
                 "⌨️ Layout preview will render here.".to_string(),
             ));
         }
+        InstallStepType::PartitionCustomize => {
+            items.push(ListItem::new(
+                "🛠️ Custom partition options not loaded yet.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "ℹ️ Expected from partition layout details.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "⌨️ Customization controls will render here.".to_string(),
+            ));
+        }
         InstallStepType::FirstBootUser => {
             items.push(ListItem::new(
                 "🧑‍💻 First boot will prompt you to create a user.".to_string(),
