@@ -242,8 +242,8 @@ impl InstallStepType {
             InstallStepType::DiskConfirmation => Some(InstallStepType::BackupConfirmation), // Insert new step
             InstallStepType::BackupConfirmation => Some(InstallStepType::PartitionScheme), // After backup, go to PartitionScheme
             InstallStepType::PartitionScheme => Some(InstallStepType::PartitionLayout),
-            InstallStepType::PartitionLayout => Some(InstallStepType::DownloadSourceSelection),
-            InstallStepType::PartitionCustomize => Some(InstallStepType::DownloadSourceSelection), // Customize also goes to DownloadSourceSelection
+            InstallStepType::PartitionLayout => Some(InstallStepType::PartitionCustomize),
+            InstallStepType::PartitionCustomize => Some(InstallStepType::DownloadSourceSelection),
             InstallStepType::DownloadSourceSelection => Some(InstallStepType::ImageSelection),
             InstallStepType::ImageSelection => Some(InstallStepType::UefiDirectory),
             InstallStepType::UefiDirectory => Some(InstallStepType::LocaleSelection),
@@ -268,7 +268,7 @@ impl InstallStepType {
             InstallStepType::PartitionScheme => Some(InstallStepType::BackupConfirmation), // Previous to PartitionScheme
             InstallStepType::PartitionLayout => Some(InstallStepType::PartitionScheme),
             InstallStepType::PartitionCustomize => Some(InstallStepType::PartitionLayout),
-            InstallStepType::DownloadSourceSelection => Some(InstallStepType::PartitionLayout), // Customize also goes to DownloadSourceSelection
+            InstallStepType::DownloadSourceSelection => Some(InstallStepType::PartitionCustomize),
             InstallStepType::ImageSelection => Some(InstallStepType::DownloadSourceSelection),
             InstallStepType::UefiDirectory => Some(InstallStepType::ImageSelection),
             InstallStepType::LocaleSelection => Some(InstallStepType::UefiDirectory),
@@ -322,6 +322,8 @@ pub struct App {
     pub progress_state: Arc<Mutex<ProgressState>>,
     pub backup_confirmed: bool,
     pub backup_choice_index: usize,
+    pub welcome_options: Vec<String>,
+    pub welcome_index: usize,
     pub disks: Vec<DiskOption>,
     pub disk_index: usize,
     pub disk_confirm_index: usize,
@@ -344,6 +346,10 @@ pub struct App {
     pub first_boot_options: Vec<String>,
     pub first_boot_index: usize,
     pub confirmation_index: usize,
+    pub downloading_fedora_index: usize,
+    pub downloading_uefi_index: usize,
+    pub downloaded_fedora: bool,
+    pub downloaded_uefi: bool,
     pub is_running: bool,
     pub status_message: String,
     pub error_message: Option<String>,
@@ -382,6 +388,11 @@ impl App {
             progress_state,
             backup_confirmed: false,
             backup_choice_index: 1,
+            welcome_options: vec![
+                "Begin installation".to_string(),
+                "Review wizard steps".to_string(),
+            ],
+            welcome_index: 0,
             disks: vec![
                 DiskOption {
                     label: "USB Disk 32GB".to_string(),
@@ -472,6 +483,10 @@ impl App {
             ],
             first_boot_index: 0,
             confirmation_index: 0,
+            downloading_fedora_index: 0,
+            downloading_uefi_index: 0,
+            downloaded_fedora: false,
+            downloaded_uefi: false,
             is_running: false,
             status_message: "👋 Welcome to MASH!".to_string(),
             error_message: None,
@@ -531,6 +546,8 @@ impl App {
                 self.apply_list_action(action)
             }
             InstallStepType::Confirmation => self.handle_confirmation_input(key),
+            InstallStepType::DownloadingFedora => self.handle_downloading_fedora_input(key),
+            InstallStepType::DownloadingUefi => self.handle_downloading_uefi_input(key),
             step if step.is_config_step() => self.handle_generic_config_input(key),
             InstallStepType::Flashing => self.handle_flashing_input(key),
             _ => InputResult::Continue, // Default: just continue if no specific handler
@@ -539,6 +556,16 @@ impl App {
 
     fn handle_welcome_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
+            KeyCode::Up | KeyCode::Left => {
+                let len = self.welcome_options.len();
+                Self::adjust_index(len, &mut self.welcome_index, -1);
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Right => {
+                let len = self.welcome_options.len();
+                Self::adjust_index(len, &mut self.welcome_index, 1);
+                InputResult::Continue
+            }
             KeyCode::Enter => {
                 self.current_step_type = InstallStepType::DiskSelection;
                 self.error_message = None;
@@ -697,10 +724,17 @@ impl App {
                         return InputResult::Continue;
                     }
                     self.is_running = true;
-                    self.current_step_type = InstallStepType::Flashing;
-                    self.status_message = "🛠️ Starting installation...".to_string();
-                    if let Some(config) = self.build_flash_config() {
-                        return InputResult::StartFlash(config);
+                    self.downloaded_fedora = false;
+                    self.downloaded_uefi = false;
+                    if self.requires_fedora_download() {
+                        self.current_step_type = InstallStepType::DownloadingFedora;
+                        self.status_message = "⬇️ Preparing Fedora download...".to_string();
+                    } else if self.requires_uefi_download() {
+                        self.current_step_type = InstallStepType::DownloadingUefi;
+                        self.status_message = "⬇️ Preparing UEFI download...".to_string();
+                    } else {
+                        self.current_step_type = InstallStepType::Flashing;
+                        self.status_message = "🛠️ Starting installation...".to_string();
                     }
                     InputResult::Continue
                 } else if let Some(prev) = self.current_step_type.prev() {
@@ -716,6 +750,73 @@ impl App {
             }
             KeyCode::Down | KeyCode::Right => {
                 Self::adjust_index(2, &mut self.confirmation_index, 1);
+                InputResult::Continue
+            }
+            KeyCode::Esc => {
+                if let Some(prev) = self.current_step_type.prev() {
+                    self.current_step_type = prev;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Char('q') => InputResult::Quit,
+            _ => InputResult::Continue,
+        }
+    }
+
+    fn handle_downloading_fedora_input(&mut self, key: KeyEvent) -> InputResult {
+        match key.code {
+            KeyCode::Up | KeyCode::Left => {
+                Self::adjust_index(2, &mut self.downloading_fedora_index, -1);
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Right => {
+                Self::adjust_index(2, &mut self.downloading_fedora_index, 1);
+                InputResult::Continue
+            }
+            KeyCode::Enter => {
+                if self.downloading_fedora_index == 0 {
+                    self.downloaded_fedora = true;
+                    if self.requires_uefi_download() {
+                        self.current_step_type = InstallStepType::DownloadingUefi;
+                        self.status_message = "⬇️ Preparing UEFI download...".to_string();
+                    } else {
+                        self.current_step_type = InstallStepType::Flashing;
+                        self.status_message = "🛠️ Starting installation...".to_string();
+                    }
+                } else if let Some(prev) = self.current_step_type.prev() {
+                    self.current_step_type = prev;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Esc => {
+                if let Some(prev) = self.current_step_type.prev() {
+                    self.current_step_type = prev;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Char('q') => InputResult::Quit,
+            _ => InputResult::Continue,
+        }
+    }
+
+    fn handle_downloading_uefi_input(&mut self, key: KeyEvent) -> InputResult {
+        match key.code {
+            KeyCode::Up | KeyCode::Left => {
+                Self::adjust_index(2, &mut self.downloading_uefi_index, -1);
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Right => {
+                Self::adjust_index(2, &mut self.downloading_uefi_index, 1);
+                InputResult::Continue
+            }
+            KeyCode::Enter => {
+                if self.downloading_uefi_index == 0 {
+                    self.downloaded_uefi = true;
+                    self.current_step_type = InstallStepType::Flashing;
+                    self.status_message = "🛠️ Starting installation...".to_string();
+                } else if let Some(prev) = self.current_step_type.prev() {
+                    self.current_step_type = prev;
+                }
                 InputResult::Continue
             }
             KeyCode::Esc => {
@@ -799,6 +900,29 @@ impl App {
             KeyCode::Char('q') => InputResult::Quit,
             _ => InputResult::Continue,
         }
+    }
+
+    fn requires_fedora_download(&self) -> bool {
+        let source_is_download = self
+            .image_sources
+            .get(self.image_source_index)
+            .map(|source| source.value == ImageSource::DownloadFedora)
+            .unwrap_or(false);
+        let option_enabled = self
+            .options
+            .iter()
+            .find(|option| option.label == "Download Fedora image")
+            .map(|option| option.enabled)
+            .unwrap_or(false);
+        source_is_download || option_enabled
+    }
+
+    fn requires_uefi_download(&self) -> bool {
+        self.options
+            .iter()
+            .find(|option| option.label == "Download UEFI firmware")
+            .map(|option| option.enabled)
+            .unwrap_or(false)
     }
 
     pub fn progress_state_snapshot(&self) -> ProgressState {
