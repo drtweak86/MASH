@@ -154,6 +154,17 @@ pub fn draw(f: &mut Frame, app: &App) {
                 "⌨️ Locale and keymap options will render here.".to_string(),
             ));
         }
+        InstallStepType::Options => {
+            items.push(ListItem::new(
+                "⚙️ Installation options not loaded yet.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "ℹ️ Expected from defaults and user selections.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "⌨️ Option toggles will render here.".to_string(),
+            ));
+        }
         InstallStepType::FirstBootUser => {
             items.push(ListItem::new(
                 "🧑‍💻 First boot will prompt you to create a user.".to_string(),
