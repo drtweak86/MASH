@@ -65,3 +65,4 @@ __pycache__/
 target/
 # --- /MASH Merge Toolkit ---
 .aider*
+mash-installer/*.bak.*
