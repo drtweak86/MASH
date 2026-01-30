@@ -48,19 +48,9 @@ pub fn run(_cli: &Cli, _watch: bool, _dry_run: bool) -> Result<new_app::InputRes
 
     // Create app state
     let mut app = new_app::App::new();
-    app.steps.push(new_app::InstallStep {
-        name: "Partition Planning".to_string(),
-        state: new_app::StepState::Pending,
-        task: Box::new(|| Ok(())),
-    });
-    app.steps.push(new_app::InstallStep {
-        name: "Download Fedora Image".to_string(),
-        state: new_app::StepState::Pending,
-        task: Box::new(|| Ok(())),
-    });
 
     // Main loop
-    let _wizard_result = run_new_ui(&mut terminal, &mut app);
+    let final_result = run_new_ui(&mut terminal, &mut app)?;
 
     // Restore terminal
     disable_raw_mode()?;
@@ -71,41 +61,14 @@ pub fn run(_cli: &Cli, _watch: bool, _dry_run: bool) -> Result<new_app::InputRes
     )?;
     terminal.show_cursor()?;
 
-    // For now, we'll just return Quit
-    Ok(new_app::InputResult::Quit) // Changed app::InputResult::Quit to new_app::InputResult::Quit
+    Ok(final_result)
 }
 
 /// Main application loop (single screen)
 pub fn run_new_ui(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut new_app::App,
-) -> Result<()> {
-    let tx = app.progress_tx.clone().unwrap();
-    let steps_len = app.steps.len();
-
-    // Spawn a thread to simulate work
-    thread::spawn(move || {
-        for i in 0..steps_len {
-            let _ = tx.send(new_app::ProgressEvent {
-                step_id: i,
-                message: "Starting...".to_string(),
-                progress: 0.0,
-            });
-            thread::sleep(Duration::from_secs(1));
-            let _ = tx.send(new_app::ProgressEvent {
-                step_id: i,
-                message: "In progress...".to_string(),
-                progress: 0.5,
-            });
-            thread::sleep(Duration::from_secs(1));
-            let _ = tx.send(new_app::ProgressEvent {
-                step_id: i,
-                message: "Done.".to_string(),
-                progress: 1.0,
-            });
-        }
-    });
-
+) -> Result<new_app::InputResult> { // Return InputResult for handling in run()
     loop {
         // Draw UI
         terminal.draw(|f| new_ui::draw(f, app))?;
@@ -113,23 +76,21 @@ pub fn run_new_ui(
         // Handle input with timeout
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && (key.code == KeyCode::Char('c') || key.code == KeyCode::Char('q'))
-                {
-                    return Ok(());
+                // Pass key event to app's handler
+                let input_result = app.handle_input(key);
+                match input_result {
+                    new_app::InputResult::Quit => return Ok(new_app::InputResult::Quit),
+                    new_app::InputResult::Complete => return Ok(new_app::InputResult::Complete),
+                    _ => {} // Continue, StartFlash, StartDownload are handled by app internally for now
                 }
             }
         }
 
-        // Check for progress updates
+        // Check for progress updates (still needed for asynchronous updates)
         if let Some(ref rx) = app.progress_rx {
             while let Ok(event) = rx.try_recv() {
-                if event.progress == 0.0 {
-                    app.steps[event.step_id].state = new_app::StepState::Running;
-                }
-                if event.progress == 1.0 {
-                    app.steps[event.step_id].state = new_app::StepState::Completed;
-                }
+                // This logic needs to be updated to map to the new_app::App's state more accurately
+                // For now, just update status message
                 app.status_message = event.message;
             }
         }

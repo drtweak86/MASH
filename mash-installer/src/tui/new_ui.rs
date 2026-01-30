@@ -1,6 +1,6 @@
 //! New UI module for the single-screen TUI
 
-use crate::tui::new_app::App;
+use crate::tui::new_app::{App, StepState};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
@@ -29,22 +29,10 @@ pub fn draw(f: &mut Frame, app: &App) {
         .title("MASH Installer");
     f.render_widget(title, chunks[0]);
 
-    // Steps
-    let items: Vec<ListItem> = app
-        .steps
-        .iter()
-        .map(|step| {
-            let state_symbol = match step.state {
-                super::new_app::StepState::Pending => "[ ]",
-                super::new_app::StepState::Running => "[>]",
-                super::new_app::StepState::Completed => "[✓]",
-                super::new_app::StepState::Failed => "[✗]",
-                super::new_app::StepState::Skipped => "[-]",
-            };
-            ListItem::new(format!("{} {}", state_symbol, step.name))
-        })
-        .collect();
-    let list = List::new(items);
+    // Current Step Display
+    let current_step_title = app.current_step_type.title();
+    let current_step_item = ListItem::new(format!(">> {}", current_step_title));
+    let list = List::new(vec![current_step_item]);
     f.render_widget(list, chunks[1]);
 
     // Progress bar
