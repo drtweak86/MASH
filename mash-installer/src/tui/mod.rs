@@ -17,17 +17,18 @@ pub use flash_config::{FlashConfig, ImageSource}; // Update the pub use statemen
 
 use crate::{cli::Cli, errors::Result};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
-use std::thread;
+
 use std::time::Duration;
 
 /// Run the TUI wizard
-pub fn run(_cli: &Cli, _watch: bool, _dry_run: bool) -> Result<new_app::InputResult> { // Changed app::InputResult to new_app::InputResult
+pub fn run(_cli: &Cli, _watch: bool, _dry_run: bool) -> Result<new_app::InputResult> {
+    // Changed app::InputResult to new_app::InputResult
     use std::io::IsTerminal;
 
     // Check if we have a real terminal
@@ -68,7 +69,8 @@ pub fn run(_cli: &Cli, _watch: bool, _dry_run: bool) -> Result<new_app::InputRes
 pub fn run_new_ui(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut new_app::App,
-) -> Result<new_app::InputResult> { // Return InputResult for handling in run()
+) -> Result<new_app::InputResult> {
+    // Return InputResult for handling in run()
     loop {
         // Draw UI
         terminal.draw(|f| new_ui::draw(f, app))?;
@@ -92,6 +94,15 @@ pub fn run_new_ui(
                 // This logic needs to be updated to map to the new_app::App's state more accurately
                 // For now, just update status message
                 app.status_message = event.message;
+            }
+        }
+
+        // NEW: Check for flash_progress_receiver updates
+        if let Some(ref rx) = app.flash_progress_receiver {
+            while let Ok(update) = rx.try_recv() {
+                // Here, you would parse the ProgressUpdate and update app.progress or app.status_message
+                // For now, let's just update the status message as a placeholder.
+                app.status_message = format!("Flash Progress: {:?}", update); // Placeholder
             }
         }
     }

@@ -186,7 +186,6 @@ pub fn run(
     run_with_progress(
         &cli_flash_config,
         yes_i_know, // yes_i_know is still a separate parameter for safety
-        None,       // progress_tx is handled by FlashConfig now
     )
 }
 
@@ -194,7 +193,6 @@ pub fn run(
 pub fn run_with_progress(
     config: &FlashConfig,
     yes_i_know: bool, // Still required separately for explicit confirmation
-    progress_tx: Option<Sender<ProgressUpdate>>, // Explicitly passed for thread ownership
 ) -> Result<()> {
     info!("🍠 MASH Full-Loop Installer: Fedora KDE + UEFI Boot for RPi4");
     info!("📋 GPT layout with 4 partitions (EFI, BOOT, ROOT/btrfs, DATA)");
@@ -246,7 +244,7 @@ pub fn run_with_progress(
         auto_unmount: config.auto_unmount,
         locale: config.locale.clone(),
         early_ssh: config.early_ssh,
-        progress_tx, // Use the passed progress_tx
+        progress_tx: config.progress_tx.clone(), // Use the progress_tx from config
         work_dir: work_dir.clone(),
         loop_device: None,
         efi_size: config.efi_size.clone(),
