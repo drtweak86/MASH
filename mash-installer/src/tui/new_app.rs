@@ -3,7 +3,9 @@
 #![allow(dead_code)]
 
 use crate::cli::PartitionScheme;
+use crate::locale::LOCALES;
 use crate::tui::flash_config::{FlashConfig, ImageSource};
+use clap::ValueEnum;
 use crossterm::event::{KeyCode, KeyEvent}; // New import for KeyEvent
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
@@ -305,6 +307,7 @@ impl InstallStepType {
 // App
 // ============================================================================
 
+use super::data_sources;
 use super::progress::ProgressState; // New import
 
 // ...
@@ -350,6 +353,7 @@ pub struct App {
     pub downloading_uefi_index: usize,
     pub downloaded_fedora: bool,
     pub downloaded_uefi: bool,
+    pub destructive_armed: bool,
     pub is_running: bool,
     pub status_message: String,
     pub error_message: Option<String>,
@@ -376,6 +380,90 @@ impl App {
                 }
             }
         });
+        let flags = data_sources::data_flags();
+        let real_disks = if flags.disks {
+            data_sources::scan_disks()
+        } else {
+            Vec::new()
+        };
+        let disks = if real_disks.is_empty() {
+            vec![
+                DiskOption {
+                    label: "USB Disk 32GB".to_string(),
+                    path: "/dev/sda".to_string(),
+                    size: "32 GB".to_string(),
+                },
+                DiskOption {
+                    label: "NVMe Disk 512GB".to_string(),
+                    path: "/dev/nvme0n1".to_string(),
+                    size: "512 GB".to_string(),
+                },
+            ]
+        } else {
+            real_disks
+                .into_iter()
+                .map(|disk| DiskOption {
+                    label: disk.name,
+                    path: disk.path,
+                    size: data_sources::human_size(disk.size_bytes),
+                })
+                .collect()
+        };
+
+        let partition_schemes = PartitionScheme::value_variants().to_vec();
+        let scheme_index = partition_schemes
+            .iter()
+            .position(|scheme| *scheme == PartitionScheme::Mbr)
+            .unwrap_or(0);
+        let images = if flags.images {
+            let search_paths = data_sources::default_image_search_paths();
+            let mut images = data_sources::collect_local_images(&search_paths);
+            images.extend(data_sources::collect_remote_images());
+            images
+        } else {
+            Vec::new()
+        };
+        let images = if images.is_empty() {
+            vec![
+                ImageOption {
+                    label: "Fedora 43 KDE".to_string(),
+                    version: "43".to_string(),
+                    edition: "KDE".to_string(),
+                    path: PathBuf::from("/tmp/fedora-43-kde.raw"),
+                },
+                ImageOption {
+                    label: "Fedora 42 Server".to_string(),
+                    version: "42".to_string(),
+                    edition: "Server".to_string(),
+                    path: PathBuf::from("/tmp/fedora-42-server.raw"),
+                },
+            ]
+        } else {
+            images
+                .into_iter()
+                .map(|image| ImageOption {
+                    label: image.label,
+                    version: image.version,
+                    edition: image.edition,
+                    path: image.path,
+                })
+                .collect()
+        };
+
+        let locales = if flags.locales {
+            data_sources::collect_locales()
+        } else {
+            Vec::new()
+        };
+        let locales = if locales.is_empty() {
+            LOCALES
+                .iter()
+                .map(|locale| format!("{}:{}", locale.lang, locale.keymap))
+                .collect()
+        } else {
+            locales
+        };
+
         Self {
             current_step_type: InstallStepType::Welcome, // NEW
             partition_plan: None,
@@ -393,22 +481,11 @@ impl App {
                 "Review wizard steps".to_string(),
             ],
             welcome_index: 0,
-            disks: vec![
-                DiskOption {
-                    label: "USB Disk 32GB".to_string(),
-                    path: "/dev/sda".to_string(),
-                    size: "32 GB".to_string(),
-                },
-                DiskOption {
-                    label: "NVMe Disk 512GB".to_string(),
-                    path: "/dev/nvme0n1".to_string(),
-                    size: "512 GB".to_string(),
-                },
-            ],
+            disks,
             disk_index: 0,
             disk_confirm_index: 0,
-            partition_schemes: vec![PartitionScheme::Mbr, PartitionScheme::Gpt],
-            scheme_index: 0,
+            partition_schemes,
+            scheme_index,
             partition_layouts: vec![
                 "EFI 1024MiB | BOOT 2048MiB | ROOT 1800GiB | DATA rest".to_string(),
                 "EFI 512MiB | BOOT 1024MiB | ROOT 64GiB | DATA rest".to_string(),
@@ -432,31 +509,14 @@ impl App {
                 },
             ],
             image_source_index: 0,
-            images: vec![
-                ImageOption {
-                    label: "Fedora 43 KDE".to_string(),
-                    version: "43".to_string(),
-                    edition: "KDE".to_string(),
-                    path: PathBuf::from("/tmp/fedora-43-kde.raw"),
-                },
-                ImageOption {
-                    label: "Fedora 42 Server".to_string(),
-                    version: "42".to_string(),
-                    edition: "Server".to_string(),
-                    path: PathBuf::from("/tmp/fedora-42-server.raw"),
-                },
-            ],
+            images,
             image_index: 0,
             uefi_dirs: vec![
                 PathBuf::from("/tmp/uefi"),
                 PathBuf::from("/opt/uefi-firmware"),
             ],
             uefi_index: 0,
-            locales: vec![
-                "en_US.UTF-8:us".to_string(),
-                "en_GB.UTF-8:uk".to_string(),
-                "de_DE.UTF-8:de".to_string(),
-            ],
+            locales,
             locale_index: 0,
             options: vec![
                 OptionToggle {
@@ -487,6 +547,7 @@ impl App {
             downloading_uefi_index: 0,
             downloaded_fedora: false,
             downloaded_uefi: false,
+            destructive_armed: false,
             is_running: false,
             status_message: "👋 Welcome to MASH!".to_string(),
             error_message: None,
@@ -716,11 +777,22 @@ impl App {
 
     fn handle_confirmation_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                self.destructive_armed = !self.destructive_armed;
+                self.error_message = None;
+                InputResult::Continue
+            }
             KeyCode::Enter => {
                 if self.confirmation_index == 0 {
                     if !self.backup_confirmed {
                         self.error_message =
                             Some("Backup confirmation required before installation.".to_string());
+                        return InputResult::Continue;
+                    }
+                    if !self.destructive_armed {
+                        self.error_message = Some(
+                            "Destructive operations are disarmed. Arm before starting.".to_string(),
+                        );
                         return InputResult::Continue;
                     }
                     self.is_running = true;
@@ -764,6 +836,12 @@ impl App {
     }
 
     fn handle_downloading_fedora_input(&mut self, key: KeyEvent) -> InputResult {
+        if !self.destructive_armed {
+            self.error_message =
+                Some("Destructive operations are disarmed. Arm before downloading.".to_string());
+            self.current_step_type = InstallStepType::Confirmation;
+            return InputResult::Continue;
+        }
         match key.code {
             KeyCode::Up | KeyCode::Left => {
                 Self::adjust_index(2, &mut self.downloading_fedora_index, -1);
@@ -800,6 +878,12 @@ impl App {
     }
 
     fn handle_downloading_uefi_input(&mut self, key: KeyEvent) -> InputResult {
+        if !self.destructive_armed {
+            self.error_message =
+                Some("Destructive operations are disarmed. Arm before downloading.".to_string());
+            self.current_step_type = InstallStepType::Confirmation;
+            return InputResult::Continue;
+        }
         match key.code {
             KeyCode::Up | KeyCode::Left => {
                 Self::adjust_index(2, &mut self.downloading_uefi_index, -1);
@@ -887,6 +971,12 @@ impl App {
     }
 
     fn handle_flashing_input(&mut self, key: KeyEvent) -> InputResult {
+        if !self.destructive_armed {
+            self.error_message =
+                Some("Destructive operations are disarmed. Arm before flashing.".to_string());
+            self.current_step_type = InstallStepType::Confirmation;
+            return InputResult::Continue;
+        }
         let is_complete = self
             .progress_state
             .lock()

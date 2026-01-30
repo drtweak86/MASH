@@ -229,8 +229,13 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::Confirmation => {
             items.push("✅ Review configuration summary:".to_string());
+            items.push(format!(
+                "Armed for destructive operations: {} (press A to toggle)",
+                if app.destructive_armed { "Yes" } else { "No" }
+            ));
             if let Some(disk) = app.disks.get(app.disk_index) {
                 items.push(format!("Disk: {} ({})", disk.path, disk.size));
+                items.push(format!("Disk label: {}", disk.label));
             }
             if let Some(scheme) = app.partition_schemes.get(app.scheme_index) {
                 items.push(format!("Scheme: {}", scheme));
@@ -257,6 +262,23 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
             if let Some(locale) = app.locales.get(app.locale_index) {
                 items.push(format!("Locale: {}", locale));
             }
+            let download_fedora = app
+                .options
+                .iter()
+                .find(|option| option.label == "Download Fedora image")
+                .map(|option| option.enabled)
+                .unwrap_or(false);
+            let download_uefi = app
+                .options
+                .iter()
+                .find(|option| option.label == "Download UEFI firmware")
+                .map(|option| option.enabled)
+                .unwrap_or(false);
+            items.push(format!(
+                "Downloads: Fedora={} | UEFI={}",
+                if download_fedora { "Yes" } else { "No" },
+                if download_uefi { "Yes" } else { "No" }
+            ));
             items.push("Options:".to_string());
             for option in &app.options {
                 items.push(format!(
@@ -362,8 +384,7 @@ fn expected_actions(step: InstallStepType) -> String {
         | InstallStepType::UefiDirectory
         | InstallStepType::LocaleSelection
         | InstallStepType::FirstBootUser
-        | InstallStepType::Confirmation => "Up/Down, Enter, Esc, q".to_string(),
-        _ => "Enter, Esc, q".to_string(),
+        | InstallStepType::Confirmation => "Up/Down, Enter, Esc, A, q".to_string(),
     }
 }
 

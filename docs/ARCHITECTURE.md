@@ -38,6 +38,65 @@ The TUI uses Ratatui to render a single-screen interface showing:
 
 **Entry point:** `tui::run()` → `new_app::App` + `new_ui::draw()`
 
+### TUI Evolution: Phase B1 → B3
+
+The TUI has been built in phases to keep CI green while progressively replacing stub data with real, read-only sources.
+
+#### Phase B1 - Stub-backed UI State (no real disk logic)
+
+What changed and why:
+- Goal: get a complete wizard flow on-screen quickly, with selectable options everywhere and no blank screens.
+- Reason: enable UI iteration without any dependency on disk scanning, downloads, or flashing.
+
+How it was implemented:
+- Added a single-screen wizard state machine in `tui/new_app.rs` with explicit step types.
+- Built full step rendering in `tui/new_ui.rs` using in-memory stub lists.
+- Added progress scaffolding in `tui/progress.rs` to render telemetry without depending on real operations.
+- Kept any flashing logic untouched; UI flow driven entirely by stub state.
+
+Result:
+- Every step renders a selectable list and supports forward/back navigation.
+- Confirmation screen is derived from the current in-memory state.
+
+#### Phase B2 - TUI Flow Completion (stub-safe)
+
+What changed and why:
+- Goal: ensure every wizard step is reachable in sequence and selectable.
+- Reason: eliminate dead ends and placeholder content before introducing real data sources.
+
+How it was implemented:
+- Rewired step transitions so `PartitionLayout -> PartitionCustomize -> DownloadSourceSelection`.
+- Added explicit per-step input handling for download steps, still stubbed.
+- Replaced "content not loaded yet" placeholders with real, selectable stub options.
+- Expanded confirmation summary to include more selected values.
+
+Result:
+- The entire wizard path is traversable from Welcome to Complete using only stub state.
+- Download steps are simulated but selectable, with no side effects.
+
+#### Phase B3 - Read-only data plumbing behind feature flags
+
+What changed and why:
+- Goal: start plumbing real data sources while keeping behavior non-destructive by default.
+- Reason: allow real-world validation of lists without any disk writes or downloads.
+
+How it was implemented:
+- Added `tui/data_sources.rs` for read-only data collectors (no side effects).
+- Introduced feature flags (environment variables) to enable real data per category:
+  - `MASH_TUI_REAL_DATA=1` enables all read-only sources.
+  - `MASH_TUI_REAL_DISKS=1` enables disk scan from `/sys/block`.
+  - `MASH_TUI_REAL_IMAGES=1` enables local image metadata scan + remote metadata list.
+  - `MASH_TUI_REAL_LOCALES=1` enables locale/keymap lists from system files.
+  - `MASH_TUI_IMAGE_DIRS=/path1:/path2` overrides local image scan paths.
+- Disk scan uses `/sys/block` only and formats sizes; no writes.
+- Image metadata uses filenames for local matches and enum-driven remote metadata; no downloads.
+- Locale/keymap uses `/usr/share/i18n/SUPPORTED` and `/usr/share/X11/xkb/rules/base.lst`.
+- Confirmation summary now reflects real selections (when flags are enabled) without altering UI layout.
+
+Result:
+- Default behavior remains stubbed and safe.
+- Real lists can be turned on for validation without any destructive operations.
+
 ### CLI Mode
 
 For scripting and automation, use the `flash` subcommand:
