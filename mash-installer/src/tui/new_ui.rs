@@ -172,6 +172,8 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::PartitionScheme => {
             items.push("🧩 Select a partition scheme:".to_string());
+            items
+                .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
             let options = app
                 .partition_schemes
                 .iter()
@@ -181,6 +183,7 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::PartitionLayout => {
             items.push("📐 Select a partition layout:".to_string());
+            items.push("Use ↑/↓ or Tab to choose • Y to continue • N/Esc to go back.".to_string());
             let layout_options = app
                 .partition_layouts
                 .iter()
@@ -435,16 +438,16 @@ fn expected_actions(step: InstallStepType) -> String {
         }
         InstallStepType::Options => "Up/Down, Space, Enter, Esc, q".to_string(),
         InstallStepType::Welcome => "Up/Down, Enter, q".to_string(),
+        InstallStepType::PartitionLayout => "Up/Down/Tab, Y/N, Enter, Esc, q".to_string(),
+        InstallStepType::PartitionScheme => "Up/Down/Tab, Enter, Esc, q".to_string(),
         InstallStepType::DiskSelection
-        | InstallStepType::PartitionScheme
-        | InstallStepType::PartitionLayout
         | InstallStepType::PartitionCustomize
         | InstallStepType::DownloadSourceSelection
         | InstallStepType::ImageSelection
         | InstallStepType::UefiDirectory
         | InstallStepType::LocaleSelection
         | InstallStepType::FirstBootUser
-        | InstallStepType::Confirmation => "Up/Down, Enter, Esc, A, q".to_string(),
+        | InstallStepType::Confirmation => "Up/Down/Tab, Enter, Esc, A, q".to_string(),
     }
 }
 

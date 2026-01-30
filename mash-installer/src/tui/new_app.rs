@@ -598,11 +598,7 @@ impl App {
                 let action = Self::list_action(key, len, &mut self.scheme_index);
                 self.apply_list_action(action)
             }
-            InstallStepType::PartitionLayout => {
-                let len = self.partition_layouts.len();
-                let action = Self::list_action(key, len, &mut self.layout_index);
-                self.apply_list_action(action)
-            }
+            InstallStepType::PartitionLayout => self.handle_partition_layout_input(key),
             InstallStepType::PartitionCustomize => {
                 let len = self.partition_customizations.len();
                 let action = Self::list_action(key, len, &mut self.customize_index);
@@ -964,11 +960,11 @@ impl App {
 
     fn list_action(key: KeyEvent, len: usize, index: &mut usize) -> ListAction {
         match key.code {
-            KeyCode::Up | KeyCode::Left => {
+            KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
                 Self::adjust_index(len, index, -1);
                 ListAction::None
             }
-            KeyCode::Down | KeyCode::Right => {
+            KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
                 Self::adjust_index(len, index, 1);
                 ListAction::None
             }
@@ -1017,6 +1013,29 @@ impl App {
             }
             KeyCode::Char('q') => InputResult::Quit,
             _ => InputResult::Continue,
+        }
+    }
+
+    fn handle_partition_layout_input(&mut self, key: KeyEvent) -> InputResult {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                self.error_message = None;
+                if let Some(next) = self.current_step_type.next() {
+                    self.current_step_type = next;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                if let Some(prev) = self.current_step_type.prev() {
+                    self.current_step_type = prev;
+                }
+                InputResult::Continue
+            }
+            _ => {
+                let len = self.partition_layouts.len();
+                let action = Self::list_action(key, len, &mut self.layout_index);
+                self.apply_list_action(action)
+            }
         }
     }
 
@@ -1126,5 +1145,41 @@ impl App {
                 .map(|image| image.edition.clone())
                 .unwrap_or_else(|| "KDE".to_string()),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyEventKind, KeyEventState, KeyModifiers};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    #[test]
+    fn tab_cycles_partition_scheme() {
+        let mut app = App::new();
+        app.current_step_type = InstallStepType::PartitionScheme;
+        let initial = app.scheme_index;
+        app.handle_input(key(KeyCode::Tab));
+        assert_ne!(app.scheme_index, initial);
+    }
+
+    #[test]
+    fn partition_layout_accepts_yes_no() {
+        let mut app = App::new();
+        app.current_step_type = InstallStepType::PartitionLayout;
+        app.handle_input(key(KeyCode::Char('y')));
+        assert_eq!(app.current_step_type, InstallStepType::PartitionCustomize);
+
+        app.current_step_type = InstallStepType::PartitionLayout;
+        app.handle_input(key(KeyCode::Char('n')));
+        assert_eq!(app.current_step_type, InstallStepType::PartitionScheme);
     }
 }
