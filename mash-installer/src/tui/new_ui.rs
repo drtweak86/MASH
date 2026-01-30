@@ -212,6 +212,13 @@ pub fn draw(f: &mut Frame, app: &App) {
             ));
             items.push(ListItem::new("⌨️ Press Enter when complete.".to_string()));
         }
+        InstallStepType::Complete => {
+            items.push(ListItem::new("🎉 Installation complete.".to_string()));
+            items.push(ListItem::new(
+                "ℹ️ Final summary will render here.".to_string(),
+            ));
+            items.push(ListItem::new("⌨️ Press Enter to exit.".to_string()));
+        }
         _ => {
             items.push(ListItem::new(
                 "ℹ️ Enter to continue - Esc to go back - q to quit".to_string(),
