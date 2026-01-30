@@ -44,6 +44,10 @@ pub struct Cli {
     /// MASH root directory (contains images/ and uefi/ subdirs)
     #[arg(long, default_value = ".", global = true)]
     pub mash_root: PathBuf,
+
+    /// Dump TUI step render text to stdout and exit
+    #[arg(long, global = true)]
+    pub dump_tui: bool,
 }
 
 #[derive(Subcommand)]

@@ -157,6 +157,29 @@ pub enum InstallStepType {
 }
 
 impl InstallStepType {
+    pub fn all() -> &'static [InstallStepType] {
+        &[
+            InstallStepType::Welcome,
+            InstallStepType::DiskSelection,
+            InstallStepType::DiskConfirmation,
+            InstallStepType::BackupConfirmation,
+            InstallStepType::PartitionScheme,
+            InstallStepType::PartitionLayout,
+            InstallStepType::PartitionCustomize,
+            InstallStepType::DownloadSourceSelection,
+            InstallStepType::ImageSelection,
+            InstallStepType::UefiDirectory,
+            InstallStepType::LocaleSelection,
+            InstallStepType::Options,
+            InstallStepType::FirstBootUser,
+            InstallStepType::Confirmation,
+            InstallStepType::DownloadingFedora,
+            InstallStepType::DownloadingUefi,
+            InstallStepType::Flashing,
+            InstallStepType::Complete,
+        ]
+    }
+
     pub fn title(&self) -> &'static str {
         match self {
             InstallStepType::Welcome => "Enter the Dojo",

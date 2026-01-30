@@ -22,6 +22,11 @@ fn main() -> anyhow::Result<()> {
     logging::init();
     let cli = cli::Cli::parse();
 
+    if cli.dump_tui {
+        tui::dump_all_steps()?;
+        return Ok(());
+    }
+
     match &cli.command {
         // No subcommand = launch TUI wizard (default)
         None => {

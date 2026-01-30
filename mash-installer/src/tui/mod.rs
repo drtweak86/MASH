@@ -17,7 +17,7 @@ pub use flash_config::{FlashConfig, ImageSource}; // Update the pub use statemen
 
 use crate::{cli::Cli, errors::Result, flash};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -66,6 +66,16 @@ pub fn run(_cli: &Cli, _watch: bool, _dry_run: bool) -> Result<new_app::InputRes
     Ok(final_result)
 }
 
+pub fn dump_all_steps() -> Result<()> {
+    let mut app = new_app::App::new();
+    for step in new_app::InstallStepType::all() {
+        app.current_step_type = *step;
+        let dump = new_ui::dump_step(&app);
+        println!("{}", dump);
+    }
+    Ok(())
+}
+
 /// Main application loop (single screen)
 pub fn run_new_ui(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -80,6 +90,11 @@ pub fn run_new_ui(
         // Handle input with timeout
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
+                if key.code == KeyCode::F(12) {
+                    let dump = new_ui::dump_step(app);
+                    println!("{}", dump);
+                    continue;
+                }
                 // Pass key event to app's handler
                 let input_result = app.handle_input(key);
                 match input_result {
