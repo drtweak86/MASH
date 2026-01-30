@@ -1,4 +1,12 @@
-  steps:
+name: Codex Review
+
+on:
+  pull_request:
+
+jobs:
+  codex:
+    runs-on: ubuntu-latest
+    steps:
       - uses: actions/checkout@v5
         with:
           ref: refs/pull/${{ github.event.pull_request.number }}/merge
