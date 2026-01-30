@@ -77,6 +77,17 @@ pub fn draw(f: &mut Frame, app: &App) {
                 items.push(ListItem::new("✅ Backup confirmed.".to_string()));
             }
         }
+        InstallStepType::PartitionScheme => {
+            items.push(ListItem::new(
+                "🧩 Partition schemes not loaded yet.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "ℹ️ Expected from defaults or user configuration.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "⌨️ Scheme options will render here.".to_string(),
+            ));
+        }
         InstallStepType::FirstBootUser => {
             items.push(ListItem::new(
                 "🧑‍💻 First boot will prompt you to create a user.".to_string(),
