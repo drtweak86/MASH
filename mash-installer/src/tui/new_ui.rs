@@ -194,6 +194,15 @@ pub fn draw(f: &mut Frame, app: &App) {
             ));
             items.push(ListItem::new("⌨️ Download status will render here.".to_string()));
         }
+        InstallStepType::DownloadingUefi => {
+            items.push(ListItem::new(
+                "⬇️ UEFI download progress not available yet.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "ℹ️ Expected from downloader telemetry.".to_string(),
+            ));
+            items.push(ListItem::new("⌨️ Download status will render here.".to_string()));
+        }
         _ => {
             items.push(ListItem::new(
                 "ℹ️ Enter to continue - Esc to go back - q to quit".to_string(),
