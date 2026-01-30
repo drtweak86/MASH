@@ -1,325 +1,78 @@
-#![allow(dead_code)]
+//! Application state machine for the TUI wizard
 
 use crate::cli::{Cli, PartitionScheme};
 use crate::locale::LocaleConfig;
-use std::collections::HashMap;
+use crossterm::event::{KeyCode, KeyEvent};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::progress::Phase; // Keep Phase as it's used in ExecutionStep
-// Remaining modules (input, progress, widgets) are still needed for FlashConfig and ExecutionStep to compile.
+use super::input::{InputField, InputMode};
+use super::progress::ProgressState;
+use super::widgets::DiskInfo;
 
-// ============================================================================
-// Configuration Steps (user input phase)
-// ============================================================================
-
-/// Configuration steps requiring user input (before installation)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ConfigStep {
+/// Available screens in the wizard
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Screen {
+    Welcome,
     DiskSelection,
-    DiskConfirmation,
-    PartitionScheme,
-    PartitionLayout,
-    PartitionCustomize,
-    ImageSource,
+    DownloadSourceSelection, // New screen
     ImageSelection,
-    UefiSource,
+    UefiDirectory,
     LocaleSelection,
     Options,
-    FinalSummary,
-}
-
-impl ConfigStep {
-    pub fn title(&self) -> &'static str {
-        match self {
-            ConfigStep::DiskSelection => "Select Disk",
-            ConfigStep::DiskConfirmation => "Confirm Disk",
-            ConfigStep::PartitionScheme => "Partition Scheme",
-            ConfigStep::PartitionLayout => "Partition Layout",
-            ConfigStep::PartitionCustomize => "Customize Partitions",
-            ConfigStep::ImageSource => "Image Source",
-            ConfigStep::ImageSelection => "Select Image",
-            ConfigStep::UefiSource => "UEFI Source",
-            ConfigStep::LocaleSelection => "Locale & Keymap",
-            ConfigStep::Options => "Options",
-            ConfigStep::FinalSummary => "Final Summary",
-        }
-    }
-
-    pub fn all() -> &'static [ConfigStep] {
-        &[
-            ConfigStep::DiskSelection,
-            ConfigStep::DiskConfirmation,
-            ConfigStep::PartitionScheme,
-            ConfigStep::PartitionLayout,
-            ConfigStep::PartitionCustomize,
-            ConfigStep::ImageSource,
-            ConfigStep::ImageSelection,
-            ConfigStep::UefiSource,
-            ConfigStep::LocaleSelection,
-            ConfigStep::Options,
-            ConfigStep::FinalSummary,
-        ]
-    }
-}
-
-// ============================================================================
-// Execution Steps (installation phase)
-// ============================================================================
-
-/// Execution phases (maps to flash.rs Phase enum)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ExecutionStep {
-    DownloadImage,
-    DownloadUefi,
-    Partition,
-    Format,
-    CopyRoot,
-    CopyBoot,
-    CopyEfi,
-    UefiConfig,
-    LocaleConfig,
-    Fstab,
-    StageDojo,
-    Cleanup,
-}
-
-impl ExecutionStep {
-    pub fn title(&self) -> &'static str {
-        match self {
-            ExecutionStep::DownloadImage => "Download Image",
-            ExecutionStep::DownloadUefi => "Download UEFI",
-            ExecutionStep::Partition => "Partition Disk",
-            ExecutionStep::Format => "Format Partitions",
-            ExecutionStep::CopyRoot => "Copy Root",
-            ExecutionStep::CopyBoot => "Copy Boot",
-            ExecutionStep::CopyEfi => "Copy EFI",
-            ExecutionStep::UefiConfig => "Configure UEFI",
-            ExecutionStep::LocaleConfig => "Configure Locale",
-            ExecutionStep::Fstab => "Generate fstab",
-            ExecutionStep::StageDojo => "Stage Dojo",
-            ExecutionStep::Cleanup => "Cleanup",
-        }
-    }
-
-    pub fn all() -> &'static [ExecutionStep] {
-        &[
-            ExecutionStep::DownloadImage,
-            ExecutionStep::DownloadUefi,
-            ExecutionStep::Partition,
-            ExecutionStep::Format,
-            ExecutionStep::CopyRoot,
-            ExecutionStep::CopyBoot,
-            ExecutionStep::CopyEfi,
-            ExecutionStep::UefiConfig,
-            ExecutionStep::LocaleConfig,
-            ExecutionStep::Fstab,
-            ExecutionStep::StageDojo,
-            ExecutionStep::Cleanup,
-        ]
-    }
-
-    /// Map from flash.rs Phase to ExecutionStep
-    pub fn from_phase(phase: Phase) -> Self {
-        match phase {
-            Phase::Partition => ExecutionStep::Partition,
-            Phase::Format => ExecutionStep::Format,
-            Phase::CopyRoot => ExecutionStep::CopyRoot,
-            Phase::CopyBoot => ExecutionStep::CopyBoot,
-            Phase::CopyEfi => ExecutionStep::CopyEfi,
-            Phase::UefiConfig => ExecutionStep::UefiConfig,
-            Phase::LocaleConfig => ExecutionStep::LocaleConfig,
-            Phase::Fstab => ExecutionStep::Fstab,
-            Phase::StageDojo => ExecutionStep::StageDojo,
-            Phase::Cleanup => ExecutionStep::Cleanup,
-        }
-    }
-}
-
-// ============================================================================
-// Step State
-// ============================================================================
-
-/// State of any step
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum StepState {
-    #[default]
-    Pending,
-    Current,
-    Completed,
-    Skipped,
-    Failed,
-}
-
-impl StepState {
-    pub fn symbol(&self) -> &'static str {
-        match self {
-            StepState::Pending => "  ",
-            StepState::Current => ">>",
-            StepState::Completed => "[OK]",
-            StepState::Skipped => "--",
-            StepState::Failed => "[!]",
-        }
-    }
-}
-
-// ============================================================================
-// Partition Size Types
-// ============================================================================
-
-/// Strongly‑typed partition size
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PartitionSize {
-    Mebibytes(u64),
-    Gibibytes(u64),
-    Percentage(u8),
-}
-
-impl PartitionSize {
-    pub fn to_parted_string(&self) -> String {
-        match self {
-            PartitionSize::Mebibytes(m) => format!("{}MiB", m),
-            PartitionSize::Gibibytes(g) => format!("{}GiB", g),
-            PartitionSize::Percentage(p) => format!("{}%", p),
-        }
-    }
-
-    pub fn parse(s: &str) -> Result<Self, String> {
-        let s = s.trim().to_uppercase();
-        if s.ends_with('%') {
-            let val: u8 = s
-                .trim_end_matches('%')
-                .parse()
-                .map_err(|_| "Invalid percentage".to_string())?;
-            return Ok(PartitionSize::Percentage(val));
-        }
-        if s.contains("GIB") || s.contains("GB") || s.ends_with('G') {
-            let val: u64 = s
-                .trim_end_matches("GIB")
-                .trim_end_matches("GB")
-                .trim_end_matches('G')
-                .parse()
-                .map_err(|_| "Invalid GiB value".to_string())?;
-            return Ok(PartitionSize::Gibibytes(val));
-        }
-        if s.contains("MIB") || s.contains("MB") || s.ends_with('M') {
-            let val: u64 = s
-                .trim_end_matches("MIB")
-                .trim_end_matches("MB")
-                .trim_end_matches('M')
-                .parse()
-                .map_err(|_| "Invalid MiB value".to_string())?;
-            return Ok(PartitionSize::Mebibytes(val));
-        }
-        Err("Size must end with M, G, MiB, GiB, or %".to_string())
-    }
-
-    pub fn display(&self) -> String {
-        match self {
-            PartitionSize::Mebibytes(m) => {
-                if *m >= 1024 && m % 1024 == 0 {
-                    format!("{}G", m / 1024)
-                } else {
-                    format!("{}M", m)
-                }
-            }
-            PartitionSize::Gibibytes(g) => format!("{}G", g),
-            PartitionSize::Percentage(p) => format!("{}%", p),
-        }
-    }
-
-    /// Convert to MiB for validation comparisons.
-    /// Returns 0 for percentage‑based sizes (not comparable).
-    pub fn to_mib(&self) -> u64 {
-        match self {
-            PartitionSize::Mebibytes(m) => *m,
-            PartitionSize::Gibibytes(g) => g * 1024,
-            PartitionSize::Percentage(_) => 0,
-        }
-    }
-}
-
-// ============================================================================
-// Partition Plan
-// ============================================================================
-
-/// Partition layout configuration
-#[derive(Debug, Clone)]
-pub struct PartitionPlan {
-    pub scheme: PartitionScheme,
-    pub efi_size: PartitionSize,
-    pub boot_size: PartitionSize,
-    pub root_end: PartitionSize,
-    pub use_recommended: bool,
-}
-
-impl Default for PartitionPlan {
-    fn default() -> Self {
-        Self {
-            scheme: PartitionScheme::Mbr,
-            efi_size: PartitionSize::Mebibytes(1024),
-            boot_size: PartitionSize::Mebibytes(2048),
-            root_end: PartitionSize::Gibibytes(1800),
-            use_recommended: true,
-        }
-    }
-}
-
-// ============================================================================
-// Installation Mode and State
-// ============================================================================
-
-/// Current installation mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InstallMode {
-    Welcome,
-    Configuring,
-    Executing,
+    Confirmation,
+    Progress,
     Complete,
 }
 
-/// Unified installation state for single‑page view
-#[derive(Debug, Clone)]
-pub struct InstallationState {
-    pub mode: InstallMode,
-    pub config_states: HashMap<ConfigStep, StepState>,
-    pub exec_states: HashMap<ExecutionStep, StepState>,
-    pub current_config: Option<ConfigStep>,
-    pub current_exec: Option<ExecutionStep>,
-    pub overall_percent: f64,
-    pub status_message: String,
-    pub error: Option<String>,
-}
+impl Screen {
+    pub fn title(&self) -> &'static str {
+        match self {
+            Screen::Welcome => "🥋 Enter the Dojo",
+            Screen::DiskSelection => "💾 Select Target Disk",
+            Screen::DownloadSourceSelection => "⬇️ Select Image Source", // New title
+            Screen::ImageSelection => "📀 Select Image File",
+            Screen::UefiDirectory => "🔧 UEFI Configuration",
+            Screen::LocaleSelection => "🌍 Locale & Keymap",
+            Screen::Options => "⚙️ Installation Options",
+            Screen::Confirmation => "⚠️ DANGER ZONE ⚠️",
+            Screen::Progress => "🔥 Installing...",
+            Screen::Complete => "🎉 Installation Complete!",
+        }
+    }
 
-impl Default for InstallationState {
-    fn default() -> Self {
-        let mut config_states = HashMap::new();
-        for step in ConfigStep::all() {
-            config_states.insert(*step, StepState::Pending);
+    pub fn next(&self) -> Option<Screen> {
+        match self {
+            Screen::Welcome => Some(Screen::DiskSelection),
+            Screen::DiskSelection => Some(Screen::DownloadSourceSelection), // Flow changed
+            Screen::DownloadSourceSelection => Some(Screen::ImageSelection), // Flow changed
+            Screen::ImageSelection => Some(Screen::UefiDirectory),
+            Screen::UefiDirectory => Some(Screen::LocaleSelection),
+            Screen::LocaleSelection => Some(Screen::Options),
+            Screen::Options => Some(Screen::Confirmation),
+            Screen::Confirmation => Some(Screen::Progress),
+            Screen::Progress => Some(Screen::Complete),
+            Screen::Complete => None,
         }
-        let mut exec_states = HashMap::new();
-        for step in ExecutionStep::all() {
-            exec_states.insert(*step, StepState::Pending);
-        }
-        Self {
-            mode: InstallMode::Welcome,
-            config_states,
-            exec_states,
-            current_config: None,
-            current_exec: None,
-            overall_percent: 0.0,
-            status_message: "Ready to begin".to_string(),
-            error: None,
+    }
+
+    pub fn prev(&self) -> Option<Screen> {
+        match self {
+            Screen::Welcome => None,
+            Screen::DiskSelection => Some(Screen::Welcome),
+            Screen::DownloadSourceSelection => Some(Screen::DiskSelection), // Flow changed
+            Screen::ImageSelection => Some(Screen::DownloadSourceSelection), // Flow changed
+            Screen::UefiDirectory => Some(Screen::ImageSelection),
+            Screen::LocaleSelection => Some(Screen::UefiDirectory),
+            Screen::Options => Some(Screen::LocaleSelection),
+            Screen::Confirmation => Some(Screen::Options),
+            Screen::Progress => None, // Can't go back during progress
+            Screen::Complete => None,
         }
     }
 }
 
-// ============================================================================
-// Image Source Selection
-// ============================================================================
-
+/// Options for image source selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageSource {
     LocalFile,
@@ -335,14 +88,12 @@ impl ImageSource {
     }
 }
 
-// ============================================================================
-// Available Fedora image versions for download
-// ============================================================================
-
+/// Available Fedora image versions for download
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageVersionOption {
     F43,
     F42,
+    // Add more versions as needed
 }
 
 impl ImageVersionOption {
@@ -365,52 +116,42 @@ impl ImageVersionOption {
     }
 }
 
-// ============================================================================
-// Available Fedora image editions for download (ARM aarch64)
-// ============================================================================
-
+/// Available Fedora image editions for download
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageEditionOption {
     Kde,
-    Xfce,
-    LXQt,
-    Minimal,
-    Server,
+    Workstation,
+    // Add more editions as needed
 }
 
 impl ImageEditionOption {
     pub fn display(&self) -> &'static str {
         match self {
-            ImageEditionOption::Kde => "KDE Plasma Mobile",
-            ImageEditionOption::Xfce => "Xfce Desktop",
-            ImageEditionOption::LXQt => "LXQt Desktop",
-            ImageEditionOption::Minimal => "Minimal (no desktop)",
-            ImageEditionOption::Server => "Server",
+            ImageEditionOption::Kde => "KDE Desktop",
+            ImageEditionOption::Workstation => "Workstation (GNOME)",
         }
     }
 
     pub fn edition_str(&self) -> &'static str {
         match self {
             ImageEditionOption::Kde => "KDE",
-            ImageEditionOption::Xfce => "Xfce",
-            ImageEditionOption::LXQt => "LXQt",
-            ImageEditionOption::Minimal => "Minimal",
-            ImageEditionOption::Server => "Server",
+            ImageEditionOption::Workstation => "Workstation",
         }
     }
 
     pub fn all() -> &'static [ImageEditionOption] {
-        &[
-            ImageEditionOption::Kde,
-            ImageEditionOption::Xfce,
-            ImageEditionOption::LXQt,
-            ImageEditionOption::Minimal,
-            ImageEditionOption::Server,
-        ]
+        &[ImageEditionOption::Kde, ImageEditionOption::Workstation]
     }
 }
 
-/// Options for image source selection
+/// Result of handling input
+pub enum InputResult {
+    Continue,
+    Quit,
+    Complete,
+}
+
+/// Installation options (checkboxes)
 #[derive(Debug, Clone)]
 pub struct InstallOptions {
     pub auto_unmount: bool,
@@ -430,37 +171,7 @@ impl Default for InstallOptions {
     }
 }
 
-// ============================================================================
-// Download progress state for TUI display
-// ============================================================================
-
-#[derive(Debug, Clone, Default)]
-pub struct DownloadState {
-    pub is_downloading: bool,
-    pub is_complete: bool,
-    pub current_bytes: u64,
-    pub total_bytes: Option<u64>,
-    pub speed_bytes_per_sec: u64,
-    pub eta_seconds: u64,
-    pub description: String,
-    pub error: Option<String>,
-    pub phase: DownloadPhase,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum DownloadPhase {
-    #[default]
-    NotStarted,
-    Downloading,
-    Extracting,
-    Complete,
-    Failed,
-}
-
-// ============================================================================
-// Flash configuration collected from the wizard
-// ============================================================================
-
+/// Flash configuration collected from the wizard
 #[derive(Debug, Clone)]
 pub struct FlashConfig {
     pub image: PathBuf,
@@ -472,53 +183,36 @@ pub struct FlashConfig {
     pub watch: bool,
     pub locale: Option<LocaleConfig>,
     pub early_ssh: bool,
-    pub progress_tx: Option<Sender<super::progress::ProgressEvent>>, // Changed to ProgressEvent
-    pub cancel_flag: Arc<AtomicBool>, // Added for cancellation
+    pub progress_tx: Option<Sender<super::progress::ProgressUpdate>>,
     pub efi_size: String,
     pub boot_size: String,
     pub root_end: String,
-    pub download_uefi_firmware: bool,
-    pub image_source_selection: ImageSource,
-    pub image_version: String,
-    pub image_edition: String,
+    pub download_uefi_firmware: bool, // New field to indicate UEFI firmware download
+    pub image_source_selection: ImageSource, // New field to indicate image source
+    pub image_version: String,        // New field for selected Fedora version
+    pub image_edition: String,        // New field for selected Fedora edition
 }
 
-// ============================================================================
-// Application state
-// ============================================================================
-
-#[allow(dead_code)] // Legacy App struct, no longer used by new UI
+/// Application state
 pub struct App {
-    pub current_step: InstallStep,
-    pub installation_state: InstallationState,
+    pub current_screen: Screen,
     pub mash_root: PathBuf,
     pub watch: bool,
-    pub dry_run_cli: bool,
+    pub dry_run_cli: bool, // From CLI flag
 
     // Animation state
-    pub animation_tick: u64,
+    pub animation_tick: u64, // Increments each frame for spinners/effects
 
     // Disk selection
     pub available_disks: Vec<DiskInfo>,
     pub selected_disk_index: usize,
 
-    // Disk confirmation (type "DESTROY")
-    pub disk_confirm_input: String,
-    pub disk_confirm_error: Option<String>,
-
-    // Partition configuration
-    pub partition_plan: PartitionPlan,
-    pub partition_scheme_focus: usize,
-    pub partition_edit_field: usize,
-    pub partition_edit_input: String,
-    pub partition_edit_error: Option<String>,
-
     // Image source selection
     pub image_source_selection: ImageSource,
-    pub selected_image_source_index: usize,
+    pub selected_image_source_index: usize, // 0 for LocalFile, 1 for DownloadFedora
     pub selected_image_version_index: usize,
     pub selected_image_edition_index: usize,
-    pub download_uefi_firmware: bool,
+    pub download_uefi_firmware: bool, // Option to download UEFI firmware
 
     // Image selection (local file path)
     pub image_input: InputField,
@@ -534,15 +228,19 @@ pub struct App {
 
     // Options
     pub options: InstallOptions,
-    pub options_focus: usize,
+    pub options_focus: usize, // Which option is focused (0-2)
 
-    // Confirmation (type "FLASH")
+    // Confirmation
     pub confirmation_input: String,
     pub confirmation_error: Option<String>,
 
-    // Worker thread communication
-    pub progress_event_rx: Option<Receiver<super::progress::ProgressEvent>>,
-    pub cancel_flag: Arc<AtomicBool>,
+    // Progress
+    pub progress: ProgressState,
+    pub progress_rx: Option<Receiver<super::progress::ProgressUpdate>>,
+
+    // Complete
+    pub install_success: bool,
+    pub install_error: Option<String>,
 
     // Partition sizes from CLI (used as defaults for TUI if not overridden)
     pub efi_size_cli: String,
@@ -564,32 +262,8 @@ impl App {
         // Available locales
         let available_locales = crate::locale::LOCALES.to_vec();
 
-        // Parse CLI partition sizes into PartitionPlan
-        let efi_size_cli = match &cli.command {
-            Some(crate::cli::Command::Flash { efi_size, .. }) => efi_size.clone(),
-            _ => "1024MiB".to_string(),
-        };
-        let boot_size_cli = match &cli.command {
-            Some(crate::cli::Command::Flash { boot_size, .. }) => boot_size.clone(),
-            _ => "2048MiB".to_string(),
-        };
-        let root_end_cli = match &cli.command {
-            Some(crate::cli::Command::Flash { root_end, .. }) => root_end.clone(),
-            _ => "1800GiB".to_string(),
-        };
-
-        let partition_plan = PartitionPlan {
-            scheme: PartitionScheme::Mbr,
-            efi_size: PartitionSize::parse(&efi_size_cli).unwrap_or(PartitionSize::Mebibytes(1024)),
-            boot_size: PartitionSize::parse(&boot_size_cli)
-                .unwrap_or(PartitionSize::Mebibytes(2048)),
-            root_end: PartitionSize::parse(&root_end_cli).unwrap_or(PartitionSize::Gibibytes(1800)),
-            use_recommended: true,
-        };
-
         Self {
-            current_step: InstallStep::Welcome,
-            installation_state: InstallationState::default(),
+            current_screen: Screen::Welcome,
             mash_root,
             watch,
             dry_run_cli: dry_run,
@@ -599,23 +273,12 @@ impl App {
             available_disks,
             selected_disk_index: 0,
 
-            // Disk confirmation
-            disk_confirm_input: String::new(),
-            disk_confirm_error: None,
-
-            // Partition configuration
-            partition_plan,
-            partition_scheme_focus: 0,
-            partition_edit_input: String::new(),
-            partition_edit_field: 0, // This order is important
-            partition_edit_error: None,
-
-            // Image source selection
+            // New fields for image source selection
             image_source_selection: ImageSource::LocalFile,
             selected_image_source_index: 0,
-            selected_image_version_index: 0,
-            selected_image_edition_index: 0,
-            download_uefi_firmware: false,
+            selected_image_version_index: 0, // Default to first version
+            selected_image_edition_index: 0, // Default to first edition
+            download_uefi_firmware: false,   // Default to not downloading UEFI firmware
 
             image_input: InputField::new(
                 default_image_dir.to_string_lossy().to_string(),
@@ -630,7 +293,7 @@ impl App {
             uefi_error: None,
 
             available_locales,
-            selected_locale_index: 0,
+            selected_locale_index: 0, // en_GB.UTF-8 is first
 
             options: InstallOptions {
                 dry_run,
@@ -641,44 +304,445 @@ impl App {
             confirmation_input: String::new(),
             confirmation_error: None,
 
-            progress_event_rx: None,
-            cancel_flag: Arc::new(AtomicBool::new(false)),
+            progress: ProgressState::default(),
+            progress_rx: None,
 
-            efi_size_cli,
-            boot_size_cli,
-            root_end_cli,
+            install_success: false,
+            install_error: None,
+
+            efi_size_cli: match &cli.command {
+                Some(crate::cli::Command::Flash { efi_size, .. }) => efi_size.clone(),
+                _ => "1024MiB".to_string(),
+            },
+            boot_size_cli: match &cli.command {
+                Some(crate::cli::Command::Flash { boot_size, .. }) => boot_size.clone(),
+                _ => "2048MiB".to_string(),
+            },
+            root_end_cli: match &cli.command {
+                Some(crate::cli::Command::Flash { root_end, .. }) => root_end.clone(),
+                _ => "1800GiB".to_string(),
+            },
         }
     }
 
     /// Handle keyboard input, returns action to take
     pub fn handle_input(&mut self, key: KeyEvent) -> InputResult {
-        // NOTE: The old `InstallStep` enum has been removed.
-        // All legacy step handling has been replaced with a no‑op that
-        // simply returns `Continue`.  The new single‑page UI drives
-        // execution through `start_execution()` and worker threads.
-        InputResult::Continue
+        match self.current_screen {
+            Screen::Welcome => self.handle_welcome_input(key),
+            Screen::DiskSelection => self.handle_disk_selection_input(key),
+            Screen::DownloadSourceSelection => self.handle_download_source_selection_input(key), // New handler
+            Screen::ImageSelection => self.handle_image_selection_input(key),
+            Screen::UefiDirectory => self.handle_uefi_input(key),
+            Screen::LocaleSelection => self.handle_locale_selection_input(key),
+            Screen::Options => self.handle_options_input(key),
+            Screen::Confirmation => self.handle_confirmation_input(key),
+            Screen::Progress => self.handle_progress_input(key),
+            Screen::Complete => self.handle_complete_input(key),
+        }
     }
 
-    // -----------------------------------------------------------------------
-    // Legacy step handlers (now no‑ops) – kept only to preserve API shape
-    // -----------------------------------------------------------------------
-    fn handle_welcome_input(&mut self, _key: KeyEvent) -> InputResult { InputResult::Continue }
-    fn handle_disk_selection_input(&mut self, _key: KeyEvent) -> InputResult { InputResult::Continue }
-    fn handle_disk_confirmation_input(&mut self, _key: KeyEvent) -> InputResult { InputResult::Continue }
-    fn handle_partition_scheme_input(&mut self, _key: KeyEvent) -> InputResult { InputResult::Continue }
-    fn handle_partition_layout_input(&mut self, _key: KeyEvent) -> InputResult { InputResult::Continue }
-    fn handle_partition_customize_input(&mut self, _key: KeyEvent) -> InputResult { InputResult::Continue }
-    fn handle_download_source_selection_input(&mut self, _key: KeyEvent) -> InputResult { InputResult::Continue }
-    fn handle_image_selection_input(&mut self, _key: KeyEvent) -> InputResult { InputResult::Continue }
-    fn handle_uefi_input(&mut self, _key: KeyEvent) -> InputResult { InputResult::Continue }
-    fn handle_locale_selection_input(&mut self, _key: KeyEvent) -> InputResult { InputResult::Continue }
-    fn handle_options_input(&mut self, _key: KeyEvent) -> InputResult { InputResult::Continue }
-    fn handle_confirmation_input(&mut self, _key: KeyEvent) -> InputResult { InputResult::Continue }
-    fn handle_flashing_input(&mut self, _key: KeyEvent) -> InputResult { InputResult::Continue }
-    fn handle_complete_input(&mut self, _key: KeyEvent) -> InputResult { InputResult::Continue }
+    fn handle_welcome_input(&mut self, key: KeyEvent) -> InputResult {
+        match key.code {
+            KeyCode::Enter => {
+                self.current_screen = Screen::DiskSelection;
+                InputResult::Continue
+            }
+            KeyCode::Esc | KeyCode::Char('q') => InputResult::Quit,
+            _ => InputResult::Continue,
+        }
+    }
 
-    /// Build flash configuration from current app state
-    fn build_flash_config(&self) -> Option<FlashConfig> {
+    fn handle_disk_selection_input(&mut self, key: KeyEvent) -> InputResult {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.selected_disk_index > 0 {
+                    self.selected_disk_index -= 1;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.selected_disk_index < self.available_disks.len().saturating_sub(1) {
+                    self.selected_disk_index += 1;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Enter => {
+                if !self.available_disks.is_empty() {
+                    self.current_screen = Screen::DownloadSourceSelection; // Changed next screen
+                }
+                InputResult::Continue
+            }
+            KeyCode::Esc => {
+                if let Some(prev) = self.current_screen.prev() {
+                    self.current_screen = prev;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Char('r') => {
+                // Refresh disk list
+                self.available_disks = DiskInfo::scan_disks();
+                self.selected_disk_index = 0;
+                InputResult::Continue
+            }
+            _ => InputResult::Continue,
+        }
+    }
+
+    // New handler for download source selection
+    fn handle_download_source_selection_input(&mut self, key: KeyEvent) -> InputResult {
+        let max_source_index = 1; // 0: LocalFile, 1: DownloadFedora
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.selected_image_source_index > 0 {
+                    self.selected_image_source_index -= 1;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.selected_image_source_index < max_source_index {
+                    self.selected_image_source_index += 1;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Enter => {
+                self.image_source_selection = match self.selected_image_source_index {
+                    0 => ImageSource::LocalFile,
+                    1 => ImageSource::DownloadFedora,
+                    _ => unreachable!(), // Should not happen with max_source_index check
+                };
+                self.current_screen = Screen::ImageSelection;
+                InputResult::Continue
+            }
+            KeyCode::Esc => {
+                if let Some(prev) = self.current_screen.prev() {
+                    self.current_screen = prev;
+                }
+                InputResult::Continue
+            }
+            _ => InputResult::Continue,
+        }
+    }
+
+    fn handle_image_selection_input(&mut self, key: KeyEvent) -> InputResult {
+        // This screen now behaves differently based on image_source_selection
+        match self.image_source_selection {
+            ImageSource::LocalFile => {
+                // Existing logic for local file input
+                if self.image_input.mode == InputMode::Editing {
+                    match key.code {
+                        KeyCode::Enter => {
+                            // Validate path
+                            let path = PathBuf::from(self.image_input.value());
+                            if path.exists() && path.is_file() {
+                                self.image_error = None;
+                                self.image_input.mode = InputMode::Normal;
+                                self.current_screen = Screen::UefiDirectory;
+                            } else if path.is_dir() {
+                                // If it's a directory, look for .raw files
+                                self.image_error =
+                                    Some("Please select a .raw file, not a directory".into());
+                            } else {
+                                self.image_error =
+                                    Some(format!("File not found: {}", path.display()));
+                            }
+                            InputResult::Continue
+                        }
+                        KeyCode::Esc => {
+                            self.image_input.mode = InputMode::Normal;
+                            InputResult::Continue
+                        }
+                        _ => {
+                            self.image_input.handle_key(key);
+                            self.image_error = None;
+                            InputResult::Continue
+                        }
+                    }
+                } else {
+                    match key.code {
+                        KeyCode::Enter | KeyCode::Char('e') | KeyCode::Char('i') => {
+                            self.image_input.mode = InputMode::Editing;
+                            InputResult::Continue
+                        }
+                        KeyCode::Esc => {
+                            if let Some(prev) = self.current_screen.prev() {
+                                self.current_screen = prev;
+                            }
+                            InputResult::Continue
+                        }
+                        KeyCode::Tab => {
+                            // Skip validation and move to next screen
+                            self.current_screen = Screen::UefiDirectory;
+                            InputResult::Continue
+                        }
+                        _ => InputResult::Continue,
+                    }
+                }
+            }
+            ImageSource::DownloadFedora => {
+                // Logic for selecting Fedora version/edition for download
+                let max_version_index = ImageVersionOption::all().len().saturating_sub(1);
+                let max_edition_index = ImageEditionOption::all().len().saturating_sub(1);
+
+                match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if self.options_focus == 0 {
+                            // Navigating versions
+                            if self.selected_image_version_index > 0 {
+                                self.selected_image_version_index -= 1;
+                            }
+                        } else {
+                            // Navigating editions
+                            if self.selected_image_edition_index > 0 {
+                                self.selected_image_edition_index -= 1;
+                            }
+                        }
+                        InputResult::Continue
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if self.options_focus == 0 {
+                            // Navigating versions
+                            if self.selected_image_version_index < max_version_index {
+                                self.selected_image_version_index += 1;
+                            }
+                        } else {
+                            // Navigating editions
+                            if self.selected_image_edition_index < max_edition_index {
+                                self.selected_image_edition_index += 1;
+                            }
+                        }
+                        InputResult::Continue
+                    }
+                    KeyCode::Left | KeyCode::Right => {
+                        // Toggle focus between version and edition selection
+                        self.options_focus = (self.options_focus + 1) % 2;
+                        InputResult::Continue
+                    }
+                    KeyCode::Enter | KeyCode::Tab => {
+                        // Proceed to UEFI Directory screen
+                        self.current_screen = Screen::UefiDirectory;
+                        InputResult::Continue
+                    }
+                    KeyCode::Esc => {
+                        if let Some(prev) = self.current_screen.prev() {
+                            self.current_screen = prev;
+                        }
+                        InputResult::Continue
+                    }
+                    _ => InputResult::Continue,
+                }
+            }
+        }
+    }
+
+    fn handle_uefi_input(&mut self, key: KeyEvent) -> InputResult {
+        if self.uefi_input.mode == InputMode::Editing {
+            match key.code {
+                KeyCode::Enter => {
+                    let path = PathBuf::from(self.uefi_input.value());
+                    if path.exists() && path.is_dir() {
+                        self.uefi_error = None;
+                        self.uefi_input.mode = InputMode::Normal;
+                        self.current_screen = Screen::LocaleSelection;
+                    } else {
+                        self.uefi_error = Some(format!("Directory not found: {}", path.display()));
+                    }
+                    InputResult::Continue
+                }
+                KeyCode::Esc => {
+                    self.uefi_input.mode = InputMode::Normal;
+                    InputResult::Continue
+                }
+                _ => {
+                    self.uefi_input.handle_key(key);
+                    self.uefi_error = None;
+                    InputResult::Continue
+                }
+            }
+        } else {
+            match key.code {
+                KeyCode::Char('d') => {
+                    // New: Toggle download UEFI firmware
+                    self.download_uefi_firmware = !self.download_uefi_firmware;
+                    InputResult::Continue
+                }
+                KeyCode::Enter | KeyCode::Char('e') | KeyCode::Char('i') => {
+                    self.uefi_input.mode = InputMode::Editing;
+                    InputResult::Continue
+                }
+                KeyCode::Esc => {
+                    if let Some(prev) = self.current_screen.prev() {
+                        self.current_screen = prev;
+                    }
+                    InputResult::Continue
+                }
+                KeyCode::Tab => {
+                    self.current_screen = Screen::LocaleSelection;
+                    InputResult::Continue
+                }
+                _ => InputResult::Continue,
+            }
+        }
+    }
+
+    fn handle_locale_selection_input(&mut self, key: KeyEvent) -> InputResult {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.selected_locale_index > 0 {
+                    self.selected_locale_index -= 1;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.selected_locale_index < self.available_locales.len().saturating_sub(1) {
+                    self.selected_locale_index += 1;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Enter | KeyCode::Tab => {
+                self.current_screen = Screen::Options;
+                InputResult::Continue
+            }
+            KeyCode::Esc => {
+                if let Some(prev) = self.current_screen.prev() {
+                    self.current_screen = prev;
+                }
+                InputResult::Continue
+            }
+            _ => InputResult::Continue,
+        }
+    }
+
+    fn handle_options_input(&mut self, key: KeyEvent) -> InputResult {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.options_focus > 0 {
+                    self.options_focus -= 1;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.options_focus < 3 {
+                    self.options_focus += 1;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Char(' ') | KeyCode::Enter => {
+                // Toggle the focused option
+                match self.options_focus {
+                    0 => self.options.auto_unmount = !self.options.auto_unmount,
+                    1 => self.options.early_ssh = !self.options.early_ssh,
+                    2 => {
+                        self.options.partition_scheme = match self.options.partition_scheme {
+                            PartitionScheme::Mbr => PartitionScheme::Gpt,
+                            PartitionScheme::Gpt => PartitionScheme::Mbr,
+                        };
+                    }
+                    3 => self.options.dry_run = !self.options.dry_run,
+                    _ => {}
+                }
+                InputResult::Continue
+            }
+            KeyCode::Tab => {
+                self.current_screen = Screen::Confirmation;
+                InputResult::Continue
+            }
+            KeyCode::Esc => {
+                if let Some(prev) = self.current_screen.prev() {
+                    self.current_screen = prev;
+                }
+                InputResult::Continue
+            }
+            _ => InputResult::Continue,
+        }
+    }
+
+    fn handle_confirmation_input(&mut self, key: KeyEvent) -> InputResult {
+        match key.code {
+            KeyCode::Char(c) => {
+                self.confirmation_input.push(c);
+                self.confirmation_error = None;
+                InputResult::Continue
+            }
+            KeyCode::Backspace => {
+                self.confirmation_input.pop();
+                self.confirmation_error = None;
+                InputResult::Continue
+            }
+            KeyCode::Enter => {
+                if self.confirmation_input.trim() == "YES I KNOW" {
+                    // Start installation
+                    self.start_installation();
+                    self.current_screen = Screen::Progress;
+                } else {
+                    self.confirmation_error =
+                        Some("Type exactly: YES I KNOW (case sensitive)".into());
+                }
+                InputResult::Continue
+            }
+            KeyCode::Esc => {
+                if let Some(prev) = self.current_screen.prev() {
+                    self.current_screen = prev;
+                }
+                self.confirmation_input.clear();
+                self.confirmation_error = None;
+                InputResult::Continue
+            }
+            _ => InputResult::Continue,
+        }
+    }
+
+    fn handle_progress_input(&mut self, key: KeyEvent) -> InputResult {
+        // During progress, only allow Ctrl+C (handled globally) to abort
+        // Check if installation is complete
+        if self.progress.is_complete {
+            match key.code {
+                KeyCode::Enter => {
+                    self.current_screen = Screen::Complete;
+                    InputResult::Continue
+                }
+                _ => InputResult::Continue,
+            }
+        } else {
+            InputResult::Continue
+        }
+    }
+
+    fn handle_complete_input(&mut self, key: KeyEvent) -> InputResult {
+        match key.code {
+            KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q') => InputResult::Complete,
+            _ => InputResult::Continue,
+        }
+    }
+
+    fn start_installation(&mut self) {
+        // Set up progress channel
+        let (_tx, rx) = mpsc::channel();
+        self.progress_rx = Some(rx);
+        self.progress = ProgressState::default();
+
+        // Store the sender for flash::run_with_progress
+        // The actual flash will be started after we return from the TUI loop
+    }
+
+    /// Update progress state from channel
+    pub fn update_progress(&mut self) {
+        if let Some(ref rx) = self.progress_rx {
+            while let Ok(update) = rx.try_recv() {
+                self.progress.apply_update(update);
+                if self.progress.is_complete {
+                    self.install_success = self.progress.error.is_none();
+                    self.install_error = self.progress.error.clone();
+                }
+            }
+        }
+    }
+
+    /// Get the flash configuration if wizard completed
+    pub fn get_flash_config(&self) -> Option<FlashConfig> {
+        if self.current_screen != Screen::Progress && self.current_screen != Screen::Complete {
+            return None;
+        }
+
         let disk = self
             .available_disks
             .get(self.selected_disk_index)
@@ -687,34 +751,22 @@ impl App {
         let locale = self
             .available_locales
             .get(self.selected_locale_index)
-            .cloned();
-
-        // Use downloaded paths if available, otherwise use user input
-        let image_path = self
-            .downloaded_image_path
-            .clone()
-            .unwrap_or_else(|| PathBuf::from(self.image_input.value()));
-
-        let uefi_path = self
-            .downloaded_uefi_path
-            .clone()
-            .unwrap_or_else(|| PathBuf::from(self.uefi_input.value()));
+            .cloned()?;
 
         Some(FlashConfig {
-            image: image_path,
+            image: PathBuf::from(self.image_input.value()),
             disk,
-            scheme: self.partition_plan.scheme,
-            uefi_dir: uefi_path,
+            scheme: self.options.partition_scheme,
+            uefi_dir: PathBuf::from(self.uefi_input.value()),
             dry_run: self.options.dry_run || self.dry_run_cli,
             auto_unmount: self.options.auto_unmount,
             watch: self.watch,
-            locale,
+            locale: Some(locale),
             early_ssh: self.options.early_ssh,
-            progress_tx: None, // This will be set by kickoff_installation_process
-            cancel_flag: Arc::clone(&self.cancel_flag), // Pass the cancel flag
-            efi_size: self.partition_plan.efi_size.to_parted_string(),
-            boot_size: self.partition_plan.boot_size.to_parted_string(),
-            root_end: self.partition_plan.root_end.to_parted_string(),
+            progress_tx: None, // Will be set up by the caller
+            efi_size: self.efi_size_cli.clone(),
+            boot_size: self.boot_size_cli.clone(),
+            root_end: self.root_end_cli.clone(),
             download_uefi_firmware: self.download_uefi_firmware,
             image_source_selection: self.image_source_selection,
             image_version: ImageVersionOption::all()[self.selected_image_version_index]
@@ -724,62 +776,6 @@ impl App {
                 .edition_str()
                 .to_string(),
         })
-    }
-
-    /// Kick‑off the installation worker thread
-    fn kickoff_installation_process(&mut self) -> InputResult {
-        // The worker thread will use the cloned `progress_tx` and `cancel_flag`
-        // and will send `ProgressEvent`s back through `progress_event_rx`.
-        // All legacy step handling has been removed; the flow now proceeds
-        // directly to worker spawning.
-        InputResult::Continue
-    }
-
-    /// Update progress state from worker thread via `ProgressEvent`
-    pub fn update_worker_progress(&mut self) {
-        // Same as before – just ignore any events once we are in a final state.
-        if let Some(ref rx) = self.progress_event_rx {
-            while let Ok(event) = rx.try_recv() {
-                if self.cancel_flag.load(Ordering::SeqCst) || self.installation_state.error.is_some() {
-                    match event {
-                        super::progress::ProgressEvent::Complete(_, _)
-                        | super::progress::ProgressEvent::Error(_)
-                        | super::progress::ProgressEvent::Cancelled => {}
-                        _ => continue,
-                    }
-                }
-
-                match event {
-                    super::progress::ProgressEvent::FlashUpdate(step, update) => {
-                        // No‑op – legacy steps no longer exist.
-                    }
-                    super::progress::ProgressEvent::DownloadUpdate(step, update) => {
-                        // No‑op – legacy steps no longer exist.
-                    }
-                    super::progress::ProgressEvent::Error(e) => {
-                        self.installation_state.error = Some(e.clone());
-                        self.installation_state.mode = InstallMode::Complete;
-                    }
-                    super::progress::ProgressEvent::Complete(image_path, uefi_path) => {
-                        self.installation_state.mode = InstallMode::Complete;
-                        self.downloaded_image_path = Some(image_path);
-                        self.downloaded_uefi_path = uefi_path;
-                    }
-                    super::progress::ProgressEvent::Cancelled => {
-                        self.installation_state.mode = InstallMode::Complete;
-                        self.installation_state.error = Some("Installation cancelled".to_string());
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    /// Get the flash configuration if wizard completed
-    pub fn get_flash_config(&self) -> Option<FlashConfig> {
-        // The new UI does not expose the old `current_step` any more.
-        // Configuration is built on‑demand when the user triggers flashing.
-        self.build_flash_config()
     }
 
     /// Get selected disk info

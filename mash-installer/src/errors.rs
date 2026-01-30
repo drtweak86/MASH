@@ -15,6 +15,4 @@ pub enum MashError {
     #[allow(dead_code)]
     #[error("Command failed: {0}")]
     CommandFailed(String),
-    #[error("Operation was cancelled")]
-    Cancelled,
 }

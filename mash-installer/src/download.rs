@@ -5,14 +5,8 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use zip::ZipArchive;
-
-use crate::errors::MashError;
-use crate::tui::{DownloadUpdate, ProgressEvent};
 
 // GitHub API types for deserialization
 #[derive(Debug, Deserialize)]
@@ -141,7 +135,7 @@ fn download_with_progress(
     Ok(downloaded)
 }
 
-pub fn download_uefi_firmware(destination_dir: &Path) -> Result<PathBuf> {
+pub fn download_uefi_firmware(destination_dir: &Path) -> Result<()> {
     info!("Starting UEFI firmware download...");
     eprintln!("\n🔧 Downloading UEFI Firmware for Raspberry Pi 4...");
 
@@ -228,7 +222,7 @@ pub fn download_uefi_firmware(destination_dir: &Path) -> Result<PathBuf> {
         "UEFI firmware download and extraction complete to {}",
         destination_dir.display()
     );
-    Ok(destination_dir.to_path_buf())
+    Ok(())
 }
 
 pub fn download_fedora_image(
@@ -250,59 +244,21 @@ pub fn download_fedora_image(
     })?;
 
     let arch = "aarch64";
-    // Fedora ARM spin filename format: Fedora-{Edition}-Disk-{version}-{patch}.{arch}.raw.xz
-    let (spin_name, category) = match edition {
-        "KDE" => ("KDE-Mobile-Disk", "Spins"),
-        "Xfce" => ("Xfce-Disk", "Spins"),
-        "LXQt" => ("LXQt-Disk", "Spins"),
-        "Minimal" => ("Minimal", "Spins"),
-        "Server" => ("Server-Host-Generic", "Server"),
-        _ => ("Minimal", "Spins"),
-    };
+    let filename = format!("Fedora-{}-{}-{}.raw.xz", edition, version, arch);
 
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("mash-installer")
-        .timeout(std::time::Duration::from_secs(3600))
-        .build()?;
-
-    // Try common patch versions
-    let patch_versions = ["1.6", "1.5", "1.4", "1.3", "1.2", "1.1"];
-    let mut found_url = None;
-    let mut found_filename = String::new();
-
-    eprintln!(
-        "   🔍 Searching for Fedora {} {} image...",
-        version, edition
-    );
-
-    for patch in &patch_versions {
-        let filename = format!("Fedora-{}-{}-{}.{}.raw.xz", spin_name, version, patch, arch);
-        let url = format!(
-            "https://download.fedoraproject.org/pub/fedora/linux/releases/{}/{}/{}/images/{}",
-            version, category, arch, filename
-        );
-
-        if let Ok(resp) = client.head(&url).send() {
-            if resp.status().is_success() || resp.status().is_redirection() {
-                found_url = Some(url);
-                found_filename = filename;
-                eprintln!("   ✅ Found: {}", found_filename);
-                break;
-            }
-        }
-    }
-
-    let (url, filename) = match found_url {
-        Some(u) => (u, found_filename),
-        None => {
-            return Err(anyhow!(
-                "Could not find Fedora {} {} image for aarch64. \
-                 The image may not be available for this version/edition.",
-                version,
-                edition
-            ));
-        }
-    };
+    // Try multiple URL patterns (Fedora changes these occasionally)
+    let url_patterns = [
+        // Standard releases path
+        format!(
+            "https://download.fedoraproject.org/pub/fedora/linux/releases/{}/Spins/{}/images/{}",
+            version, arch, filename
+        ),
+        // Alternative: direct mirror
+        format!(
+            "https://mirrors.fedoraproject.org/mirrorlist?repo=fedora-{}&arch={}",
+            version, arch
+        ),
+    ];
 
     let dest_path = destination_dir.join(&filename);
 
@@ -315,15 +271,46 @@ pub fn download_fedora_image(
         eprintln!("   File: {}", filename);
         eprintln!("   ⚠️  This is a large download (~2-3 GB). Please be patient.\n");
 
-        let mut dest_file = File::create(&dest_path)?;
-        download_with_progress(&client, &url, &mut dest_file, "Fedora Image")?;
+        let client = reqwest::blocking::Client::builder()
+            .user_agent("mash-installer")
+            .timeout(std::time::Duration::from_secs(3600)) // 1 hour timeout for large file
+            .build()?;
+
+        let mut last_error = None;
+        let mut success = false;
+
+        for url in &url_patterns {
+            info!("Trying URL: {}", url);
+
+            match File::create(&dest_path) {
+                Ok(mut dest_file) => {
+                    match download_with_progress(&client, url, &mut dest_file, "Fedora Image") {
+                        Ok(_) => {
+                            success = true;
+                            break;
+                        }
+                        Err(e) => {
+                            eprintln!("   ⚠️  URL failed, trying next mirror...");
+                            last_error = Some(e);
+                            let _ = fs::remove_file(&dest_path); // Clean up partial download
+                        }
+                    }
+                }
+                Err(e) => {
+                    last_error = Some(e.into());
+                }
+            }
+        }
+
+        if !success {
+            return Err(last_error.unwrap_or_else(|| anyhow!("All download URLs failed")));
+        }
     }
 
     info!("Fedora image download complete to {}", dest_path.display());
 
     // Decompress .raw.xz to .raw (required for losetup)
-    let raw_filename = filename.trim_end_matches(".xz");
-    let raw_path = destination_dir.join(raw_filename);
+    let raw_path = destination_dir.join(format!("Fedora-{}-{}-{}.raw", edition, version, arch));
 
     if raw_path.exists() {
         eprintln!("\n   ℹ️  Raw image already exists, skipping decompression");
@@ -348,319 +335,5 @@ pub fn download_fedora_image(
 
     eprintln!("   ✅ Decompression complete");
     info!("Decompressed Fedora image to {}", raw_path.display());
-    Ok(raw_path)
-}
-
-// ============================================================================
-// TUI-integrated download functions with channel-based progress
-// ============================================================================
-
-/// Download with progress sent to a channel (for TUI)
-fn download_with_channel(
-    client: &reqwest::blocking::Client,
-    url: &str,
-    dest_file: &mut File,
-    description: &str,
-    tx: &Sender<DownloadUpdate>,
-    cancel_flag: Arc<AtomicBool>,
-) -> Result<u64> {
-    let response = client
-        .get(url)
-        .send()?
-        .error_for_status()
-        .context(format!("Failed to download from {}", url))?;
-
-    let total_size = response.content_length();
-
-    // Send start notification
-    let _ = tx.send(DownloadUpdate::Started {
-        description: description.to_string(),
-        total_bytes: total_size,
-    });
-
-    let mut reader = response;
-    let mut downloaded: u64 = 0;
-    let mut buffer = [0u8; 8192];
-    let start_time = Instant::now();
-    let mut last_update = Instant::now();
-
-    loop {
-        // Check for cancellation
-        if cancel_flag.load(Ordering::SeqCst) {
-            return Err(MashError::Cancelled.into());
-        }
-
-        let bytes_read = reader.read(&mut buffer)?;
-        if bytes_read == 0 {
-            break;
-        }
-
-        dest_file.write_all(&buffer[..bytes_read])?;
-        downloaded += bytes_read as u64;
-
-        // Send progress updates every 100ms
-        if last_update.elapsed().as_millis() >= 100 {
-            let elapsed = start_time.elapsed().as_secs_f64();
-            let speed = if elapsed > 0.0 {
-                (downloaded as f64 / elapsed) as u64
-            } else {
-                0
-            };
-
-            let eta = if let Some(total) = total_size {
-                if speed > 0 {
-                    (total - downloaded) / speed
-                } else {
-                    0
-                }
-            } else {
-                0
-            };
-
-            let _ = tx.send(DownloadUpdate::Progress {
-                current_bytes: downloaded,
-                speed,
-                eta,
-            });
-
-            last_update = Instant::now();
-        }
-    }
-
-    Ok(downloaded)
-}
-
-/// Download UEFI firmware with TUI progress updates
-pub fn download_uefi_firmware_with_progress(
-    destination_dir: &Path,
-    cancel_flag: Arc<AtomicBool>,
-    tx: Sender<DownloadUpdate>,
-) -> Result<PathBuf> {
-    info!("Starting UEFI firmware download (TUI mode)...");
-
-    fs::create_dir_all(destination_dir).with_context(|| {
-        format!(
-            "Failed to create destination directory: {}",
-            destination_dir.display()
-        )
-    })?;
-
-    let github_api_url = "https://api.github.com/repos/pftf/RPi4/releases/latest";
-
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("mash-installer")
-        .build()?;
-
-    let response: GithubRelease = client
-        .get(github_api_url)
-        .send()?
-        .error_for_status()
-        .context("Failed to fetch GitHub API response for UEFI firmware releases")?
-        .json()
-        .context("Failed to parse GitHub API response for UEFI firmware releases")?;
-
-    let asset = response
-        .assets
-        .iter()
-        .find(|a| a.name.starts_with("RPi4_UEFI_Firmware_") && a.name.ends_with(".zip"))
-        .ok_or_else(|| {
-            anyhow!("Could not find RPi4_UEFI_Firmware_vX.Y.zip asset in latest release")
-        })?;
-
-    let download_url = &asset.browser_download_url;
-    let temp_zip_path = destination_dir.join("uefi_firmware.zip");
-
-    // Check for cancellation before download
-    if cancel_flag.load(Ordering::SeqCst) {
-        return Err(MashError::Cancelled.into());
-    }
-
-    let mut temp_zip_file = File::create(&temp_zip_path)?;
-    download_with_channel(
-        &client,
-        download_url,
-        &mut temp_zip_file,
-        &format!("UEFI Firmware ({})", asset.name),
-        &tx,
-        Arc::clone(&cancel_flag),
-    )?;
-
-    // Check for cancellation before extraction
-    if cancel_flag.load(Ordering::SeqCst) {
-        let _ = fs::remove_file(&temp_zip_path); // Clean up temp file
-        return Err(MashError::Cancelled.into());
-    }
-
-    // Send extracting status
-    let _ = tx.send(DownloadUpdate::Extracting);
-
-    let file = File::open(&temp_zip_path)?;
-    let mut archive = ZipArchive::new(file)?;
-
-    for i in 0..archive.len() {
-        // Check for cancellation during extraction
-        if cancel_flag.load(Ordering::SeqCst) {
-            let _ = fs::remove_file(&temp_zip_path); // Clean up temp file
-            return Err(MashError::Cancelled.into());
-        }
-
-        let mut file = archive.by_index(i)?;
-        let outpath = match file.enclosed_name() {
-            Some(path) => destination_dir.join(path),
-            None => continue,
-        };
-
-        if (*file.name()).ends_with('/') {
-            fs::create_dir_all(&outpath)?;
-        } else {
-            if let Some(p) = outpath.parent() {
-                if !p.exists() {
-                    fs::create_dir_all(p)?;
-                }
-            }
-            let mut outfile = File::create(&outpath)?;
-            io::copy(&mut file, &mut outfile)?;
-        }
-    }
-
-    let _ = fs::remove_file(&temp_zip_path); // Clean up the downloaded zip
-
-    let _ = tx.send(DownloadUpdate::Complete(destination_dir.to_path_buf()));
-    info!(
-        "UEFI firmware download complete to {}",
-        destination_dir.display()
-    );
-
-    Ok(destination_dir.to_path_buf())
-}
-
-/// Download Fedora image with TUI progress updates
-pub fn download_fedora_image_with_progress(
-    destination_dir: &Path,
-    version: &str,
-    edition: &str,
-    cancel_flag: Arc<AtomicBool>,
-    tx: Sender<DownloadUpdate>,
-) -> Result<PathBuf> {
-    info!("Starting Fedora image download (TUI mode)...");
-
-    fs::create_dir_all(destination_dir).with_context(|| {
-        format!(
-            "Failed to create destination directory: {}",
-            destination_dir.display()
-        )
-    })?;
-
-    let arch = "aarch64";
-    // Fedora ARM spin filename format: Fedora-{Edition}-Disk-{version}-1.6.{arch}.raw.xz
-    // Edition mapping for ARM spins
-    let (spin_name, category) = match edition {
-        "KDE" => ("KDE-Mobile-Disk", "Spins"),
-        "Xfce" => ("Xfce-Disk", "Spins"),
-        "LXQt" => ("LXQt-Disk", "Spins"),
-        "Minimal" => ("Minimal", "Spins"),
-        "Server" => ("Server-Host-Generic", "Server"),
-        _ => ("Minimal", "Spins"), // Fallback to Minimal
-    };
-
-    // Try common patch versions (1.6, 1.5, 1.4, etc.)
-    let patch_versions = ["1.6", "1.5", "1.4", "1.3", "1.2", "1.1"];
-    let mut found_url = None;
-    let mut found_filename = String::new();
-
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("mash-installer")
-        .timeout(std::time::Duration::from_secs(3600))
-        .build()?;
-
-    // Check for cancellation before searching for image
-    if cancel_flag.load(Ordering::SeqCst) {
-        return Err(MashError::Cancelled.into());
-    }
-
-    for patch in &patch_versions {
-        let filename = format!("Fedora-{}-{}-{}.{}.raw.xz", spin_name, version, patch, arch);
-        let url = format!(
-            "https://download.fedoraproject.org/pub/fedora/linux/releases/{}/{}/{}/images/{}",
-            version, category, arch, filename
-        );
-
-        // Check if URL exists with HEAD request
-        if let Ok(resp) = client.head(&url).send() {
-            if resp.status().is_success() || resp.status().is_redirection() {
-                found_url = Some(url);
-                found_filename = filename;
-                break;
-            }
-        }
-        // Check for cancellation during URL search
-        if cancel_flag.load(Ordering::SeqCst) {
-            return Err(MashError::Cancelled.into());
-        }
-    }
-
-    let (url, filename) = match found_url {
-        Some(u) => (u, found_filename),
-        None => {
-            let _ = tx.send(DownloadUpdate::Error(format!(
-                "Could not find Fedora {} {} image for aarch64",
-                version, edition
-            )));
-            return Err(anyhow!(
-                "Could not find Fedora {} {} image for aarch64",
-                version,
-                edition
-            ));
-        }
-    };
-
-    let dest_path = destination_dir.join(&filename);
-
-    if !dest_path.exists() {
-        // Check for cancellation before download
-        if cancel_flag.load(Ordering::SeqCst) {
-            return Err(MashError::Cancelled.into());
-        }
-        let mut dest_file = File::create(&dest_path)?;
-        download_with_channel(
-            &client,
-            &url,
-            &mut dest_file,
-            &format!("Fedora {} {} (aarch64)", version, edition),
-            &tx,
-            Arc::clone(&cancel_flag),
-        )?;
-    }
-
-    // Decompress - the raw file has the same base name without .xz
-    let raw_filename = filename.trim_end_matches(".xz");
-    let raw_path = destination_dir.join(raw_filename);
-
-    if !raw_path.exists() {
-        // Check for cancellation before decompression
-        if cancel_flag.load(Ordering::SeqCst) {
-            let _ = fs::remove_file(&dest_path); // Clean up downloaded .xz
-            return Err(MashError::Cancelled.into());
-        }
-
-        let _ = tx.send(DownloadUpdate::Extracting);
-
-        let status = Command::new("unxz")
-            .args(["-T0", "-fkv", dest_path.to_str().unwrap()])
-            .status()
-            .context("Failed to run unxz")?;
-
-        if !status.success() {
-            let _ = tx.send(DownloadUpdate::Error(
-                "unxz decompression failed".to_string(),
-            ));
-            let _ = fs::remove_file(&dest_path); // Clean up downloaded .xz
-            return Err(anyhow!("unxz failed"));
-        }
-    }
-
-    let _ = tx.send(DownloadUpdate::Complete(raw_path.clone()));
-    info!("Fedora image download complete to {}", raw_path.display());
-
     Ok(raw_path)
 }

@@ -1,8 +1,6 @@
 //! UI rendering for the TUI
 
-use super::app::{
-    App, DownloadPhase, ImageEditionOption, ImageSource, ImageVersionOption, InstallStep,
-};
+use super::app::{App, ImageEditionOption, ImageSource, ImageVersionOption, Screen};
 use super::input::InputMode;
 use super::progress::Phase;
 use super::widgets::CheckboxState;
@@ -30,23 +28,17 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_title_bar(f, app, chunks[0]);
 
     // Draw main content based on current screen
-    match app.current_step {
-        InstallStep::Welcome => draw_welcome(f, app, chunks[1]),
-        InstallStep::DiskSelection => draw_disk_selection(f, app, chunks[1]),
-        InstallStep::DiskConfirmation => draw_disk_confirmation(f, app, chunks[1]),
-        InstallStep::PartitionScheme => draw_partition_scheme(f, app, chunks[1]),
-        InstallStep::PartitionLayout => draw_partition_layout(f, app, chunks[1]),
-        InstallStep::PartitionCustomize => draw_partition_customize(f, app, chunks[1]),
-        InstallStep::DownloadSourceSelection => draw_download_source_selection(f, app, chunks[1]),
-        InstallStep::ImageSelection => draw_image_selection(f, app, chunks[1]),
-        InstallStep::UefiDirectory => draw_uefi_selection(f, app, chunks[1]),
-        InstallStep::LocaleSelection => draw_locale_selection(f, app, chunks[1]),
-        InstallStep::Options => draw_options(f, app, chunks[1]),
-        InstallStep::Confirmation => draw_confirmation(f, app, chunks[1]),
-        InstallStep::DownloadingFedora => draw_downloading(f, app, chunks[1], "Fedora Image"),
-        InstallStep::DownloadingUefi => draw_downloading(f, app, chunks[1], "UEFI Firmware"),
-        InstallStep::Flashing => draw_progress(f, app, chunks[1]),
-        InstallStep::Complete => draw_complete(f, app, chunks[1]),
+    match app.current_screen {
+        Screen::Welcome => draw_welcome(f, app, chunks[1]),
+        Screen::DiskSelection => draw_disk_selection(f, app, chunks[1]),
+        Screen::DownloadSourceSelection => draw_download_source_selection(f, app, chunks[1]), // New screen
+        Screen::ImageSelection => draw_image_selection(f, app, chunks[1]),
+        Screen::UefiDirectory => draw_uefi_selection(f, app, chunks[1]),
+        Screen::LocaleSelection => draw_locale_selection(f, app, chunks[1]),
+        Screen::Options => draw_options(f, app, chunks[1]),
+        Screen::Confirmation => draw_confirmation(f, app, chunks[1]),
+        Screen::Progress => draw_progress(f, app, chunks[1]),
+        Screen::Complete => draw_complete(f, app, chunks[1]),
     }
 
     // Draw help bar
@@ -54,7 +46,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 }
 
 fn draw_title_bar(f: &mut Frame, app: &App, area: Rect) {
-    let title = format!(" 🍠 MASH - {} ", app.current_step.title());
+    let title = format!(" 🍠 MASH - {} ", app.current_screen.title());
 
     let mode_indicator = if app.options.dry_run || app.dry_run_cli {
         " [🧪 DRY-RUN] "
@@ -79,51 +71,38 @@ fn draw_title_bar(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_help_bar(f: &mut Frame, app: &App, area: Rect) {
-    let help_text = match app.current_step {
-        InstallStep::Welcome => "Enter: Start | Esc/q: Quit",
-        InstallStep::DiskSelection => "Up/Down: Select | Enter: Confirm | r: Refresh | Esc: Back",
-        InstallStep::DiskConfirmation => "Type 'DESTROY' to confirm | Esc: Back",
-        InstallStep::PartitionScheme => "Up/Down: Select | Enter/Space: Confirm | Esc: Back",
-        InstallStep::PartitionLayout => "Y: Use recommended | N: Customize | Esc: Back",
-        InstallStep::PartitionCustomize => "Tab: Next field | Enter: Confirm | Esc: Back",
-        InstallStep::DownloadSourceSelection => "Up/Down: Select | Enter: Confirm | Esc: Back",
-        InstallStep::ImageSelection => match app.image_source_selection {
+    let help_text = match app.current_screen {
+        Screen::Welcome => "⏎ Enter: Start | Esc/q: Quit",
+        Screen::DiskSelection => "↑↓: Select | ⏎ Enter: Confirm | r: Refresh | Esc: Back",
+        Screen::DownloadSourceSelection => "↑↓: Select | ⏎ Enter: Confirm | Esc: Back", // New help
+        Screen::ImageSelection => match app.image_source_selection {
             ImageSource::LocalFile => {
                 if app.image_input.mode == InputMode::Editing {
-                    "Enter: Confirm | Esc: Cancel editing"
+                    "⏎ Enter: Confirm | Esc: Cancel editing"
                 } else {
-                    "Enter/e/i: Edit | Tab: Next | Esc: Back"
+                    "⏎/e/i: Edit | Tab: Next | Esc: Back"
                 }
             }
             ImageSource::DownloadFedora => {
-                "Up/Down: Select | Left/Right: Toggle focus | Enter/Tab: Next | Esc: Back"
+                "↑↓: Select option | ←→: Toggle focus | ⏎/Tab: Next | Esc: Back"
             }
         },
-        InstallStep::UefiDirectory => {
+        Screen::UefiDirectory => {
             if !app.download_uefi_firmware {
                 if app.uefi_input.mode == InputMode::Editing {
-                    "Enter: Confirm | Esc: Cancel editing | d: Toggle download"
+                    "⏎ Enter: Confirm | Esc: Cancel editing | d: Toggle download"
                 } else {
-                    "Enter/e/i: Edit | Tab: Next | Esc: Back | d: Toggle download"
+                    "⏎/e/i: Edit | Tab: Next | Esc: Back | d: Toggle download"
                 }
             } else {
-                "d: Toggle local input | Enter/Tab: Next | Esc: Back"
+                "d: Toggle local input | ⏎/Tab: Next | Esc: Back"
             }
         }
-        InstallStep::LocaleSelection => "Up/Down: Select | Enter/Tab: Next | Esc: Back",
-        InstallStep::Options => "Up/Down: Navigate | Space/Enter: Toggle | Tab: Next | Esc: Back",
-        InstallStep::Confirmation => "Type 'FLASH' to confirm | Esc: Back",
-        InstallStep::DownloadingFedora | InstallStep::DownloadingUefi => {
-            if app.download_state.phase == DownloadPhase::Complete {
-                "Enter: Continue"
-            } else if app.download_state.phase == DownloadPhase::Failed {
-                "Enter/Esc: Go back and retry"
-            } else {
-                "Downloading... Ctrl+C: Abort"
-            }
-        }
-        InstallStep::Flashing => "Ctrl+C: Abort",
-        InstallStep::Complete => "Enter/Esc/q: Exit",
+        Screen::LocaleSelection => "↑↓: Select | ⏎/Tab: Next | Esc: Back",
+        Screen::Options => "↑↓: Navigate | Space/⏎: Toggle | Tab: Next | Esc: Back",
+        Screen::Confirmation => "Type 'YES I KNOW' to confirm | Esc: Back",
+        Screen::Progress => "Ctrl+C: Abort",
+        Screen::Complete => "⏎/Esc/q: Exit",
     };
 
     let help = Paragraph::new(help_text)
@@ -212,286 +191,18 @@ fn draw_disk_selection(f: &mut Frame, app: &App, area: Rect) {
     );
 
     if app.available_disks.is_empty() {
-        let no_disks = Paragraph::new("No removable disks found.\n\nPress 'r' to refresh.")
+        let no_disks = Paragraph::new("😕 No removable disks found.\n\n🔄 Press 'r' to refresh.")
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" Select Target Disk ")
+                    .title(" 💾 Select Target Disk ")
                     .border_style(Style::default().fg(Color::Red)),
             );
         f.render_widget(no_disks, area);
     } else {
         f.render_widget(list, area);
     }
-}
-
-fn draw_disk_confirmation(f: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(8),
-            Constraint::Length(5),
-            Constraint::Length(3),
-        ])
-        .margin(1)
-        .split(area);
-
-    // Warning message
-    let disk_display = app
-        .selected_disk()
-        .map(|d| d.display())
-        .unwrap_or_else(|| "None selected".to_string());
-
-    let warning_text = vec![
-        Line::from(Span::styled(
-            "WARNING: ALL DATA WILL BE DESTROYED!",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(format!("Target Disk: {}", disk_display)),
-        Line::from(""),
-        Line::from("This action is irreversible. All data on the disk will be lost."),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Type 'DESTROY' to confirm you understand.",
-            Style::default().fg(Color::Yellow),
-        )),
-    ];
-
-    let warning = Paragraph::new(warning_text)
-        .alignment(Alignment::Center)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Confirm Disk Destruction ")
-                .border_style(Style::default().fg(Color::Red)),
-        );
-    f.render_widget(warning, chunks[0]);
-
-    // Input field
-    let input_text = format!("Confirmation: {}", app.disk_confirm_input);
-    let input = Paragraph::new(input_text)
-        .style(Style::default().fg(Color::Yellow))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Type DESTROY ")
-                .border_style(Style::default().fg(Color::Yellow)),
-        );
-    f.render_widget(input, chunks[1]);
-
-    // Cursor position
-    f.set_cursor_position((
-        chunks[1].x + 15 + app.disk_confirm_input.len() as u16,
-        chunks[1].y + 1,
-    ));
-
-    // Error message
-    if let Some(ref err) = app.disk_confirm_error {
-        let error = Paragraph::new(format!("Error: {}", err))
-            .style(Style::default().fg(Color::Red))
-            .alignment(Alignment::Center);
-        f.render_widget(error, chunks[2]);
-    }
-
-    // Outer block
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .title(" DANGER ZONE ")
-        .border_style(Style::default().fg(Color::Red));
-    f.render_widget(outer, area);
-}
-
-fn draw_partition_scheme(f: &mut Frame, app: &App, area: Rect) {
-    let schemes = [("MBR (Recommended)", true), ("GPT (Advanced)", false)];
-
-    let items: Vec<ListItem> = schemes
-        .iter()
-        .enumerate()
-        .map(|(i, (label, _is_mbr))| {
-            let is_selected = i == app.partition_scheme_focus;
-            let style = if is_selected {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-
-            let radio = if is_selected { "(*)" } else { "( )" };
-            ListItem::new(format!("  {} {}", radio, label)).style(style)
-        })
-        .collect();
-
-    let help_text = vec![
-        Line::from(""),
-        Line::from("MBR: Traditional partition table, maximum compatibility."),
-        Line::from("GPT: Modern partition table, supports larger disks."),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Recommendation: Use MBR unless you have a specific reason for GPT.",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ];
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(6), Constraint::Min(5)])
-        .margin(1)
-        .split(area);
-
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Select Partition Scheme ")
-            .border_style(Style::default().fg(Color::Cyan)),
-    );
-    f.render_widget(list, chunks[0]);
-
-    let help = Paragraph::new(help_text)
-        .wrap(Wrap { trim: true })
-        .block(Block::default().borders(Borders::ALL).title(" Help "));
-    f.render_widget(help, chunks[1]);
-
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .title(" Partition Scheme ");
-    f.render_widget(outer, area);
-}
-
-fn draw_partition_layout(f: &mut Frame, app: &App, area: Rect) {
-    let scheme_name = match app.partition_plan.scheme {
-        crate::cli::PartitionScheme::Mbr => "MBR",
-        crate::cli::PartitionScheme::Gpt => "GPT",
-    };
-
-    let layout_text = vec![
-        Line::from(Span::styled(
-            format!("Partition Layout ({})", scheme_name),
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(format!(
-            "  EFI:  {} (FAT32)",
-            app.partition_plan.efi_size.display()
-        )),
-        Line::from(format!(
-            "  BOOT: {} (ext4)",
-            app.partition_plan.boot_size.display()
-        )),
-        Line::from(format!(
-            "  ROOT: up to {} (btrfs, subvols: root,home,var)",
-            app.partition_plan.root_end.display()
-        )),
-        Line::from("  DATA: remainder (ext4)"),
-        Line::from(""),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Use recommended partition layout? (Y/n)",
-            Style::default().fg(Color::Yellow),
-        )),
-    ];
-
-    let paragraph = Paragraph::new(layout_text)
-        .alignment(Alignment::Center)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Partition Layout ")
-                .border_style(Style::default().fg(Color::Cyan)),
-        );
-
-    f.render_widget(paragraph, area);
-}
-
-fn draw_partition_customize(f: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(4),
-            Constraint::Length(4),
-            Constraint::Length(4),
-            Constraint::Length(3),
-            Constraint::Min(3),
-        ])
-        .margin(1)
-        .split(area);
-
-    let field_names = ["EFI Size", "BOOT Size", "ROOT End"];
-    let field_values = [
-        app.partition_plan.efi_size.display(),
-        app.partition_plan.boot_size.display(),
-        app.partition_plan.root_end.display(),
-    ];
-
-    for (i, (chunk, (name, value))) in chunks
-        .iter()
-        .take(3)
-        .zip(field_names.iter().zip(field_values.iter()))
-        .enumerate()
-    {
-        let is_editing = i == app.partition_edit_field;
-        let display_value = if is_editing {
-            &app.partition_edit_input
-        } else {
-            value
-        };
-
-        let style = if is_editing {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
-        let border_style = if is_editing {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
-        let label = if is_editing {
-            format!("{} (editing)", name)
-        } else {
-            name.to_string()
-        };
-
-        let input = Paragraph::new(display_value.clone()).style(style).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" {} ", label))
-                .border_style(border_style),
-        );
-        f.render_widget(input, *chunk);
-
-        if is_editing {
-            f.set_cursor_position((
-                chunk.x + 1 + app.partition_edit_input.len() as u16,
-                chunk.y + 1,
-            ));
-        }
-    }
-
-    // Error message
-    if let Some(ref err) = app.partition_edit_error {
-        let error = Paragraph::new(format!("Error: {}", err))
-            .style(Style::default().fg(Color::Red))
-            .alignment(Alignment::Center);
-        f.render_widget(error, chunks[3]);
-    }
-
-    // Help
-    let help = Paragraph::new("Use M for MiB, G for GiB (e.g., 1024M, 2G, 1800G)")
-        .style(Style::default().fg(Color::DarkGray))
-        .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL).title(" Help "));
-    f.render_widget(help, chunks[4]);
-
-    // Outer block
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .title(" Customize Partitions ");
-    f.render_widget(outer, area);
 }
 
 fn draw_download_source_selection(f: &mut Frame, app: &App, area: Rect) {
@@ -1043,188 +754,6 @@ fn draw_confirmation(f: &mut Frame, app: &App, area: Rect) {
         .title(" ⚠️ Confirm Installation ⚠️ ")
         .border_style(Style::default().fg(Color::Red));
     f.render_widget(outer, area);
-}
-
-fn draw_downloading(f: &mut Frame, app: &App, area: Rect, download_type: &str) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(5), // Title/description
-            Constraint::Length(5), // Progress bar
-            Constraint::Length(5), // Stats
-            Constraint::Min(5),    // Status/messages
-        ])
-        .margin(1)
-        .split(area);
-
-    // Title and description
-    let description = match app.download_state.phase {
-        DownloadPhase::NotStarted => format!("⏳ Preparing to download {}...", download_type),
-        DownloadPhase::Downloading => {
-            if app.download_state.description.is_empty() {
-                format!("📥 Downloading {}...", download_type)
-            } else {
-                app.download_state.description.clone()
-            }
-        }
-        DownloadPhase::Extracting => format!("📦 Extracting {}...", download_type),
-        DownloadPhase::Complete => format!("✅ {} download complete!", download_type),
-        DownloadPhase::Failed => format!("❌ {} download failed!", download_type),
-    };
-
-    let title_style = match app.download_state.phase {
-        DownloadPhase::Complete => Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD),
-        DownloadPhase::Failed => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        _ => Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    };
-
-    let title_block = Paragraph::new(description)
-        .style(title_style)
-        .alignment(Alignment::Center)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" 📥 Downloading {} ", download_type)),
-        );
-    f.render_widget(title_block, chunks[0]);
-
-    // Progress bar
-    let (percent, progress_label) = if let Some(total) = app.download_state.total_bytes {
-        let pct = if total > 0 {
-            ((app.download_state.current_bytes as f64 / total as f64) * 100.0) as u16
-        } else {
-            0
-        };
-        let label = format!(
-            "{}% - {} / {}",
-            pct,
-            format_bytes(app.download_state.current_bytes),
-            format_bytes(total)
-        );
-        (pct, label)
-    } else {
-        let label = format!(
-            "Downloaded: {}",
-            format_bytes(app.download_state.current_bytes)
-        );
-        (0, label)
-    };
-
-    let gauge_style = match app.download_state.phase {
-        DownloadPhase::Complete => Style::default().fg(Color::Green),
-        DownloadPhase::Failed => Style::default().fg(Color::Red),
-        DownloadPhase::Extracting => Style::default().fg(Color::Yellow),
-        _ => Style::default().fg(Color::Cyan),
-    };
-
-    let gauge = Gauge::default()
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" 📊 Progress "),
-        )
-        .gauge_style(gauge_style)
-        .percent(percent.min(100))
-        .label(progress_label);
-    f.render_widget(gauge, chunks[1]);
-
-    // Stats panel
-    let speed_str = format_bytes(app.download_state.speed_bytes_per_sec);
-    let eta_str = if app.download_state.eta_seconds > 0 {
-        format!("{}s", app.download_state.eta_seconds)
-    } else {
-        "calculating...".to_string()
-    };
-
-    let stats_text = vec![
-        Line::from(format!("⚡ Speed: {}/s", speed_str)),
-        Line::from(format!("🎯 ETA: {}", eta_str)),
-    ];
-
-    let stats = Paragraph::new(stats_text)
-        .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL).title(" 📈 Stats "));
-    f.render_widget(stats, chunks[2]);
-
-    // Status/error messages
-    let status_content = if let Some(ref err) = app.download_state.error {
-        vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                format!("❌ Error: {}", err),
-                Style::default().fg(Color::Red),
-            )),
-            Line::from(""),
-            Line::from("Press Enter or Esc to go back and retry."),
-        ]
-    } else if app.download_state.phase == DownloadPhase::Complete {
-        vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                "✅ Download complete!",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(""),
-            Line::from("Press Enter to continue..."),
-        ]
-    } else {
-        // Animated spinner during download
-        let spinner = match (app.animation_tick / 3) % 4 {
-            0 => "⠋",
-            1 => "⠙",
-            2 => "⠹",
-            _ => "⠸",
-        };
-        vec![
-            Line::from(""),
-            Line::from(format!("{} Downloading... Please wait.", spinner)),
-            Line::from(""),
-            Line::from(Span::styled(
-                "⚠️  Large files may take several minutes",
-                Style::default().fg(Color::Yellow),
-            )),
-        ]
-    };
-
-    let status = Paragraph::new(status_content)
-        .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL).title(" 📝 Status "));
-    f.render_widget(status, chunks[3]);
-
-    // Outer block
-    let outer_style = match app.download_state.phase {
-        DownloadPhase::Complete => Style::default().fg(Color::Green),
-        DownloadPhase::Failed => Style::default().fg(Color::Red),
-        _ => Style::default().fg(Color::Cyan),
-    };
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(" 📥 {} Download ", download_type))
-        .border_style(outer_style);
-    f.render_widget(outer, area);
-}
-
-/// Format bytes into human-readable string
-fn format_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-
-    if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} B", bytes)
-    }
 }
 
 fn draw_progress(f: &mut Frame, app: &App, area: Rect) {

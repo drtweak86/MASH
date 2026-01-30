@@ -211,7 +211,6 @@ mod tests {
 
     #[test]
     fn test_locales_defined() {
-        let _ = LOCALES; // Force initialization
         assert!(LOCALES.len() >= 5);
         assert_eq!(LOCALES[0].lang, "en_GB.UTF-8");
         assert_eq!(LOCALES[0].keymap, "gb");
