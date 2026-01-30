@@ -210,12 +210,23 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::DownloadSourceSelection => {
             items.push("📥 Select image source:".to_string());
+            items
+                .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
             let options = app
                 .image_sources
                 .iter()
                 .map(|source| source.label.clone())
                 .collect::<Vec<_>>();
             push_options(&mut items, &options, app.image_source_index);
+            if app
+                .image_sources
+                .get(app.image_source_index)
+                .map(|source| source.value == crate::tui::flash_config::ImageSource::LocalFile)
+                .unwrap_or(false)
+            {
+                items.push("Local image path:".to_string());
+                items.push(app.image_source_path.clone());
+            }
         }
         InstallStepType::ImageSelection => {
             items.push("🖼️ Select Fedora image:".to_string());
@@ -228,19 +239,32 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::UefiDirectory => {
             items.push("📁 Select UEFI directory:".to_string());
+            items
+                .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
             let options = app
                 .uefi_dirs
                 .iter()
                 .map(|path| path.display().to_string())
                 .collect::<Vec<_>>();
             push_options(&mut items, &options, app.uefi_index);
+            if !app
+                .options
+                .iter()
+                .any(|option| option.label == "Download UEFI firmware" && option.enabled)
+            {
+                items.push("Local UEFI path:".to_string());
+                items.push(app.uefi_source_path.clone());
+            }
         }
         InstallStepType::LocaleSelection => {
             items.push("🗣️ Select locale and keymap:".to_string());
+            items
+                .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
             push_options(&mut items, &app.locales, app.locale_index);
         }
         InstallStepType::Options => {
             items.push("⚙️ Installation options:".to_string());
+            items.push("Use ↑/↓ to focus • Space/Enter to toggle • Esc to go back.".to_string());
             let options = app
                 .options
                 .iter()
@@ -437,7 +461,7 @@ fn expected_actions(step: InstallStepType) -> String {
         InstallStepType::DownloadingFedora | InstallStepType::DownloadingUefi => {
             "Up/Down, Enter, Esc, q".to_string()
         }
-        InstallStepType::Options => "Up/Down, Space, Enter, Esc, q".to_string(),
+        InstallStepType::Options => "Up/Down, Space/Enter, Esc, q".to_string(),
         InstallStepType::Welcome => "Up/Down, Enter, q".to_string(),
         InstallStepType::PartitionLayout => "Up/Down/Tab, Y/N, Enter, Esc, q".to_string(),
         InstallStepType::PartitionScheme => "Up/Down/Tab, Enter, Esc, q".to_string(),
@@ -445,12 +469,13 @@ fn expected_actions(step: InstallStepType) -> String {
             "Up/Down/Tab, Type, Backspace, Enter, Esc, q".to_string()
         }
         InstallStepType::DiskSelection
-        | InstallStepType::DownloadSourceSelection
         | InstallStepType::ImageSelection
-        | InstallStepType::UefiDirectory
         | InstallStepType::LocaleSelection
         | InstallStepType::FirstBootUser
         | InstallStepType::Confirmation => "Up/Down/Tab, Enter, Esc, A, q".to_string(),
+        InstallStepType::DownloadSourceSelection | InstallStepType::UefiDirectory => {
+            "Up/Down/Tab, Type, Backspace, Enter, Esc, q".to_string()
+        }
     }
 }
 

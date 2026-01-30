@@ -367,6 +367,8 @@ pub struct App {
     pub is_running: bool,
     pub status_message: String,
     pub error_message: Option<String>,
+    pub image_source_path: String,
+    pub uefi_source_path: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -576,6 +578,8 @@ impl App {
             is_running: false,
             status_message: "👋 Welcome to MASH!".to_string(),
             error_message: None,
+            image_source_path: "/tmp/fedora.raw".to_string(),
+            uefi_source_path: "/tmp/uefi".to_string(),
         }
         .with_partition_defaults()
     }
@@ -604,8 +608,17 @@ impl App {
             InstallStepType::PartitionCustomize => self.handle_partition_customize_input(key),
             InstallStepType::DownloadSourceSelection => {
                 let len = self.image_sources.len();
-                let action = Self::list_action(key, len, &mut self.image_source_index);
-                self.apply_list_action(action)
+                let is_local = self
+                    .image_sources
+                    .get(self.image_source_index)
+                    .map(|source| source.value == ImageSource::LocalFile)
+                    .unwrap_or(false);
+                if is_local {
+                    self.handle_image_source_path_input(key, len)
+                } else {
+                    let action = Self::list_action(key, len, &mut self.image_source_index);
+                    self.apply_list_action(action)
+                }
             }
             InstallStepType::ImageSelection => {
                 let len = self.images.len();
@@ -614,8 +627,16 @@ impl App {
             }
             InstallStepType::UefiDirectory => {
                 let len = self.uefi_dirs.len();
-                let action = Self::list_action(key, len, &mut self.uefi_index);
-                self.apply_list_action(action)
+                let downloads_uefi = self
+                    .options
+                    .iter()
+                    .any(|option| option.label == "Download UEFI firmware" && option.enabled);
+                if downloads_uefi {
+                    let action = Self::list_action(key, len, &mut self.uefi_index);
+                    self.apply_list_action(action)
+                } else {
+                    self.handle_uefi_source_path_input(key, len)
+                }
             }
             InstallStepType::LocaleSelection => {
                 let len = self.locales.len();
@@ -740,16 +761,9 @@ impl App {
                 Self::adjust_index(len, &mut self.options_index, 1);
                 InputResult::Continue
             }
-            KeyCode::Char(' ') => {
+            KeyCode::Char(' ') | KeyCode::Enter => {
                 if let Some(option) = self.options.get_mut(self.options_index) {
                     option.enabled = !option.enabled;
-                }
-                InputResult::Continue
-            }
-            KeyCode::Enter => {
-                self.error_message = None;
-                if let Some(next) = self.current_step_type.next() {
-                    self.current_step_type = next;
                 }
                 InputResult::Continue
             }
@@ -1079,6 +1093,78 @@ impl App {
         }
     }
 
+    fn handle_image_source_path_input(&mut self, key: KeyEvent, len: usize) -> InputResult {
+        match key.code {
+            KeyCode::Char(c) if !c.is_control() => {
+                self.image_source_path.push(c);
+                InputResult::Continue
+            }
+            KeyCode::Backspace => {
+                self.image_source_path.pop();
+                InputResult::Continue
+            }
+            KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
+                Self::adjust_index(len, &mut self.image_source_index, -1);
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
+                Self::adjust_index(len, &mut self.image_source_index, 1);
+                InputResult::Continue
+            }
+            KeyCode::Enter => {
+                self.error_message = None;
+                if let Some(next) = self.current_step_type.next() {
+                    self.current_step_type = next;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Esc => {
+                if let Some(prev) = self.current_step_type.prev() {
+                    self.current_step_type = prev;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Char('q') => InputResult::Quit,
+            _ => InputResult::Continue,
+        }
+    }
+
+    fn handle_uefi_source_path_input(&mut self, key: KeyEvent, len: usize) -> InputResult {
+        match key.code {
+            KeyCode::Char(c) if !c.is_control() => {
+                self.uefi_source_path.push(c);
+                InputResult::Continue
+            }
+            KeyCode::Backspace => {
+                self.uefi_source_path.pop();
+                InputResult::Continue
+            }
+            KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
+                Self::adjust_index(len, &mut self.uefi_index, -1);
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
+                Self::adjust_index(len, &mut self.uefi_index, 1);
+                InputResult::Continue
+            }
+            KeyCode::Enter => {
+                self.error_message = None;
+                if let Some(next) = self.current_step_type.next() {
+                    self.current_step_type = next;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Esc => {
+                if let Some(prev) = self.current_step_type.prev() {
+                    self.current_step_type = prev;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Char('q') => InputResult::Quit,
+            _ => InputResult::Continue,
+        }
+    }
+
     fn apply_customize_edit(&mut self, input: Option<char>) -> bool {
         let target = match self.customize_index {
             0 => Some(&mut self.efi_size),
@@ -1162,7 +1248,7 @@ impl App {
                 .images
                 .get(self.image_index)
                 .map(|image| image.path.clone())
-                .unwrap_or_else(|| PathBuf::from("/tmp/placeholder_image.raw")),
+                .unwrap_or_else(|| PathBuf::from(self.image_source_path.clone())),
             disk: self
                 .disks
                 .get(self.disk_index)
@@ -1176,7 +1262,7 @@ impl App {
                 .uefi_dirs
                 .get(self.uefi_index)
                 .cloned()
-                .unwrap_or_else(|| PathBuf::from("/tmp/placeholder_uefi")),
+                .unwrap_or_else(|| PathBuf::from(self.uefi_source_path.clone())),
             dry_run: false,
             auto_unmount: self
                 .options
@@ -1266,5 +1352,32 @@ mod tests {
         assert!(app.efi_size.ends_with('9'));
         assert_ne!(app.efi_size, before);
         assert!(app.partition_customizations[0].contains(&app.efi_size));
+    }
+
+    #[test]
+    fn options_toggle_with_enter() {
+        let mut app = App::new();
+        app.current_step_type = InstallStepType::Options;
+        let before = app.options[0].enabled;
+        app.handle_input(key(KeyCode::Enter));
+        assert_ne!(app.options[0].enabled, before);
+    }
+
+    #[test]
+    fn download_source_local_path_edits() {
+        let mut app = App::new();
+        app.current_step_type = InstallStepType::DownloadSourceSelection;
+        app.image_source_index = 0;
+        let before = app.image_source_path.clone();
+        app.handle_input(key(KeyCode::Char('x')));
+        assert_ne!(app.image_source_path, before);
+    }
+
+    #[test]
+    fn locale_selection_advances_on_enter() {
+        let mut app = App::new();
+        app.current_step_type = InstallStepType::LocaleSelection;
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::Options);
     }
 }
