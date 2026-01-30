@@ -1,5 +1,7 @@
 use clap::Parser;
 
+mod version;
+
 #[derive(Debug, Parser)]
 #[command(name = "mash-release")]
 #[command(about = "Release helper for the MASH installer")]
