@@ -110,6 +110,17 @@ pub fn draw(f: &mut Frame, app: &App) {
                 "⌨️ Customization controls will render here.".to_string(),
             ));
         }
+        InstallStepType::DownloadSourceSelection => {
+            items.push(ListItem::new(
+                "📥 Image sources not loaded yet.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "ℹ️ Expected from defaults or download configuration.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "⌨️ Source options will render here.".to_string(),
+            ));
+        }
         InstallStepType::FirstBootUser => {
             items.push(ListItem::new(
                 "🧑‍💻 First boot will prompt you to create a user.".to_string(),
