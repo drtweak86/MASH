@@ -790,8 +790,7 @@ impl App {
                         self.current_step_type = next;
                     }
                 } else {
-                    self.error_message =
-                        Some("Type WIPE to confirm disk destruction.".to_string());
+                    self.error_message = Some("Type WIPE to confirm disk destruction.".to_string());
                 }
                 InputResult::Continue
             }

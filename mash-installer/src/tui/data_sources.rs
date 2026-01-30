@@ -104,9 +104,7 @@ fn base_block_device(device: &str) -> Option<String> {
         return None;
     }
     let name = device.trim_start_matches("/dev/");
-    let base = if name.starts_with("nvme")
-        || name.starts_with("mmcblk")
-        || name.starts_with("loop")
+    let base = if name.starts_with("nvme") || name.starts_with("mmcblk") || name.starts_with("loop")
     {
         if let Some(idx) = name.rfind('p') {
             let suffix = &name[idx + 1..];

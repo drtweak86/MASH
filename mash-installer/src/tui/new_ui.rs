@@ -137,22 +137,14 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::DiskSelection => {
             items.push("💽 Select a target disk:".to_string());
-            let options = app
-                .disks
-                .iter()
-                .map(format_disk_entry)
-                .collect::<Vec<_>>();
+            let options = app.disks.iter().map(format_disk_entry).collect::<Vec<_>>();
             push_options(&mut items, &options, app.disk_index);
         }
         InstallStepType::DiskConfirmation => {
             let disk = app.disks.get(app.disk_index);
             items.push("⚠️ Confirm disk destruction:".to_string());
             if let Some(disk) = disk {
-                let model = disk
-                    .model
-                    .as_deref()
-                    .unwrap_or("Unknown model")
-                    .trim();
+                let model = disk.model.as_deref().unwrap_or("Unknown model").trim();
                 items.push(format!(
                     "TARGET TO BE WIPED: {} ({} , {})",
                     disk.path, model, disk.size
@@ -384,7 +376,10 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
 
     if app.show_debug_overlay {
         items.push("🧪 Debug overlay (press D to toggle)".to_string());
-        items.push(debug_line("Disk", app.disks.get(app.disk_index).map(|disk| disk.path.clone())));
+        items.push(debug_line(
+            "Disk",
+            app.disks.get(app.disk_index).map(|disk| disk.path.clone()),
+        ));
         items.push(debug_line(
             "Scheme",
             app.partition_schemes
@@ -405,7 +400,9 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
         ));
         items.push(debug_line(
             "Image",
-            app.images.get(app.image_index).map(|image| image.label.clone()),
+            app.images
+                .get(app.image_index)
+                .map(|image| image.label.clone()),
         ));
     }
 
@@ -452,11 +449,7 @@ fn expected_actions(step: InstallStepType) -> String {
 }
 
 fn format_disk_entry(disk: &crate::tui::new_app::DiskOption) -> String {
-    let model = disk
-        .model
-        .as_deref()
-        .unwrap_or("Unknown model")
-        .trim();
+    let model = disk.model.as_deref().unwrap_or("Unknown model").trim();
     let mut tags = Vec::new();
     if disk.removable {
         tags.push("removable");
@@ -469,13 +462,7 @@ fn format_disk_entry(disk: &crate::tui::new_app::DiskOption) -> String {
     } else {
         format!(" - {}", tags.join(", "))
     };
-    format!(
-        "{} - {} - {}{}",
-        disk.path,
-        disk.size,
-        model,
-        tag_str
-    )
+    format!("{} - {} - {}{}", disk.path, disk.size, model, tag_str)
 }
 
 fn status_message(app: &App, progress_state: &ProgressState) -> String {
