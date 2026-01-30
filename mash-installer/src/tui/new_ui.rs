@@ -198,6 +198,10 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::PartitionCustomize => {
             items.push("🛠️ Customize partitions:".to_string());
+            items.push(
+                "Use Tab/↑/↓ to select • Type to edit • Backspace to delete • Enter to continue."
+                    .to_string(),
+            );
             push_options(
                 &mut items,
                 &app.partition_customizations,
@@ -276,13 +280,10 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
             if let Some(layout) = app.partition_layouts.get(app.layout_index) {
                 items.push(format!("Layout: {}", layout));
             }
-            if let Some(custom) = app
-                .partition_customizations
-                .get(app.customize_index)
-                .cloned()
-            {
-                items.push(format!("Customize: {}", custom));
-            }
+            items.push(format!(
+                "Partitions: EFI {} | BOOT {} | ROOT {} | DATA remainder",
+                app.efi_size, app.boot_size, app.root_end
+            ));
             if let Some(uefi_dir) = app.uefi_dirs.get(app.uefi_index) {
                 items.push(format!("UEFI: {}", uefi_dir.display()));
             }
@@ -440,8 +441,10 @@ fn expected_actions(step: InstallStepType) -> String {
         InstallStepType::Welcome => "Up/Down, Enter, q".to_string(),
         InstallStepType::PartitionLayout => "Up/Down/Tab, Y/N, Enter, Esc, q".to_string(),
         InstallStepType::PartitionScheme => "Up/Down/Tab, Enter, Esc, q".to_string(),
+        InstallStepType::PartitionCustomize => {
+            "Up/Down/Tab, Type, Backspace, Enter, Esc, q".to_string()
+        }
         InstallStepType::DiskSelection
-        | InstallStepType::PartitionCustomize
         | InstallStepType::DownloadSourceSelection
         | InstallStepType::ImageSelection
         | InstallStepType::UefiDirectory

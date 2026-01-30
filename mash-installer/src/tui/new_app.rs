@@ -341,6 +341,9 @@ pub struct App {
     pub layout_index: usize,
     pub partition_customizations: Vec<String>,
     pub customize_index: usize,
+    pub efi_size: String,
+    pub boot_size: String,
+    pub root_end: String,
     pub image_sources: Vec<SourceOption>,
     pub image_source_index: usize,
     pub images: Vec<ImageOption>,
@@ -513,13 +516,11 @@ impl App {
                 "EFI 512MiB | BOOT 1024MiB | ROOT 64GiB | DATA rest".to_string(),
             ],
             layout_index: 0,
-            partition_customizations: vec![
-                "EFI 1024MiB".to_string(),
-                "BOOT 2048MiB".to_string(),
-                "ROOT 1800GiB".to_string(),
-                "DATA remainder".to_string(),
-            ],
+            partition_customizations: Vec::new(),
             customize_index: 0,
+            efi_size: "1024MiB".to_string(),
+            boot_size: "2048MiB".to_string(),
+            root_end: "1800GiB".to_string(),
             image_sources: vec![
                 SourceOption {
                     label: "Local Image File (.raw)".to_string(),
@@ -576,6 +577,7 @@ impl App {
             status_message: "👋 Welcome to MASH!".to_string(),
             error_message: None,
         }
+        .with_partition_defaults()
     }
 
     // New: handle input for step advancement
@@ -599,11 +601,7 @@ impl App {
                 self.apply_list_action(action)
             }
             InstallStepType::PartitionLayout => self.handle_partition_layout_input(key),
-            InstallStepType::PartitionCustomize => {
-                let len = self.partition_customizations.len();
-                let action = Self::list_action(key, len, &mut self.customize_index);
-                self.apply_list_action(action)
-            }
+            InstallStepType::PartitionCustomize => self.handle_partition_customize_input(key),
             InstallStepType::DownloadSourceSelection => {
                 let len = self.image_sources.len();
                 let action = Self::list_action(key, len, &mut self.image_source_index);
@@ -1039,6 +1037,81 @@ impl App {
         }
     }
 
+    fn handle_partition_customize_input(&mut self, key: KeyEvent) -> InputResult {
+        match key.code {
+            KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
+                let len = self.partition_customizations.len();
+                Self::adjust_index(len, &mut self.customize_index, -1);
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
+                let len = self.partition_customizations.len();
+                Self::adjust_index(len, &mut self.customize_index, 1);
+                InputResult::Continue
+            }
+            KeyCode::Char(c) if c.is_ascii_alphanumeric() || c == '.' => {
+                if self.apply_customize_edit(Some(c)) {
+                    self.refresh_partition_customizations();
+                }
+                InputResult::Continue
+            }
+            KeyCode::Backspace => {
+                if self.apply_customize_edit(None) {
+                    self.refresh_partition_customizations();
+                }
+                InputResult::Continue
+            }
+            KeyCode::Enter => {
+                self.error_message = None;
+                if let Some(next) = self.current_step_type.next() {
+                    self.current_step_type = next;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Esc => {
+                if let Some(prev) = self.current_step_type.prev() {
+                    self.current_step_type = prev;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Char('q') => InputResult::Quit,
+            _ => InputResult::Continue,
+        }
+    }
+
+    fn apply_customize_edit(&mut self, input: Option<char>) -> bool {
+        let target = match self.customize_index {
+            0 => Some(&mut self.efi_size),
+            1 => Some(&mut self.boot_size),
+            2 => Some(&mut self.root_end),
+            _ => None,
+        };
+        let Some(value) = target else {
+            return false;
+        };
+        match input {
+            Some(ch) => value.push(ch),
+            None => {
+                value.pop();
+            }
+        }
+        true
+    }
+
+    fn refresh_partition_customizations(&mut self) {
+        self.partition_customizations = vec![
+            format!("EFI {}", self.efi_size),
+            format!("BOOT {}", self.boot_size),
+            format!("ROOT {}", self.root_end),
+            "DATA remainder".to_string(),
+        ];
+    }
+
+    fn with_partition_defaults(mut self) -> Self {
+        self.refresh_partition_customizations();
+        self
+    }
+
     fn requires_fedora_download(&self) -> bool {
         let source_is_download = self
             .image_sources
@@ -1120,9 +1193,9 @@ impl App {
                 .map(|option| option.enabled)
                 .unwrap_or(false),
             progress_tx: self.flash_progress_sender.clone(), // This is the critical change!
-            efi_size: "1024MiB".to_string(),
-            boot_size: "2048MiB".to_string(),
-            root_end: "1800GiB".to_string(),
+            efi_size: self.efi_size.clone(),
+            boot_size: self.boot_size.clone(),
+            root_end: self.root_end.clone(),
             download_uefi_firmware: self
                 .options
                 .iter()
@@ -1181,5 +1254,17 @@ mod tests {
         app.current_step_type = InstallStepType::PartitionLayout;
         app.handle_input(key(KeyCode::Char('n')));
         assert_eq!(app.current_step_type, InstallStepType::PartitionScheme);
+    }
+
+    #[test]
+    fn partition_customize_edits_selected_field() {
+        let mut app = App::new();
+        app.current_step_type = InstallStepType::PartitionCustomize;
+        app.customize_index = 0;
+        let before = app.efi_size.clone();
+        app.handle_input(key(KeyCode::Char('9')));
+        assert!(app.efi_size.ends_with('9'));
+        assert_ne!(app.efi_size, before);
+        assert!(app.partition_customizations[0].contains(&app.efi_size));
     }
 }
