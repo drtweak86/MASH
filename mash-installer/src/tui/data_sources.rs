@@ -59,11 +59,7 @@ pub fn scan_disks() -> Vec<DiskInfo> {
             continue;
         }
         let size_bytes = size_sectors.saturating_mul(512);
-        let model = read_trimmed(
-            &PathBuf::from("/sys/block")
-                .join(&name)
-                .join("device/model"),
-        );
+        let model = read_trimmed(&PathBuf::from("/sys/block").join(&name).join("device/model"));
         let vendor = read_trimmed(
             &PathBuf::from("/sys/block")
                 .join(&name)
@@ -75,9 +71,7 @@ pub fn scan_disks() -> Vec<DiskInfo> {
             (None, Some(model)) => Some(model),
             _ => None,
         };
-        let removable_path = PathBuf::from("/sys/block")
-            .join(&name)
-            .join("removable");
+        let removable_path = PathBuf::from("/sys/block").join(&name).join("removable");
         let removable = read_u64(&removable_path).unwrap_or(0) == 1;
 
         disks.push(DiskInfo {
@@ -160,11 +154,7 @@ pub fn collect_remote_images() -> Vec<ImageMeta> {
     let mut images = Vec::new();
     for version in ImageVersionOption::all() {
         for edition in ImageEditionOption::all() {
-            let label = format!(
-                "{} {} (remote)",
-                version.display(),
-                edition.display()
-            );
+            let label = format!("{} {} (remote)", version.display(), edition.display());
             let filename = format!(
                 "fedora-{}-{}-aarch64.raw.xz",
                 version.version_str().to_lowercase(),
