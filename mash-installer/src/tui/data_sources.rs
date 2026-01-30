@@ -86,6 +86,49 @@ pub fn scan_disks() -> Vec<DiskInfo> {
     disks
 }
 
+pub fn boot_device_path() -> Option<String> {
+    let mounts = fs::read_to_string("/proc/self/mounts").ok()?;
+    for line in mounts.lines() {
+        let mut parts = line.split_whitespace();
+        let device = parts.next()?;
+        let mountpoint = parts.next()?;
+        if mountpoint == "/" {
+            return base_block_device(device);
+        }
+    }
+    None
+}
+
+fn base_block_device(device: &str) -> Option<String> {
+    if !device.starts_with("/dev/") {
+        return None;
+    }
+    let name = device.trim_start_matches("/dev/");
+    let base = if name.starts_with("nvme")
+        || name.starts_with("mmcblk")
+        || name.starts_with("loop")
+    {
+        if let Some(idx) = name.rfind('p') {
+            let suffix = &name[idx + 1..];
+            if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
+                name[..idx].to_string()
+            } else {
+                name.to_string()
+            }
+        } else {
+            name.to_string()
+        }
+    } else {
+        let trimmed = name.trim_end_matches(|c: char| c.is_ascii_digit());
+        if trimmed.is_empty() {
+            name.to_string()
+        } else {
+            trimmed.to_string()
+        }
+    };
+    Some(format!("/dev/{}", base))
+}
+
 pub fn human_size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;

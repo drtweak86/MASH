@@ -34,6 +34,9 @@ pub struct DiskOption {
     pub label: String,
     pub path: String,
     pub size: String,
+    pub model: Option<String>,
+    pub removable: bool,
+    pub is_boot: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -330,6 +333,7 @@ pub struct App {
     pub disks: Vec<DiskOption>,
     pub disk_index: usize,
     pub disk_confirm_index: usize,
+    pub wipe_confirmation: String,
     pub partition_schemes: Vec<PartitionScheme>,
     pub scheme_index: usize,
     pub partition_layouts: Vec<String>,
@@ -381,6 +385,7 @@ impl App {
             }
         });
         let flags = data_sources::data_flags();
+        let boot_device = data_sources::boot_device_path();
         let real_disks = if flags.disks {
             data_sources::scan_disks()
         } else {
@@ -392,20 +397,33 @@ impl App {
                     label: "USB Disk 32GB".to_string(),
                     path: "/dev/sda".to_string(),
                     size: "32 GB".to_string(),
+                    model: Some("SanDisk Ultra".to_string()),
+                    removable: true,
+                    is_boot: false,
                 },
                 DiskOption {
                     label: "NVMe Disk 512GB".to_string(),
                     path: "/dev/nvme0n1".to_string(),
                     size: "512 GB".to_string(),
+                    model: Some("Samsung 980".to_string()),
+                    removable: false,
+                    is_boot: true,
                 },
             ]
         } else {
             real_disks
                 .into_iter()
-                .map(|disk| DiskOption {
-                    label: disk.name,
-                    path: disk.path,
-                    size: data_sources::human_size(disk.size_bytes),
+                .map(|disk| {
+                    let path = disk.path;
+                    let is_boot = boot_device.as_deref() == Some(path.as_str());
+                    DiskOption {
+                        label: disk.name,
+                        path,
+                        size: data_sources::human_size(disk.size_bytes),
+                        model: disk.model,
+                        removable: disk.removable,
+                        is_boot,
+                    }
                 })
                 .collect()
         };
@@ -484,6 +502,7 @@ impl App {
             disks,
             disk_index: 0,
             disk_confirm_index: 0,
+            wipe_confirmation: String::new(),
             partition_schemes,
             scheme_index,
             partition_layouts: vec![
@@ -743,28 +762,32 @@ impl App {
     }
 
     fn handle_disk_confirmation_input(&mut self, key: KeyEvent) -> InputResult {
-        let options_len = 2;
         match key.code {
-            KeyCode::Up | KeyCode::Left => {
-                Self::adjust_index(options_len, &mut self.disk_confirm_index, -1);
+            KeyCode::Char(c) if c.is_ascii_alphanumeric() => {
+                if self.wipe_confirmation.len() < 4 {
+                    self.wipe_confirmation.push(c.to_ascii_uppercase());
+                }
                 InputResult::Continue
             }
-            KeyCode::Down | KeyCode::Right => {
-                Self::adjust_index(options_len, &mut self.disk_confirm_index, 1);
+            KeyCode::Backspace => {
+                self.wipe_confirmation.pop();
                 InputResult::Continue
             }
             KeyCode::Enter => {
-                if self.disk_confirm_index == 0 {
+                if self.wipe_confirmation == "WIPE" {
                     self.error_message = None;
+                    self.wipe_confirmation.clear();
                     if let Some(next) = self.current_step_type.next() {
                         self.current_step_type = next;
                     }
-                } else if let Some(prev) = self.current_step_type.prev() {
-                    self.current_step_type = prev;
+                } else {
+                    self.error_message =
+                        Some("Type WIPE to confirm disk destruction.".to_string());
                 }
                 InputResult::Continue
             }
             KeyCode::Esc => {
+                self.wipe_confirmation.clear();
                 if let Some(prev) = self.current_step_type.prev() {
                     self.current_step_type = prev;
                 }

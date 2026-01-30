@@ -140,23 +140,28 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
             let options = app
                 .disks
                 .iter()
-                .map(|disk| format!("{} ({})", disk.path, disk.size))
+                .map(format_disk_entry)
                 .collect::<Vec<_>>();
             push_options(&mut items, &options, app.disk_index);
         }
         InstallStepType::DiskConfirmation => {
             let disk = app.disks.get(app.disk_index);
-            items.push("⚠️ Confirm target disk selection:".to_string());
+            items.push("⚠️ Confirm disk destruction:".to_string());
             if let Some(disk) = disk {
-                items.push(format!("Selected: {} ({})", disk.path, disk.size));
+                let model = disk
+                    .model
+                    .as_deref()
+                    .unwrap_or("Unknown model")
+                    .trim();
+                items.push(format!(
+                    "TARGET TO BE WIPED: {} ({} , {})",
+                    disk.path, model, disk.size
+                ));
+                items.push("Type WIPE to confirm.".to_string());
+                items.push(format!("Input: {}", app.wipe_confirmation));
             } else {
                 items.push("No disk selected.".to_string());
             }
-            push_options(
-                &mut items,
-                &["Confirm and continue".to_string(), "Go back".to_string()],
-                app.disk_confirm_index,
-            );
         }
         InstallStepType::BackupConfirmation => {
             items.push("⚠️ This will erase data on the selected disk.".to_string());
@@ -386,13 +391,13 @@ fn expected_actions(step: InstallStepType) -> String {
         InstallStepType::BackupConfirmation => "Up/Down, Y/N, Enter, Esc, q".to_string(),
         InstallStepType::Flashing => "Enter when complete, q".to_string(),
         InstallStepType::Complete => "Enter to exit".to_string(),
+        InstallStepType::DiskConfirmation => "Type WIPE, Enter, Esc, q".to_string(),
         InstallStepType::DownloadingFedora | InstallStepType::DownloadingUefi => {
             "Up/Down, Enter, Esc, q".to_string()
         }
         InstallStepType::Options => "Up/Down, Space, Enter, Esc, q".to_string(),
         InstallStepType::Welcome => "Up/Down, Enter, q".to_string(),
         InstallStepType::DiskSelection
-        | InstallStepType::DiskConfirmation
         | InstallStepType::PartitionScheme
         | InstallStepType::PartitionLayout
         | InstallStepType::PartitionCustomize
@@ -403,6 +408,33 @@ fn expected_actions(step: InstallStepType) -> String {
         | InstallStepType::FirstBootUser
         | InstallStepType::Confirmation => "Up/Down, Enter, Esc, A, q".to_string(),
     }
+}
+
+fn format_disk_entry(disk: &crate::tui::new_app::DiskOption) -> String {
+    let model = disk
+        .model
+        .as_deref()
+        .unwrap_or("Unknown model")
+        .trim();
+    let mut tags = Vec::new();
+    if disk.removable {
+        tags.push("removable");
+    }
+    if disk.is_boot {
+        tags.push("BOOT MEDIA");
+    }
+    let tag_str = if tags.is_empty() {
+        String::new()
+    } else {
+        format!(" - {}", tags.join(", "))
+    };
+    format!(
+        "{} - {} - {}{}",
+        disk.path,
+        disk.size,
+        model,
+        tag_str
+    )
 }
 
 fn status_message(app: &App, progress_state: &ProgressState) -> String {
