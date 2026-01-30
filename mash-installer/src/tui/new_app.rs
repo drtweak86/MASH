@@ -4,6 +4,7 @@
 
 use crate::cli::PartitionScheme;
 use crate::tui::flash_config::{FlashConfig, ImageSource};
+use clap::ValueEnum;
 use crossterm::event::{KeyCode, KeyEvent}; // New import for KeyEvent
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
@@ -407,6 +408,12 @@ impl App {
                 .collect()
         };
 
+        let partition_schemes = PartitionScheme::value_variants().to_vec();
+        let scheme_index = partition_schemes
+            .iter()
+            .position(|scheme| *scheme == PartitionScheme::Mbr)
+            .unwrap_or(0);
+
         Self {
             current_step_type: InstallStepType::Welcome, // NEW
             partition_plan: None,
@@ -427,8 +434,8 @@ impl App {
             disks,
             disk_index: 0,
             disk_confirm_index: 0,
-            partition_schemes: vec![PartitionScheme::Mbr, PartitionScheme::Gpt],
-            scheme_index: 0,
+            partition_schemes,
+            scheme_index,
             partition_layouts: vec![
                 "EFI 1024MiB | BOOT 2048MiB | ROOT 1800GiB | DATA rest".to_string(),
                 "EFI 512MiB | BOOT 1024MiB | ROOT 64GiB | DATA rest".to_string(),
