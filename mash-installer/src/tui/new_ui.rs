@@ -37,6 +37,15 @@ pub fn draw(f: &mut Frame, app: &App) {
     items.push(ListItem::new(format!("🧭 Step: {}", current_step_title)));
 
     match app.current_step_type {
+        InstallStepType::DiskSelection => {
+            items.push(ListItem::new("💽 Disk list not available yet.".to_string()));
+            items.push(ListItem::new(
+                "ℹ️ Placeholder: Select Target Disk options will render here.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "⌨️ Use Enter to continue for now.".to_string(),
+            ));
+        }
         InstallStepType::BackupConfirmation => {
             items.push(ListItem::new(
                 "⚠️ This will erase data on the selected disk.".to_string(),
