@@ -353,6 +353,7 @@ pub struct App {
     pub downloading_uefi_index: usize,
     pub downloaded_fedora: bool,
     pub downloaded_uefi: bool,
+    pub destructive_armed: bool,
     pub is_running: bool,
     pub status_message: String,
     pub error_message: Option<String>,
@@ -546,6 +547,7 @@ impl App {
             downloading_uefi_index: 0,
             downloaded_fedora: false,
             downloaded_uefi: false,
+            destructive_armed: false,
             is_running: false,
             status_message: "👋 Welcome to MASH!".to_string(),
             error_message: None,
@@ -775,11 +777,23 @@ impl App {
 
     fn handle_confirmation_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                self.destructive_armed = !self.destructive_armed;
+                self.error_message = None;
+                InputResult::Continue
+            }
             KeyCode::Enter => {
                 if self.confirmation_index == 0 {
                     if !self.backup_confirmed {
                         self.error_message =
                             Some("Backup confirmation required before installation.".to_string());
+                        return InputResult::Continue;
+                    }
+                    if !self.destructive_armed {
+                        self.error_message = Some(
+                            "Destructive operations are disarmed. Arm before starting."
+                                .to_string(),
+                        );
                         return InputResult::Continue;
                     }
                     self.is_running = true;
@@ -823,6 +837,12 @@ impl App {
     }
 
     fn handle_downloading_fedora_input(&mut self, key: KeyEvent) -> InputResult {
+        if !self.destructive_armed {
+            self.error_message =
+                Some("Destructive operations are disarmed. Arm before downloading.".to_string());
+            self.current_step_type = InstallStepType::Confirmation;
+            return InputResult::Continue;
+        }
         match key.code {
             KeyCode::Up | KeyCode::Left => {
                 Self::adjust_index(2, &mut self.downloading_fedora_index, -1);
@@ -859,6 +879,12 @@ impl App {
     }
 
     fn handle_downloading_uefi_input(&mut self, key: KeyEvent) -> InputResult {
+        if !self.destructive_armed {
+            self.error_message =
+                Some("Destructive operations are disarmed. Arm before downloading.".to_string());
+            self.current_step_type = InstallStepType::Confirmation;
+            return InputResult::Continue;
+        }
         match key.code {
             KeyCode::Up | KeyCode::Left => {
                 Self::adjust_index(2, &mut self.downloading_uefi_index, -1);
@@ -946,6 +972,12 @@ impl App {
     }
 
     fn handle_flashing_input(&mut self, key: KeyEvent) -> InputResult {
+        if !self.destructive_armed {
+            self.error_message =
+                Some("Destructive operations are disarmed. Arm before flashing.".to_string());
+            self.current_step_type = InstallStepType::Confirmation;
+            return InputResult::Continue;
+        }
         let is_complete = self
             .progress_state
             .lock()

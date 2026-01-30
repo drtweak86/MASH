@@ -229,6 +229,10 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::Confirmation => {
             items.push("✅ Review configuration summary:".to_string());
+            items.push(format!(
+                "Armed for destructive operations: {} (press A to toggle)",
+                if app.destructive_armed { "Yes" } else { "No" }
+            ));
             if let Some(disk) = app.disks.get(app.disk_index) {
                 items.push(format!("Disk: {} ({})", disk.path, disk.size));
                 items.push(format!("Disk label: {}", disk.label));
@@ -380,7 +384,7 @@ fn expected_actions(step: InstallStepType) -> String {
         | InstallStepType::UefiDirectory
         | InstallStepType::LocaleSelection
         | InstallStepType::FirstBootUser
-        | InstallStepType::Confirmation => "Up/Down, Enter, Esc, q".to_string(),
+        | InstallStepType::Confirmation => "Up/Down, Enter, Esc, A, q".to_string(),
         _ => "Enter, Esc, q".to_string(),
     }
 }
