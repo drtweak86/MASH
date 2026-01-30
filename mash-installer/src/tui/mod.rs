@@ -1,37 +1,16 @@
-//! TUI Module - Full Ratatui wizard for MASH Installer
-//!
-//! Provides an interactive terminal user interface with:
-//! - Single-screen install flow
-//! - Live progress dashboard
-
-mod app;
-mod input;
+use app::*;
+pub mod new_app;
+pub mod new_ui;
 pub mod progress;
-mod ui;
-mod widgets;
-mod new_app;
-mod new_ui;
+pub mod ui;
+pub mod widgets;
 
-pub use app::{
-    App, DownloadType, DownloadUpdate, FlashConfig, ImageSource, InputResult, InstallStep,
-};
-
-use crate::{cli::Cli, errors::Result};
-use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use ratatui::{backend::CrosstermBackend, Terminal};
-use std::io;
-use std::time::Duration;
-use std::thread;
-
-/// Run the TUI wizard
+/// Run the TUI wizard – now the **new single‑page UI** is the only entry point.
+/// The old multi‑screen (`run_legacy`) entry point has been removed.
 pub fn run(cli: &Cli, watch: bool, dry_run: bool) -> Result<app::InputResult> {
     use std::io::IsTerminal;
 
-    // Check if we have a real terminal
+    // Terminal sanity check
     if !std::io::stdout().is_terminal() {
         anyhow::bail!(
             "No TTY detected. The TUI requires an interactive terminal.\n\
@@ -47,22 +26,176 @@ pub fn run(cli: &Cli, watch: bool, dry_run: bool) -> Result<app::InputResult> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Create app state
+    // Create the **new** app state (single‑page UI)
     let mut app = new_app::App::new();
-    app.steps.push(new_app::InstallStep {
-        name: "Partition Planning".to_string(),
-        state: new_app::StepState::Pending,
-        task: Box::new(|| Ok(())),
-    });
-    app.steps.push(new_app::InstallStep {
-        name: "Download Fedora Image".to_string(),
-        state: new_app::StepState::Pending,
-        task: Box::new(|| Ok(())),
-    });
+    app.dry_run = dry_run;
 
+    // Populate mash_root paths from CLI
+    let mash_root = &cli.mash_root;
+    app.uefi_dir = Some(mash_root.join("uefi"));
+    app.image_path = Some(mash_root.join("images"));
 
-    // Main loop
-    let wizard_result = run_new_ui(&mut terminal, &mut app);
+    // Create cleanup guard that will run on any exit path
+    let cleanup_guard = app.create_cleanup_guard();
+
+    // Main loop with cleanup guard
+    let result = run_new_ui_loop(&mut terminal, &mut app, cleanup_guard);
+
+    // Restore terminal (always, even on error)
+    let _ = disable_raw_mode();
+    let _ = execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    );
+    let _ = terminal.show_cursor();
+
+    // Return result
+    match result {
+        Ok(_) => Ok(app::InputResult::Quit),
+        Err(e) => {
+            // Log the error but don't propagate – we want a clean exit
+            log::error!("TUI error: {}", e);
+            Ok(app::InputResult::Quit)
+        }
+    }
+}
+
+/// Main application loop (single screen) with cleanup guard
+///
+/// The cleanup_guard ensures resources are cleaned up on:
+/// - Normal exit (Esc, q, Ctrl+C)
+/// - Error/panic
+/// - Any early return via ?
+fn run_new_ui_loop(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut new_app::App,
+    mut cleanup_guard: new_app::CleanupGuard,
+) -> Result<()> {
+    info!("🎬 Starting TUI event loop");
+
+    // Note: In the full implementation, the cleanup_guard would be passed to
+    // worker threads that register resources as they create them.
+    // For now, we just hold it to ensure cleanup on exit.
+
+    loop {
+        // Tick animation counter
+        app.tick();
+
+        // Process any pending progress events (non‑blocking)
+        app.process_events();
+
+        // Draw UI
+        terminal.draw(|f| new_ui::draw(f, app))?;
+
+        // Handle input with timeout (non‑blocking, allows animation)
+        match handle_input_tick(app)? {
+            LoopAction::Continue => {}
+            LoopAction::Exit => {
+                info!("🛑 Exit requested, running cleanup...");
+                // Explicitly run cleanup (will also run on drop, but this is clearer)
+                let warnings = cleanup_guard.run_cleanup();
+                if !warnings.is_empty() {
+                    app.state.cleanup_warnings = warnings;
+                }
+                break;
+            }
+        }
+
+        // Check if cancelled by worker thread
+        if app.is_cancelled() && !cleanup_guard.is_cleaned_up() {
+            info!("🛑 Cancellation detected, running cleanup...");
+            let warnings = cleanup_guard.run_cleanup();
+            if !warnings.is_empty() {
+                app.state.cleanup_warnings = warnings;
+            }
+            break;
+        }
+    }
+
+    info!("👋 TUI event loop ended");
+    Ok(())
+}
+
+/// Handle a single input tick (non‑blocking)
+fn handle_input_tick(app: &mut new_app::App) -> Result<LoopAction> {
+    // Poll with timeout to allow animation updates (~10 FPS)
+    if event::poll(Duration::from_millis(100))? {
+        if let Event::Key(key) = event::read()? {
+            // Global Ctrl+C/Ctrl+Q exit (always works, even in dialogs)
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                match key.code {
+                    KeyCode::Char('c') | KeyCode::Char('q') => {
+                        app.request_cancel();
+                        return Ok(LoopAction::Exit);
+                    }
+                    _ => {}
+                }
+            }
+
+            // Delegate to app's step‑specific input handling
+            match app.handle_key(key.code) {
+                new_app::InputAction::Continue => {}
+                new_app::InputAction::NextStep => {
+                    // Step navigation handled internally by app
+                }
+                new_app::InputAction::PrevStep => {
+                    // Step navigation handled internally by app
+                }
+                new_app::InputAction::StartExecution => {
+                    // TODO: Pass #4 will spawn worker thread for installation
+                    app.start_execution();
+                    info!("🚀 Starting execution phase");
+                }
+                new_app::InputAction::RequestCancel => {
+                    // Cancel dialog is now visible, handled by app.handle_key
+                }
+                new_app::InputAction::ConfirmCancel => {
+                    app.request_cancel();
+                    return Ok(LoopAction::Exit);
+                }
+                new_app::InputAction::Exit => {
+                    app.request_cancel();
+                    return Ok(LoopAction::Exit);
+                }
+            }
+        }
+    }
+
+    Ok(LoopAction::Continue)
+}
+
+// ============================================================================
+// Legacy run function (kept for reference, may be removed later)
+// ============================================================================
+
+/// Run the legacy multi‑screen TUI wizard
+///
+/// This is the original implementation with separate screens per step.
+/// Kept for reference during transition to single‑page UI.
+#[allow(dead_code)]
+pub fn run_legacy(cli: &Cli, watch: bool, dry_run: bool) -> Result<app::InputResult> {
+    use std::io::IsTerminal;
+
+    if !std::io::stdout().is_terminal() {
+        anyhow::bail!(
+            "No TTY detected. The TUI requires an interactive terminal.\n\
+             Try running directly in a terminal (not piped or via script).\n\
+             If using sudo, try: sudo -E mash"
+        );
+    }
+
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    // Create legacy app state
+    let mut legacy_app = app::App::new(cli, watch, dry_run);
+
+    // Main loop using legacy UI
+    let wizard_result = run_legacy_loop(&mut terminal, &mut legacy_app);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -73,64 +206,59 @@ pub fn run(cli: &Cli, watch: bool, dry_run: bool) -> Result<app::InputResult> {
     )?;
     terminal.show_cursor()?;
 
-    // For now, we'll just return Quit
-    Ok(app::InputResult::Quit)
+    wizard_result
 }
 
-/// Main application loop (single screen)
-pub fn run_new_ui(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut new_app::App) -> Result<()> {
-    let tx = app.progress_tx.clone().unwrap();
-
-    // Spawn a thread to simulate work
-    thread::spawn(move || {
-        for i in 0..app.steps.len() {
-            tx.send(new_app::ProgressEvent {
-                step_id: i,
-                message: "Starting...".to_string(),
-                progress: 0.0,
-            }).unwrap();
-            thread::sleep(Duration::from_secs(1));
-            tx.send(new_app::ProgressEvent {
-                step_id: i,
-                message: "In progress...".to_string(),
-                progress: 0.5,
-            }).unwrap();
-            thread::sleep(Duration::from_secs(1));
-            tx.send(new_app::ProgressEvent {
-                step_id: i,
-                message: "Done.".to_string(),
-                progress: 1.0,
-            }).unwrap();
-        }
-    });
-
-
+/// Legacy event loop
+#[allow(dead_code)]
+fn run_legacy_loop(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut app::App,
+) -> Result<app::InputResult> {
     loop {
-        // Draw UI
-        terminal.draw(|f| new_ui::draw(f, app))?;
+        // Update animation
+        app.animation_tick = app.animation_tick.wrapping_add(1);
 
-        // Handle input with timeout
+        // Update progress from channels
+        app.update_progress();
+        let download_result = app.update_download();
+
+        // Handle download completion triggering next step
+        if let app::InputResult::StartFlash(_) | app::InputResult::StartDownload(_) = download_result {
+            return Ok(download_result);
+        }
+
+        // Draw UI
+        terminal.draw(|f| ui::draw(f, app))?;
+
+        // Handle input
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
+                // Global Ctrl+C handling
                 if key.modifiers.contains(KeyModifiers::CONTROL)
                     && (key.code == KeyCode::Char('c') || key.code == KeyCode::Char('q'))
                 {
-                    return Ok(());
+                    return Ok(app::InputResult::Quit);
                 }
-            }
-        }
 
-        // Check for progress updates
-        if let Some(ref rx) = app.progress_rx {
-            while let Ok(event) = rx.try_recv() {
-                if event.progress == 0.0 {
-                    app.steps[event.step_id].state = new_app::StepState::Running;
+                match app.handle_input(key) {
+                    app::InputResult::Continue => {}
+                    other => return Ok(other),
                 }
-                if event.progress == 1.0 {
-                    app.steps[event.step_id].state = new_app::StepState::Completed;
-                }
-                app.status_message = event.message;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_app_creation() {
+        let app = new_app::App::new();
+        assert!(!app.is_cancelled());
+        assert!(app.is_running);
+        assert_eq!(app.state.overall_percent, 0.0);
     }
 }

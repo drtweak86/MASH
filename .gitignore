@@ -64,3 +64,4 @@ __pycache__/
 *.pyd
 target/
 # --- /MASH Merge Toolkit ---
+.aider*

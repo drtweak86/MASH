@@ -116,6 +116,27 @@ pub enum ProgressUpdate {
     Error(String),
 }
 
+use crate::tui::app::ExecutionStep;
+use crate::download::DownloadUpdate;
+use std::path::PathBuf;
+
+/// Events sent from the installation worker thread to the TUI
+#[derive(Debug, Clone)]
+pub enum ProgressEvent {
+    /// Update from the flash process (partitioning, copying, etc.)
+    FlashUpdate(ExecutionStep, ProgressUpdate),
+    /// Update from the download process
+    DownloadUpdate(ExecutionStep, DownloadUpdate),
+    /// An error occurred in the worker thread
+    Error(String),
+    /// Worker thread completed successfully
+    Complete(PathBuf, Option<PathBuf>), // downloaded_image_path, downloaded_uefi_path
+    /// Worker thread was cancelled
+    Cancelled,
+    /// Worker thread is starting cleanup
+    CleanupStarted,
+}
+
 /// State of installation progress
 #[derive(Debug, Clone)]
 pub struct ProgressState {

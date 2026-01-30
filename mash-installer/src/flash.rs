@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use log::{debug, info};
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::Sender;
@@ -538,7 +538,8 @@ fn partition_disk_mbr(ctx: &FlashContext) -> Result<()> {
     );
 
     // Create msdos partition table
-    run_command("parted", &["-s", &ctx.disk, "mklabel", "msdos"])?;
+    run_command("parted", &["-s", &ctx.disk, "mklabel", "msdos"])
+        .context("Failed to create partition table")?;
 
     // p1: EFI (fat32) — mark bootable for broad Pi UEFI compatibility
     run_command(
@@ -614,7 +615,8 @@ fn partition_disk_gpt(ctx: &FlashContext) -> Result<()> {
     ); // Calculate based on ctx values
 
     // Create GPT partition table
-    run_command("parted", &["-s", &ctx.disk, "mklabel", "gpt"])?;
+    run_command("parted", &["-s", &ctx.disk, "mklabel", "gpt"])
+        .context("Failed to create GPT partition table")?;
 
     // p1: EFI (fat32) with esp flag
     run_command(
@@ -681,7 +683,8 @@ fn format_partitions(ctx: &FlashContext) -> Result<()> {
     let p4 = ctx.partition_path(4);
 
     ctx.status(ExecutionStep::Format, "✨ Formatting EFI partition (FAT32)...");
-    run_command("mkfs.vfat", &["-F", "32", "-n", "EFI", &p1])?;
+    run_command("mkfs.vfat", &["-F", "32", "-n", "EFI", &p1])
+        .context("Failed to format EFI partition")?;
 
     ctx.status(ExecutionStep::Format, "✨ Formatting BOOT partition (ext4)...");
     run_command("mkfs.ext4", &["-F", "-L", "BOOT", &p2])?;
@@ -1202,8 +1205,8 @@ fn stage_dojo(ctx: &FlashContext, data_mount: &Path) -> Result<()> {
 
     let staging_dir = data_mount.join("mash-staging");
     let logs_dir = data_mount.join("mash-logs");
-    fs::create_dir_all(&staging_dir)?;
-    fs::create_dir_all(&logs_dir)?;
+    fs::create_dir_all(&staging_dir).context("Failed to create staging dir")?;
+    fs::create_dir_all(&logs_dir).context("Failed to create logs dir")?;
 
     // Create install_dojo.sh
     let dojo_script = staging_dir.join("install_dojo.sh");

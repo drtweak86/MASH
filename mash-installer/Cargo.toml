@@ -1,6 +1,6 @@
 [package]
 name = "mash"
-version = "1.2.6"
+version = "1.2.7"
 edition = "2021"
 authors = ["MASH Team"]
 description = "🍠 MASH - Fedora KDE for Raspberry Pi 4B with UEFI boot + Dojo system"

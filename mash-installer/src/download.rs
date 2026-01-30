@@ -6,10 +6,13 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use zip::ZipArchive;
 
-use crate::tui::DownloadUpdate;
+use crate::tui::{DownloadUpdate, ProgressEvent};
+use crate::errors::MashError;
 
 // GitHub API types for deserialization
 #[derive(Debug, Deserialize)]
@@ -359,6 +362,7 @@ fn download_with_channel(
     dest_file: &mut File,
     description: &str,
     tx: &Sender<DownloadUpdate>,
+    cancel_flag: Arc<AtomicBool>,
 ) -> Result<u64> {
     let response = client
         .get(url)
@@ -381,6 +385,11 @@ fn download_with_channel(
     let mut last_update = Instant::now();
 
     loop {
+        // Check for cancellation
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(MashError::Cancelled.into());
+        }
+
         let bytes_read = reader.read(&mut buffer)?;
         if bytes_read == 0 {
             break;
@@ -424,6 +433,7 @@ fn download_with_channel(
 /// Download UEFI firmware with TUI progress updates
 pub fn download_uefi_firmware_with_progress(
     destination_dir: &Path,
+    cancel_flag: Arc<AtomicBool>,
     tx: Sender<DownloadUpdate>,
 ) -> Result<PathBuf> {
     info!("Starting UEFI firmware download (TUI mode)...");
@@ -444,6 +454,8 @@ pub fn download_uefi_firmware_with_progress(
     let response: GithubRelease = client
         .get(github_api_url)
         .send()?
+        .error_for_status()
+        .context("Failed to fetch GitHub API response for UEFI firmware releases")?
         .json()
         .context("Failed to parse GitHub API response for UEFI firmware releases")?;
 
@@ -458,6 +470,11 @@ pub fn download_uefi_firmware_with_progress(
     let download_url = &asset.browser_download_url;
     let temp_zip_path = destination_dir.join("uefi_firmware.zip");
 
+    // Check for cancellation before download
+    if cancel_flag.load(Ordering::SeqCst) {
+        return Err(MashError::Cancelled.into());
+    }
+
     let mut temp_zip_file = File::create(&temp_zip_path)?;
     download_with_channel(
         &client,
@@ -465,7 +482,14 @@ pub fn download_uefi_firmware_with_progress(
         &mut temp_zip_file,
         &format!("UEFI Firmware ({})", asset.name),
         &tx,
+        Arc::clone(&cancel_flag),
     )?;
+
+    // Check for cancellation before extraction
+    if cancel_flag.load(Ordering::SeqCst) {
+        let _ = fs::remove_file(&temp_zip_path); // Clean up temp file
+        return Err(MashError::Cancelled.into());
+    }
 
     // Send extracting status
     let _ = tx.send(DownloadUpdate::Extracting);
@@ -474,6 +498,12 @@ pub fn download_uefi_firmware_with_progress(
     let mut archive = ZipArchive::new(file)?;
 
     for i in 0..archive.len() {
+        // Check for cancellation during extraction
+        if cancel_flag.load(Ordering::SeqCst) {
+            let _ = fs::remove_file(&temp_zip_path); // Clean up temp file
+            return Err(MashError::Cancelled.into());
+        }
+
         let mut file = archive.by_index(i)?;
         let outpath = match file.enclosed_name() {
             Some(path) => destination_dir.join(path),
@@ -493,6 +523,8 @@ pub fn download_uefi_firmware_with_progress(
         }
     }
 
+    let _ = fs::remove_file(&temp_zip_path); // Clean up the downloaded zip
+
     let _ = tx.send(DownloadUpdate::Complete(destination_dir.to_path_buf()));
     info!(
         "UEFI firmware download complete to {}",
@@ -507,6 +539,7 @@ pub fn download_fedora_image_with_progress(
     destination_dir: &Path,
     version: &str,
     edition: &str,
+    cancel_flag: Arc<AtomicBool>,
     tx: Sender<DownloadUpdate>,
 ) -> Result<PathBuf> {
     info!("Starting Fedora image download (TUI mode)...");
@@ -540,6 +573,11 @@ pub fn download_fedora_image_with_progress(
         .timeout(std::time::Duration::from_secs(3600))
         .build()?;
 
+    // Check for cancellation before searching for image
+    if cancel_flag.load(Ordering::SeqCst) {
+        return Err(MashError::Cancelled.into());
+    }
+
     for patch in &patch_versions {
         let filename = format!("Fedora-{}-{}-{}.{}.raw.xz", spin_name, version, patch, arch);
         let url = format!(
@@ -554,6 +592,10 @@ pub fn download_fedora_image_with_progress(
                 found_filename = filename;
                 break;
             }
+        }
+        // Check for cancellation during URL search
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(MashError::Cancelled.into());
         }
     }
 
@@ -575,6 +617,10 @@ pub fn download_fedora_image_with_progress(
     let dest_path = destination_dir.join(&filename);
 
     if !dest_path.exists() {
+        // Check for cancellation before download
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(MashError::Cancelled.into());
+        }
         let mut dest_file = File::create(&dest_path)?;
         download_with_channel(
             &client,
@@ -582,6 +628,7 @@ pub fn download_fedora_image_with_progress(
             &mut dest_file,
             &format!("Fedora {} {} (aarch64)", version, edition),
             &tx,
+            Arc::clone(&cancel_flag),
         )?;
     }
 
@@ -590,6 +637,12 @@ pub fn download_fedora_image_with_progress(
     let raw_path = destination_dir.join(raw_filename);
 
     if !raw_path.exists() {
+        // Check for cancellation before decompression
+        if cancel_flag.load(Ordering::SeqCst) {
+            let _ = fs::remove_file(&dest_path); // Clean up downloaded .xz
+            return Err(MashError::Cancelled.into());
+        }
+
         let _ = tx.send(DownloadUpdate::Extracting);
 
         let status = Command::new("unxz")
@@ -601,6 +654,7 @@ pub fn download_fedora_image_with_progress(
             let _ = tx.send(DownloadUpdate::Error(
                 "unxz decompression failed".to_string(),
             ));
+            let _ = fs::remove_file(&dest_path); // Clean up downloaded .xz
             return Err(anyhow!("unxz failed"));
         }
     }
