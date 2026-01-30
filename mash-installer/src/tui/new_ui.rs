@@ -113,9 +113,10 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
 
     match app.current_step_type {
         InstallStepType::Welcome => {
-            items.push("👋 Welcome screen content not loaded yet.".to_string());
-            items.push("ℹ️ Expected from static copy in wizard config.".to_string());
-            items.push("⌨️ Press Enter to begin.".to_string());
+            items.push("👋 Welcome to the MASH installer dojo.".to_string());
+            items.push("🧭 Use the wizard to configure a stub install.".to_string());
+            items.push("⌨️ Choose an option to begin.".to_string());
+            push_options(&mut items, &app.welcome_options, app.welcome_index);
         }
         InstallStepType::DiskSelection => {
             items.push("💽 Select a target disk:".to_string());
@@ -231,6 +232,9 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
             if let Some(disk) = app.disks.get(app.disk_index) {
                 items.push(format!("Disk: {} ({})", disk.path, disk.size));
             }
+            if let Some(scheme) = app.partition_schemes.get(app.scheme_index) {
+                items.push(format!("Scheme: {}", scheme));
+            }
             if let Some(image) = app.images.get(app.image_index) {
                 items.push(format!("Image: {}", image.label));
             }
@@ -239,6 +243,13 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
             }
             if let Some(layout) = app.partition_layouts.get(app.layout_index) {
                 items.push(format!("Layout: {}", layout));
+            }
+            if let Some(custom) = app
+                .partition_customizations
+                .get(app.customize_index)
+                .cloned()
+            {
+                items.push(format!("Customize: {}", custom));
             }
             if let Some(uefi_dir) = app.uefi_dirs.get(app.uefi_index) {
                 items.push(format!("UEFI: {}", uefi_dir.display()));
@@ -272,19 +283,35 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
             );
         }
         InstallStepType::DownloadingFedora => {
-            items.push("⬇️ Downloading Fedora image...".to_string());
+            let status = if app.downloaded_fedora {
+                "✅ Fedora image downloaded (stub)."
+            } else {
+                "⬇️ Ready to simulate Fedora download."
+            };
+            items.push(status.to_string());
             push_options(
                 &mut items,
-                &["Waiting for download telemetry".to_string()],
-                0,
+                &[
+                    "Mark Fedora download complete".to_string(),
+                    "Go back".to_string(),
+                ],
+                app.downloading_fedora_index,
             );
         }
         InstallStepType::DownloadingUefi => {
-            items.push("⬇️ Downloading UEFI firmware...".to_string());
+            let status = if app.downloaded_uefi {
+                "✅ UEFI firmware downloaded (stub)."
+            } else {
+                "⬇️ Ready to simulate UEFI download."
+            };
+            items.push(status.to_string());
             push_options(
                 &mut items,
-                &["Waiting for download telemetry".to_string()],
-                0,
+                &[
+                    "Mark UEFI download complete".to_string(),
+                    "Go back".to_string(),
+                ],
+                app.downloading_uefi_index,
             );
         }
         InstallStepType::Flashing => {
@@ -321,9 +348,10 @@ fn expected_actions(step: InstallStepType) -> String {
         InstallStepType::Flashing => "Enter when complete, q".to_string(),
         InstallStepType::Complete => "Enter to exit".to_string(),
         InstallStepType::DownloadingFedora | InstallStepType::DownloadingUefi => {
-            "Wait, q".to_string()
+            "Up/Down, Enter, Esc, q".to_string()
         }
         InstallStepType::Options => "Up/Down, Space, Enter, Esc, q".to_string(),
+        InstallStepType::Welcome => "Up/Down, Enter, q".to_string(),
         InstallStepType::DiskSelection
         | InstallStepType::DiskConfirmation
         | InstallStepType::PartitionScheme
