@@ -1121,13 +1121,12 @@ fn disable_sddm_autologin(target_root: &Path) -> Result<()> {
                 out.push(line.to_string());
                 continue;
             }
-            if in_autologin {
-                if trimmed.starts_with("User=")
+            if in_autologin
+                && (trimmed.starts_with("User=")
                     || trimmed.starts_with("Session=")
-                    || trimmed.starts_with("Relogin=")
-                {
-                    continue;
-                }
+                    || trimmed.starts_with("Relogin="))
+            {
+                continue;
             }
             out.push(line.to_string());
         }
