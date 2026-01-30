@@ -105,13 +105,27 @@ dist: build-cli build-qt
 
 # Bump version
 bump-major:
-	@./scripts/bump-version.sh major
+	@VERSION=$$(sed -n 's/^version = "\\(.*\\)"/\\1/p' mash-installer/Cargo.toml); \
+	MAJOR=$${VERSION%%.*}; \
+	NEXT_MAJOR=$$((MAJOR+1)); \
+	$(CARGO) run --package mash-tools -- release bump $$NEXT_MAJOR.0.0
 
 bump-minor:
-	@./scripts/bump-version.sh minor
+	@VERSION=$$(sed -n 's/^version = "\\(.*\\)"/\\1/p' mash-installer/Cargo.toml); \
+	MAJOR=$${VERSION%%.*}; \
+	REST=$${VERSION#*.}; \
+	MINOR=$${REST%%.*}; \
+	NEXT_MINOR=$$((MINOR+1)); \
+	$(CARGO) run --package mash-tools -- release bump $$MAJOR.$$NEXT_MINOR.0
 
 bump-patch:
-	@./scripts/bump-version.sh patch
+	@VERSION=$$(sed -n 's/^version = "\\(.*\\)"/\\1/p' mash-installer/Cargo.toml); \
+	MAJOR=$${VERSION%%.*}; \
+	REST=$${VERSION#*.}; \
+	MINOR=$${REST%%.*}; \
+	PATCH=$${REST#*.}; \
+	NEXT_PATCH=$$((PATCH+1)); \
+	$(CARGO) run --package mash-tools -- release bump $$MAJOR.$$MINOR.$$NEXT_PATCH
 
 # Rust release tool
 mash-release:
