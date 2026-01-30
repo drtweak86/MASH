@@ -6,7 +6,7 @@ use crate::cli::PartitionScheme;
 use crate::locale::LOCALES;
 use crate::tui::flash_config::{FlashConfig, ImageSource};
 use clap::ValueEnum;
-use crossterm::event::{KeyCode, KeyEvent}; // New import for KeyEvent
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers}; // New import for KeyEvent
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -245,8 +245,8 @@ impl InstallStepType {
         match self {
             InstallStepType::Welcome => Some(InstallStepType::DiskSelection),
             InstallStepType::DiskSelection => Some(InstallStepType::DiskConfirmation),
-            InstallStepType::DiskConfirmation => Some(InstallStepType::BackupConfirmation), // Insert new step
-            InstallStepType::BackupConfirmation => Some(InstallStepType::PartitionScheme), // After backup, go to PartitionScheme
+            InstallStepType::DiskConfirmation => Some(InstallStepType::PartitionScheme),
+            InstallStepType::BackupConfirmation => Some(InstallStepType::PartitionScheme),
             InstallStepType::PartitionScheme => Some(InstallStepType::PartitionLayout),
             InstallStepType::PartitionLayout => Some(InstallStepType::PartitionCustomize),
             InstallStepType::PartitionCustomize => Some(InstallStepType::DownloadSourceSelection),
@@ -254,7 +254,7 @@ impl InstallStepType {
             InstallStepType::ImageSelection => Some(InstallStepType::UefiDirectory),
             InstallStepType::UefiDirectory => Some(InstallStepType::LocaleSelection),
             InstallStepType::LocaleSelection => Some(InstallStepType::Options),
-            InstallStepType::Options => Some(InstallStepType::FirstBootUser),
+            InstallStepType::Options => Some(InstallStepType::Confirmation),
             InstallStepType::FirstBootUser => Some(InstallStepType::Confirmation),
             InstallStepType::Confirmation => None,
             InstallStepType::DownloadingFedora => None, // Execution steps do not have 'next' in this flow
@@ -270,8 +270,8 @@ impl InstallStepType {
             InstallStepType::Welcome => None,
             InstallStepType::DiskSelection => Some(InstallStepType::Welcome),
             InstallStepType::DiskConfirmation => Some(InstallStepType::DiskSelection),
-            InstallStepType::BackupConfirmation => Some(InstallStepType::DiskConfirmation), // Previous to BackupConfirmation
-            InstallStepType::PartitionScheme => Some(InstallStepType::BackupConfirmation), // Previous to PartitionScheme
+            InstallStepType::BackupConfirmation => Some(InstallStepType::DiskConfirmation),
+            InstallStepType::PartitionScheme => Some(InstallStepType::DiskConfirmation),
             InstallStepType::PartitionLayout => Some(InstallStepType::PartitionScheme),
             InstallStepType::PartitionCustomize => Some(InstallStepType::PartitionLayout),
             InstallStepType::DownloadSourceSelection => Some(InstallStepType::PartitionCustomize),
@@ -280,7 +280,7 @@ impl InstallStepType {
             InstallStepType::LocaleSelection => Some(InstallStepType::UefiDirectory),
             InstallStepType::Options => Some(InstallStepType::LocaleSelection),
             InstallStepType::FirstBootUser => Some(InstallStepType::Options),
-            InstallStepType::Confirmation => Some(InstallStepType::FirstBootUser),
+            InstallStepType::Confirmation => Some(InstallStepType::Options),
             _ => None, // Execution steps do not have 'prev' in this flow
         }
     }
@@ -369,6 +369,8 @@ pub struct App {
     pub error_message: Option<String>,
     pub image_source_path: String,
     pub uefi_source_path: String,
+    pub confirmation_input: String,
+    pub cancel_requested: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -580,13 +582,17 @@ impl App {
             error_message: None,
             image_source_path: "/tmp/fedora.raw".to_string(),
             uefi_source_path: "/tmp/uefi".to_string(),
+            confirmation_input: String::new(),
+            cancel_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
         .with_partition_defaults()
     }
 
     // New: handle input for step advancement
     pub fn handle_input(&mut self, key: KeyEvent) -> InputResult {
-        if matches!(key.code, KeyCode::Char('d') | KeyCode::Char('D')) {
+        if matches!(key.code, KeyCode::Char('d') | KeyCode::Char('D'))
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
             self.show_debug_overlay = !self.show_debug_overlay;
             return InputResult::Continue;
         }
@@ -781,7 +787,7 @@ impl App {
     fn handle_disk_confirmation_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
             KeyCode::Char(c) if c.is_ascii_alphanumeric() => {
-                if self.wipe_confirmation.len() < 4 {
+                if self.wipe_confirmation.len() < 16 {
                     self.wipe_confirmation.push(c.to_ascii_uppercase());
                 }
                 InputResult::Continue
@@ -791,14 +797,15 @@ impl App {
                 InputResult::Continue
             }
             KeyCode::Enter => {
-                if self.wipe_confirmation == "WIPE" {
+                if self.wipe_confirmation == "DESTROY" {
                     self.error_message = None;
                     self.wipe_confirmation.clear();
                     if let Some(next) = self.current_step_type.next() {
                         self.current_step_type = next;
                     }
                 } else {
-                    self.error_message = Some("Type WIPE to confirm disk destruction.".to_string());
+                    self.error_message =
+                        Some("Type DESTROY to confirm disk destruction.".to_string());
                 }
                 InputResult::Continue
             }
@@ -816,43 +823,32 @@ impl App {
 
     fn handle_confirmation_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
-            KeyCode::Char('a') | KeyCode::Char('A') => {
-                self.destructive_armed = !self.destructive_armed;
-                self.error_message = None;
+            KeyCode::Char(c) if c.is_ascii_alphanumeric() => {
+                if self.confirmation_input.len() < 16 {
+                    self.confirmation_input.push(c.to_ascii_uppercase());
+                }
+                InputResult::Continue
+            }
+            KeyCode::Backspace => {
+                self.confirmation_input.pop();
                 InputResult::Continue
             }
             KeyCode::Enter => {
-                if self.confirmation_index == 0 {
-                    if !self.backup_confirmed {
-                        self.error_message =
-                            Some("Backup confirmation required before installation.".to_string());
-                        return InputResult::Continue;
+                if self.confirmation_input == "FLASH" {
+                    self.destructive_armed = true;
+                    self.error_message = None;
+                    self.confirmation_input.clear();
+                    self.current_step_type = InstallStepType::Flashing;
+                    self.status_message = "🛠️ Starting dry-run execution...".to_string();
+                    self.cancel_requested
+                        .store(false, std::sync::atomic::Ordering::Relaxed);
+                    if let Some(config) = self.build_flash_config() {
+                        return InputResult::StartFlash(config);
                     }
-                    if !self.destructive_armed {
-                        self.error_message = Some(
-                            "Destructive operations are disarmed. Arm before starting.".to_string(),
-                        );
-                        return InputResult::Continue;
-                    }
-                    self.is_running = true;
-                    self.downloaded_fedora = false;
-                    self.downloaded_uefi = false;
-                    if self.requires_fedora_download() {
-                        self.current_step_type = InstallStepType::DownloadingFedora;
-                        self.status_message = "⬇️ Preparing Fedora download...".to_string();
-                    } else if self.requires_uefi_download() {
-                        self.current_step_type = InstallStepType::DownloadingUefi;
-                        self.status_message = "⬇️ Preparing UEFI download...".to_string();
-                    } else {
-                        self.start_flashing();
-                    }
-                    InputResult::Continue
-                } else if let Some(prev) = self.current_step_type.prev() {
-                    self.current_step_type = prev;
-                    InputResult::Continue
                 } else {
-                    InputResult::Continue
+                    self.error_message = Some("Type FLASH to begin execution.".to_string());
                 }
+                InputResult::Continue
             }
             KeyCode::Up | KeyCode::Left => {
                 Self::adjust_index(2, &mut self.confirmation_index, -1);
@@ -863,6 +859,7 @@ impl App {
                 InputResult::Continue
             }
             KeyCode::Esc => {
+                self.confirmation_input.clear();
                 if let Some(prev) = self.current_step_type.prev() {
                     self.current_step_type = prev;
                 }
@@ -1019,6 +1016,12 @@ impl App {
             .map(|state| state.is_complete)
             .unwrap_or(false);
         match key.code {
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                self.cancel_requested
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                self.status_message = "🛑 Cancel requested...".to_string();
+                InputResult::Continue
+            }
             KeyCode::Enter if is_complete => {
                 self.current_step_type = InstallStepType::Complete;
                 InputResult::Complete
@@ -1032,15 +1035,11 @@ impl App {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
                 self.error_message = None;
-                if let Some(next) = self.current_step_type.next() {
-                    self.current_step_type = next;
-                }
+                self.current_step_type = InstallStepType::DownloadSourceSelection;
                 InputResult::Continue
             }
             KeyCode::Char('n') | KeyCode::Char('N') => {
-                if let Some(prev) = self.current_step_type.prev() {
-                    self.current_step_type = prev;
-                }
+                self.current_step_type = InstallStepType::PartitionCustomize;
                 InputResult::Continue
             }
             _ => {
@@ -1263,7 +1262,7 @@ impl App {
                 .get(self.uefi_index)
                 .cloned()
                 .unwrap_or_else(|| PathBuf::from(self.uefi_source_path.clone())),
-            dry_run: false,
+            dry_run: true,
             auto_unmount: self
                 .options
                 .iter()
@@ -1335,11 +1334,14 @@ mod tests {
         let mut app = App::new();
         app.current_step_type = InstallStepType::PartitionLayout;
         app.handle_input(key(KeyCode::Char('y')));
-        assert_eq!(app.current_step_type, InstallStepType::PartitionCustomize);
+        assert_eq!(
+            app.current_step_type,
+            InstallStepType::DownloadSourceSelection
+        );
 
         app.current_step_type = InstallStepType::PartitionLayout;
         app.handle_input(key(KeyCode::Char('n')));
-        assert_eq!(app.current_step_type, InstallStepType::PartitionScheme);
+        assert_eq!(app.current_step_type, InstallStepType::PartitionCustomize);
     }
 
     #[test]
@@ -1379,5 +1381,36 @@ mod tests {
         app.current_step_type = InstallStepType::LocaleSelection;
         app.handle_input(key(KeyCode::Enter));
         assert_eq!(app.current_step_type, InstallStepType::Options);
+    }
+
+    #[test]
+    fn disk_confirmation_requires_destroy() {
+        let mut app = App::new();
+        app.current_step_type = InstallStepType::DiskConfirmation;
+        for ch in "DESTROY".chars() {
+            app.handle_input(key(KeyCode::Char(ch)));
+        }
+        assert_eq!(app.wipe_confirmation, "DESTROY");
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::PartitionScheme);
+    }
+
+    #[test]
+    fn confirmation_requires_flash() {
+        let mut app = App::new();
+        app.current_step_type = InstallStepType::Confirmation;
+        for ch in "FLAS".chars() {
+            app.handle_input(key(KeyCode::Char(ch)));
+        }
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::Confirmation);
+
+        app.confirmation_input.clear();
+        for ch in "FLASH".chars() {
+            app.handle_input(key(KeyCode::Char(ch)));
+        }
+        let result = app.handle_input(key(KeyCode::Enter));
+        assert!(matches!(result, InputResult::StartFlash(_)));
+        assert_eq!(app.current_step_type, InstallStepType::Flashing);
     }
 }

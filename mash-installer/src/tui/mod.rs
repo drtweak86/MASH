@@ -16,6 +16,7 @@ mod widgets;
 pub mod flash_config; // Declare the new module
 pub use flash_config::{FlashConfig, ImageSource}; // Update the pub use statement
 
+use crate::tui::progress::{Phase, ProgressUpdate};
 use crate::{cli::Cli, errors::Result, flash};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -27,6 +28,7 @@ use std::io;
 use std::sync::mpsc;
 
 use std::time::Duration;
+use std::time::Instant;
 
 /// Run the TUI wizard
 pub fn run(_cli: &Cli, _watch: bool, _dry_run: bool) -> Result<new_app::InputResult> {
@@ -109,11 +111,19 @@ pub fn run_new_ui(
                         app.status_message = "🛠️ Flashing started...".to_string();
                         let (tx, rx) = mpsc::channel();
                         flash_result_rx = Some(rx);
-                        let yes_i_know = app.backup_confirmed;
-                        std::thread::spawn(move || {
-                            let result = flash::run_with_progress(&config, yes_i_know);
-                            let _ = tx.send(result);
-                        });
+                        let yes_i_know = app.destructive_armed;
+                        let cancel_flag = app.cancel_requested.clone();
+                        if config.dry_run {
+                            std::thread::spawn(move || {
+                                let result = simulate_flash_run(&config, cancel_flag);
+                                let _ = tx.send(result);
+                            });
+                        } else {
+                            std::thread::spawn(move || {
+                                let result = flash::run_with_progress(&config, yes_i_know);
+                                let _ = tx.send(result);
+                            });
+                        }
                     }
                     _ => {} // Continue, StartDownload are handled by app internally for now
                 }
@@ -126,6 +136,18 @@ pub fn run_new_ui(
                 // This logic needs to be updated to map to the new_app::App's state more accurately
                 // For now, just update status message
                 app.status_message = event.message;
+            }
+        }
+
+        if app.current_step_type == new_app::InstallStepType::Flashing {
+            let is_complete = app
+                .progress_state
+                .lock()
+                .map(|state| state.is_complete)
+                .unwrap_or(false);
+            if is_complete {
+                app.current_step_type = new_app::InstallStepType::Complete;
+                app.status_message = "🎉 Dry-run complete.".to_string();
             }
         }
 
@@ -143,4 +165,38 @@ pub fn run_new_ui(
             }
         }
     }
+}
+
+fn simulate_flash_run(
+    config: &FlashConfig,
+    cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<()> {
+    let tx = config.progress_tx.clone();
+    let send = |update: ProgressUpdate| {
+        if let Some(ref tx) = tx {
+            let _ = tx.send(update);
+        }
+    };
+
+    send(ProgressUpdate::Status(
+        "🧪 Dry-run execution started.".to_string(),
+    ));
+    for phase in Phase::all() {
+        if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
+            send(ProgressUpdate::Error("Cancelled".to_string()));
+            return Ok(());
+        }
+        send(ProgressUpdate::PhaseStarted(*phase));
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(200) {
+            if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                send(ProgressUpdate::Error("Cancelled".to_string()));
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        send(ProgressUpdate::PhaseCompleted(*phase));
+    }
+    send(ProgressUpdate::Complete);
+    Ok(())
 }

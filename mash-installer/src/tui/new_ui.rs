@@ -119,6 +119,7 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
     let current_step_title = app.current_step_type.title();
     let mut items = Vec::new();
     items.push(format!("🧭 Step: {}", current_step_title));
+    let progress_state = app.progress_state_snapshot();
 
     match app.current_step_type {
         InstallStepType::Welcome => {
@@ -149,7 +150,7 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
                     "TARGET TO BE WIPED: {} ({} , {})",
                     disk.path, model, disk.size
                 ));
-                items.push("Type WIPE to confirm.".to_string());
+                items.push("Type DESTROY to confirm.".to_string());
                 items.push(format!("Input: {}", app.wipe_confirmation));
             } else {
                 items.push("No disk selected.".to_string());
@@ -183,7 +184,10 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::PartitionLayout => {
             items.push("📐 Select a partition layout:".to_string());
-            items.push("Use ↑/↓ or Tab to choose • Y to continue • N/Esc to go back.".to_string());
+            items.push(
+                "Use ↑/↓ or Tab to choose • Y to accept • N to customize • Esc to go back."
+                    .to_string(),
+            );
             let layout_options = app
                 .partition_layouts
                 .iter()
@@ -284,10 +288,8 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::Confirmation => {
             items.push("✅ Review configuration summary:".to_string());
-            items.push(format!(
-                "Armed for destructive operations: {} (press A to toggle)",
-                if app.destructive_armed { "Yes" } else { "No" }
-            ));
+            items.push("Type FLASH to begin execution.".to_string());
+            items.push(format!("Input: {}", app.confirmation_input));
             if let Some(disk) = app.disks.get(app.disk_index) {
                 items.push(format!("Disk: {} ({})", disk.path, disk.size));
                 items.push(format!("Disk label: {}", disk.label));
@@ -350,11 +352,7 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
                     .cloned()
                     .unwrap_or_else(|| "Prompt to create user".to_string())
             ));
-            push_options(
-                &mut items,
-                &["Start installation".to_string(), "Go back".to_string()],
-                app.confirmation_index,
-            );
+            push_options(&mut items, &["Go back".to_string()], 0);
         }
         InstallStepType::DownloadingFedora => {
             let status = if app.downloaded_fedora {
@@ -394,6 +392,7 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
             items.push(format!("{} Flashing in progress...", spinner));
             items.push(format!("Phase: {}", phase_hint(app)));
             items.push(format!("Elapsed: {}", elapsed));
+            items.extend(progress_phase_lines(&progress_state));
             push_options(&mut items, &["Viewing live telemetry".to_string()], 0);
         }
         InstallStepType::Complete => {
@@ -403,7 +402,7 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
     }
 
     if app.show_debug_overlay {
-        items.push("🧪 Debug overlay (press D to toggle)".to_string());
+        items.push("🧪 Debug overlay (press Ctrl+D to toggle)".to_string());
         items.push(debug_line(
             "Disk",
             app.disks.get(app.disk_index).map(|disk| disk.path.clone()),
@@ -455,9 +454,9 @@ fn push_options(items: &mut Vec<String>, options: &[String], selected: usize) {
 fn expected_actions(step: InstallStepType) -> String {
     match step {
         InstallStepType::BackupConfirmation => "Up/Down, Y/N, Enter, Esc, q".to_string(),
-        InstallStepType::Flashing => "Enter when complete, q".to_string(),
+        InstallStepType::Flashing => "Enter when complete, C to cancel, q".to_string(),
         InstallStepType::Complete => "Enter to exit".to_string(),
-        InstallStepType::DiskConfirmation => "Type WIPE, Enter, Esc, q".to_string(),
+        InstallStepType::DiskConfirmation => "Type DESTROY, Enter, Esc, q".to_string(),
         InstallStepType::DownloadingFedora | InstallStepType::DownloadingUefi => {
             "Up/Down, Enter, Esc, q".to_string()
         }
@@ -468,11 +467,11 @@ fn expected_actions(step: InstallStepType) -> String {
         InstallStepType::PartitionCustomize => {
             "Up/Down/Tab, Type, Backspace, Enter, Esc, q".to_string()
         }
+        InstallStepType::Confirmation => "Type FLASH, Enter, Esc, q".to_string(),
         InstallStepType::DiskSelection
         | InstallStepType::ImageSelection
         | InstallStepType::LocaleSelection
-        | InstallStepType::FirstBootUser
-        | InstallStepType::Confirmation => "Up/Down/Tab, Enter, Esc, A, q".to_string(),
+        | InstallStepType::FirstBootUser => "Up/Down/Tab, Enter, Esc, q".to_string(),
         InstallStepType::DownloadSourceSelection | InstallStepType::UefiDirectory => {
             "Up/Down/Tab, Type, Backspace, Enter, Esc, q".to_string()
         }
@@ -554,6 +553,16 @@ fn phase_hint(app: &App) -> String {
         1 => "Syncing data".to_string(),
         _ => "Finalizing".to_string(),
     }
+}
+
+fn progress_phase_lines(progress_state: &ProgressState) -> Vec<String> {
+    let mut lines = Vec::new();
+    lines.push("Execution steps:".to_string());
+    for phase in Phase::all() {
+        let symbol = progress_state.phase_symbol(*phase);
+        lines.push(format!(" {} {}", symbol, phase.name()));
+    }
+    lines
 }
 
 fn debug_line(label: &str, value: Option<String>) -> String {
