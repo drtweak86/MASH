@@ -1,19 +1,18 @@
 //! TUI Module - Full Ratatui wizard for MASH Installer
 //!
 //! Provides an interactive terminal user interface with:
-//! - Multi-screen wizard flow
-//! - Disk and image selection
-//! - Locale configuration
+//! - Single-screen install flow
 //! - Live progress dashboard
-//! - SSH-friendly operation (no X11 required)
 
 mod app;
 mod input;
+mod new_app;
+mod new_ui;
 pub mod progress;
 mod ui;
 mod widgets;
 
-pub use app::{App, FlashConfig, ImageSource, Screen};
+pub use app::{DownloadUpdate, FlashConfig, ImageSource};
 
 use crate::{cli::Cli, errors::Result};
 use crossterm::{
@@ -23,10 +22,11 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
+use std::thread;
 use std::time::Duration;
 
 /// Run the TUI wizard
-pub fn run(cli: &Cli, watch: bool, dry_run: bool) -> Result<Option<app::FlashConfig>> {
+pub fn run(_cli: &Cli, _watch: bool, _dry_run: bool) -> Result<app::InputResult> {
     use std::io::IsTerminal;
 
     // Check if we have a real terminal
@@ -46,10 +46,20 @@ pub fn run(cli: &Cli, watch: bool, dry_run: bool) -> Result<Option<app::FlashCon
     let mut terminal = Terminal::new(backend)?;
 
     // Create app state
-    let mut app = App::new(cli, watch, dry_run);
+    let mut app = new_app::App::new();
+    app.steps.push(new_app::InstallStep {
+        name: "Partition Planning".to_string(),
+        state: new_app::StepState::Pending,
+        task: Box::new(|| Ok(())),
+    });
+    app.steps.push(new_app::InstallStep {
+        name: "Download Fedora Image".to_string(),
+        state: new_app::StepState::Pending,
+        task: Box::new(|| Ok(())),
+    });
 
     // Main loop
-    let wizard_result = run_app(&mut terminal, &mut app);
+    let _wizard_result = run_new_ui(&mut terminal, &mut app);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -60,101 +70,67 @@ pub fn run(cli: &Cli, watch: bool, dry_run: bool) -> Result<Option<app::FlashCon
     )?;
     terminal.show_cursor()?;
 
-    // Handle result
-    match wizard_result {
-        Ok(true) => {
-            // User completed the wizard, return the config
-            Ok(app.get_flash_config())
-        }
-        Ok(false) => {
-            // User cancelled
-            log::info!("Installation cancelled by user.");
-            Ok(None)
-        }
-        Err(e) => Err(e),
-    }
+    // For now, we'll just return Quit
+    Ok(app::InputResult::Quit)
 }
 
-/// Main application loop (wizard screens)
-fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> Result<bool> {
-    loop {
-        // Draw UI
-        terminal.draw(|f| ui::draw(f, app))?;
-
-        // Handle input with timeout for animations
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                // Global quit: Ctrl+C or Ctrl+Q
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && (key.code == KeyCode::Char('c') || key.code == KeyCode::Char('q'))
-                {
-                    return Ok(false);
-                }
-
-                // Handle screen-specific input
-                match app.handle_input(key) {
-                    app::InputResult::Continue => {}
-                    app::InputResult::Quit => return Ok(false),
-                    app::InputResult::Complete => return Ok(true),
-                }
-            }
-        }
-
-        // Increment animation tick for spinners and effects
-        app.animation_tick = app.animation_tick.wrapping_add(1);
-
-        // Check for progress updates if in progress screen
-        app.update_progress();
-    }
-}
-
-/// Progress display loop (runs during flash)
-pub fn run_progress_loop(
-    // Make public
+/// Main application loop (single screen)
+pub fn run_new_ui(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app: &mut App,
+    app: &mut new_app::App,
 ) -> Result<()> {
+    let tx = app.progress_tx.clone().unwrap();
+    let steps_len = app.steps.len();
+
+    // Spawn a thread to simulate work
+    thread::spawn(move || {
+        for i in 0..steps_len {
+            let _ = tx.send(new_app::ProgressEvent {
+                step_id: i,
+                message: "Starting...".to_string(),
+                progress: 0.0,
+            });
+            thread::sleep(Duration::from_secs(1));
+            let _ = tx.send(new_app::ProgressEvent {
+                step_id: i,
+                message: "In progress...".to_string(),
+                progress: 0.5,
+            });
+            thread::sleep(Duration::from_secs(1));
+            let _ = tx.send(new_app::ProgressEvent {
+                step_id: i,
+                message: "Done.".to_string(),
+                progress: 1.0,
+            });
+        }
+    });
+
     loop {
         // Draw UI
-        terminal.draw(|f| ui::draw(f, app))?;
+        terminal.draw(|f| new_ui::draw(f, app))?;
 
         // Handle input with timeout
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
-                // Global quit: Ctrl+C
-                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-                    // TODO: Signal flash to abort
-                    log::warn!("Installation abort requested");
-                    return Ok(());
-                }
-
-                // If complete, allow exit
-                if app.progress.is_complete
-                    && (key.code == KeyCode::Enter
-                        || key.code == KeyCode::Esc
-                        || key.code == KeyCode::Char('q'))
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && (key.code == KeyCode::Char('c') || key.code == KeyCode::Char('q'))
                 {
                     return Ok(());
                 }
             }
         }
 
-        // Increment animation tick
-        app.animation_tick = app.animation_tick.wrapping_add(1);
-
         // Check for progress updates
-        app.update_progress();
-
-        // Exit when complete and user has been shown the result
-        if app.progress.is_complete && app.current_screen == app::Screen::Complete {
-            // Wait for user input to exit (handled above)
-        }
-
-        // Auto-transition to complete screen when installation finishes
-        if app.progress.is_complete && app.current_screen == app::Screen::Progress {
-            app.current_screen = app::Screen::Complete;
-            app.install_success = app.progress.error.is_none();
-            app.install_error = app.progress.error.clone();
+        if let Some(ref rx) = app.progress_rx {
+            while let Ok(event) = rx.try_recv() {
+                if event.progress == 0.0 {
+                    app.steps[event.step_id].state = new_app::StepState::Running;
+                }
+                if event.progress == 1.0 {
+                    app.steps[event.step_id].state = new_app::StepState::Completed;
+                }
+                app.status_message = event.message;
+            }
         }
     }
 }
