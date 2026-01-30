@@ -23,6 +23,8 @@ cmake_install.cmake
 
 # Build artifacts
 dist/
+release/
+bundle/
 *.tar.gz
 *.zip
 *.deb
@@ -44,6 +46,7 @@ dist/
 # Release artifacts
 artifacts/
 checksums.txt
+SHA256SUMS
 
 # --- MASH Merge Toolkit (auto-added) ---
 bak/
