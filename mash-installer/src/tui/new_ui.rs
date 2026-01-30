@@ -121,6 +121,17 @@ pub fn draw(f: &mut Frame, app: &App) {
                 "⌨️ Source options will render here.".to_string(),
             ));
         }
+        InstallStepType::ImageSelection => {
+            items.push(ListItem::new(
+                "🖼️ Image list not loaded yet.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "ℹ️ Expected from download list or local file picker.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "⌨️ Image selection options will render here.".to_string(),
+            ));
+        }
         InstallStepType::FirstBootUser => {
             items.push(ListItem::new(
                 "🧑‍💻 First boot will prompt you to create a user.".to_string(),
