@@ -324,6 +324,7 @@ pub struct App {
     pub backup_choice_index: usize,
     pub disks: Vec<DiskOption>,
     pub disk_index: usize,
+    pub disk_confirm_index: usize,
     pub partition_schemes: Vec<PartitionScheme>,
     pub scheme_index: usize,
     pub partition_layouts: Vec<String>,
@@ -342,6 +343,7 @@ pub struct App {
     pub options_index: usize,
     pub first_boot_options: Vec<String>,
     pub first_boot_index: usize,
+    pub confirmation_index: usize,
     pub is_running: bool,
     pub status_message: String,
     pub error_message: Option<String>,
@@ -393,6 +395,7 @@ impl App {
                 },
             ],
             disk_index: 0,
+            disk_confirm_index: 0,
             partition_schemes: vec![PartitionScheme::Mbr, PartitionScheme::Gpt],
             scheme_index: 0,
             partition_layouts: vec![
@@ -468,6 +471,7 @@ impl App {
                 "Skip first-boot prompt".to_string(),
             ],
             first_boot_index: 0,
+            confirmation_index: 0,
             is_running: false,
             status_message: "👋 Welcome to MASH!".to_string(),
             error_message: None,
@@ -484,11 +488,7 @@ impl App {
                 let action = Self::list_action(key, len, &mut self.disk_index);
                 self.apply_list_action(action)
             }
-            InstallStepType::DiskConfirmation => {
-                let len = self.disks.len();
-                let action = Self::list_action(key, len, &mut self.disk_index);
-                self.apply_list_action(action)
-            }
+            InstallStepType::DiskConfirmation => self.handle_disk_confirmation_input(key),
             InstallStepType::PartitionScheme => {
                 let len = self.partition_schemes.len();
                 let action = Self::list_action(key, len, &mut self.scheme_index);
@@ -654,20 +654,68 @@ impl App {
         }
     }
 
+    fn handle_disk_confirmation_input(&mut self, key: KeyEvent) -> InputResult {
+        let options_len = 2;
+        match key.code {
+            KeyCode::Up | KeyCode::Left => {
+                Self::adjust_index(options_len, &mut self.disk_confirm_index, -1);
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Right => {
+                Self::adjust_index(options_len, &mut self.disk_confirm_index, 1);
+                InputResult::Continue
+            }
+            KeyCode::Enter => {
+                if self.disk_confirm_index == 0 {
+                    self.error_message = None;
+                    if let Some(next) = self.current_step_type.next() {
+                        self.current_step_type = next;
+                    }
+                } else if let Some(prev) = self.current_step_type.prev() {
+                    self.current_step_type = prev;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Esc => {
+                if let Some(prev) = self.current_step_type.prev() {
+                    self.current_step_type = prev;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Char('q') => InputResult::Quit,
+            _ => InputResult::Continue,
+        }
+    }
+
     fn handle_confirmation_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
             KeyCode::Enter => {
-                if !self.backup_confirmed {
-                    self.error_message =
-                        Some("Backup confirmation required before installation.".to_string());
-                    return InputResult::Continue;
+                if self.confirmation_index == 0 {
+                    if !self.backup_confirmed {
+                        self.error_message =
+                            Some("Backup confirmation required before installation.".to_string());
+                        return InputResult::Continue;
+                    }
+                    self.is_running = true;
+                    self.current_step_type = InstallStepType::Flashing;
+                    self.status_message = "🛠️ Starting installation...".to_string();
+                    if let Some(config) = self.build_flash_config() {
+                        return InputResult::StartFlash(config);
+                    }
+                    InputResult::Continue
+                } else if let Some(prev) = self.current_step_type.prev() {
+                    self.current_step_type = prev;
+                    InputResult::Continue
+                } else {
+                    InputResult::Continue
                 }
-                self.is_running = true;
-                self.current_step_type = InstallStepType::Flashing;
-                self.status_message = "🛠️ Starting installation...".to_string();
-                if let Some(config) = self.build_flash_config() {
-                    return InputResult::StartFlash(config);
-                }
+            }
+            KeyCode::Up | KeyCode::Left => {
+                Self::adjust_index(2, &mut self.confirmation_index, -1);
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Right => {
+                Self::adjust_index(2, &mut self.confirmation_index, 1);
                 InputResult::Continue
             }
             KeyCode::Esc => {

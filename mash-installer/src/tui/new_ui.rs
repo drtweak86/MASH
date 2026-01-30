@@ -137,7 +137,7 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
             push_options(
                 &mut items,
                 &["Confirm and continue".to_string(), "Go back".to_string()],
-                0,
+                app.disk_confirm_index,
             );
         }
         InstallStepType::BackupConfirmation => {
@@ -265,26 +265,35 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
                     .cloned()
                     .unwrap_or_else(|| "Prompt to create user".to_string())
             ));
+            push_options(
+                &mut items,
+                &["Start installation".to_string(), "Go back".to_string()],
+                app.confirmation_index,
+            );
         }
         InstallStepType::DownloadingFedora => {
-            items.push("⬇️ Download progress not available yet.".to_string());
-            items.push("ℹ️ Expected from downloader telemetry.".to_string());
-            items.push("⌨️ Download status will render here.".to_string());
+            items.push("⬇️ Downloading Fedora image...".to_string());
+            push_options(
+                &mut items,
+                &["Waiting for download telemetry".to_string()],
+                0,
+            );
         }
         InstallStepType::DownloadingUefi => {
-            items.push("⬇️ UEFI download progress not available yet.".to_string());
-            items.push("ℹ️ Expected from downloader telemetry.".to_string());
-            items.push("⌨️ Download status will render here.".to_string());
+            items.push("⬇️ Downloading UEFI firmware...".to_string());
+            push_options(
+                &mut items,
+                &["Waiting for download telemetry".to_string()],
+                0,
+            );
         }
         InstallStepType::Flashing => {
-            items.push("💾 Flashing progress is shown below.".to_string());
-            items.push("ℹ️ Live telemetry expected from flash.rs progress updates.".to_string());
-            items.push("⌨️ Press Enter when complete.".to_string());
+            items.push("💾 Flashing in progress...".to_string());
+            push_options(&mut items, &["Viewing live telemetry".to_string()], 0);
         }
         InstallStepType::Complete => {
             items.push("🎉 Installation complete.".to_string());
-            items.push("ℹ️ Final summary will render here.".to_string());
-            items.push("⌨️ Press Enter to exit.".to_string());
+            push_options(&mut items, &["Exit installer".to_string()], 0);
         }
     }
 
@@ -308,7 +317,7 @@ fn push_options(items: &mut Vec<String>, options: &[String], selected: usize) {
 
 fn expected_actions(step: InstallStepType) -> String {
     match step {
-        InstallStepType::BackupConfirmation => "Y/N, Esc, q".to_string(),
+        InstallStepType::BackupConfirmation => "Up/Down, Y/N, Enter, Esc, q".to_string(),
         InstallStepType::Flashing => "Enter when complete, q".to_string(),
         InstallStepType::Complete => "Enter to exit".to_string(),
         InstallStepType::DownloadingFedora | InstallStepType::DownloadingUefi => {
@@ -324,7 +333,8 @@ fn expected_actions(step: InstallStepType) -> String {
         | InstallStepType::ImageSelection
         | InstallStepType::UefiDirectory
         | InstallStepType::LocaleSelection
-        | InstallStepType::FirstBootUser => "Up/Down, Enter, Esc, q".to_string(),
+        | InstallStepType::FirstBootUser
+        | InstallStepType::Confirmation => "Up/Down, Enter, Esc, q".to_string(),
         _ => "Enter, Esc, q".to_string(),
     }
 }
