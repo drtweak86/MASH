@@ -5,6 +5,7 @@ use crate::tui::progress::{Phase, ProgressState};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Gauge, List, ListItem, Paragraph},
     Frame,
 };
@@ -26,9 +27,17 @@ pub fn draw(f: &mut Frame, app: &App) {
         .split(f.area());
 
     // Title
-    let title = Block::default()
-        .borders(Borders::ALL)
-        .title("MASH Installer");
+    let (arming_label, arming_color) = if app.destructive_armed {
+        ("ARMED", Color::Red)
+    } else {
+        ("SAFE", Color::Green)
+    };
+    let title_line = Line::from(vec![
+        Span::styled("MASH Installer", Style::default().fg(Color::White)),
+        Span::raw(" | "),
+        Span::styled(arming_label, Style::default().fg(arming_color)),
+    ]);
+    let title = Block::default().borders(Borders::ALL).title(title_line);
     f.render_widget(title, chunks[0]);
 
     // Current Step Display
@@ -113,9 +122,17 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
 
     match app.current_step_type {
         InstallStepType::Welcome => {
-            items.push("👋 Welcome to the MASH installer dojo.".to_string());
-            items.push("🧭 Use the wizard to configure a stub install.".to_string());
-            items.push("⌨️ Choose an option to begin.".to_string());
+            items.push("👋 Welcome to MASH: a safe, guided installer.".to_string());
+            items.push("🛡️ No disks will be modified unless the installer is ARMED.".to_string());
+            items.push("⌨️ Enter to proceed • Esc to go back • q to quit.".to_string());
+            items.push(format!(
+                "Arming state: {}",
+                if app.destructive_armed {
+                    "ARMED (writes enabled)"
+                } else {
+                    "SAFE (disarmed)"
+                }
+            ));
             push_options(&mut items, &app.welcome_options, app.welcome_index);
         }
         InstallStepType::DiskSelection => {
