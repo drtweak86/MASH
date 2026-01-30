@@ -9,7 +9,7 @@ mod input;
 mod new_app;
 mod new_ui;
 pub mod progress;
-mod ui;
+
 mod widgets;
 
 pub mod flash_config; // Declare the new module
