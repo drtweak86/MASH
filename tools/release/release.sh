@@ -1,4 +1,5 @@
 #!/bin/bash
+# LEGACY: superseded by tools/mash-release (Rust)
 # Backup of the release script that bumps Cargo.toml/README, commits, tags, and pushes.
 # Known bugs: invalid SemVer/tag when existing version contains ".."; non-SemVer Cargo version can break version parsing.
 set -e
