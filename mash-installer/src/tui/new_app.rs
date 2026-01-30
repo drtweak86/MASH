@@ -10,6 +10,7 @@ use crossterm::event::{KeyCode, KeyEvent}; // New import for KeyEvent
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 // ============================================================================
 // Step State
@@ -358,6 +359,8 @@ pub struct App {
     pub downloaded_fedora: bool,
     pub downloaded_uefi: bool,
     pub destructive_armed: bool,
+    pub show_debug_overlay: bool,
+    pub flash_start_time: Option<Instant>,
     pub is_running: bool,
     pub status_message: String,
     pub error_message: Option<String>,
@@ -567,6 +570,8 @@ impl App {
             downloaded_fedora: false,
             downloaded_uefi: false,
             destructive_armed: false,
+            show_debug_overlay: false,
+            flash_start_time: None,
             is_running: false,
             status_message: "👋 Welcome to MASH!".to_string(),
             error_message: None,
@@ -575,6 +580,10 @@ impl App {
 
     // New: handle input for step advancement
     pub fn handle_input(&mut self, key: KeyEvent) -> InputResult {
+        if matches!(key.code, KeyCode::Char('d') | KeyCode::Char('D')) {
+            self.show_debug_overlay = !self.show_debug_overlay;
+            return InputResult::Continue;
+        }
         match self.current_step_type {
             InstallStepType::Welcome => self.handle_welcome_input(key),
             InstallStepType::BackupConfirmation => self.handle_backup_confirmation_input(key),
@@ -828,8 +837,7 @@ impl App {
                         self.current_step_type = InstallStepType::DownloadingUefi;
                         self.status_message = "⬇️ Preparing UEFI download...".to_string();
                     } else {
-                        self.current_step_type = InstallStepType::Flashing;
-                        self.status_message = "🛠️ Starting installation...".to_string();
+                        self.start_flashing();
                     }
                     InputResult::Continue
                 } else if let Some(prev) = self.current_step_type.prev() {
@@ -881,8 +889,7 @@ impl App {
                         self.current_step_type = InstallStepType::DownloadingUefi;
                         self.status_message = "⬇️ Preparing UEFI download...".to_string();
                     } else {
-                        self.current_step_type = InstallStepType::Flashing;
-                        self.status_message = "🛠️ Starting installation...".to_string();
+                        self.start_flashing();
                     }
                 } else if let Some(prev) = self.current_step_type.prev() {
                     self.current_step_type = prev;
@@ -919,8 +926,7 @@ impl App {
             KeyCode::Enter => {
                 if self.downloading_uefi_index == 0 {
                     self.downloaded_uefi = true;
-                    self.current_step_type = InstallStepType::Flashing;
-                    self.status_message = "🛠️ Starting installation...".to_string();
+                    self.start_flashing();
                 } else if let Some(prev) = self.current_step_type.prev() {
                     self.current_step_type = prev;
                 }
@@ -1036,6 +1042,14 @@ impl App {
             .find(|option| option.label == "Download UEFI firmware")
             .map(|option| option.enabled)
             .unwrap_or(false)
+    }
+
+    fn start_flashing(&mut self) {
+        self.current_step_type = InstallStepType::Flashing;
+        self.status_message = "🛠️ Starting installation...".to_string();
+        if self.flash_start_time.is_none() {
+            self.flash_start_time = Some(Instant::now());
+        }
     }
 
     pub fn progress_state_snapshot(&self) -> ProgressState {

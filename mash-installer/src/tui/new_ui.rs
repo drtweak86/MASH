@@ -183,13 +183,23 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
             let options = app
                 .partition_schemes
                 .iter()
-                .map(|scheme| scheme.to_string())
+                .map(format_partition_scheme)
                 .collect::<Vec<_>>();
             push_options(&mut items, &options, app.scheme_index);
         }
         InstallStepType::PartitionLayout => {
             items.push("📐 Select a partition layout:".to_string());
-            push_options(&mut items, &app.partition_layouts, app.layout_index);
+            let layout_options = app
+                .partition_layouts
+                .iter()
+                .enumerate()
+                .map(|(idx, _)| format!("Layout {}", idx + 1))
+                .collect::<Vec<_>>();
+            push_options(&mut items, &layout_options, app.layout_index);
+            if let Some(layout) = app.partition_layouts.get(app.layout_index) {
+                items.push("Preview:".to_string());
+                items.extend(format_layout_preview(layout));
+            }
         }
         InstallStepType::PartitionCustomize => {
             items.push("🛠️ Customize partitions:".to_string());
@@ -359,13 +369,44 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
             );
         }
         InstallStepType::Flashing => {
-            items.push("💾 Flashing in progress...".to_string());
+            let spinner = spinner_frame(app.flash_start_time);
+            let elapsed = elapsed_string(app.flash_start_time);
+            items.push(format!("{} Flashing in progress...", spinner));
+            items.push(format!("Phase: {}", phase_hint(app)));
+            items.push(format!("Elapsed: {}", elapsed));
             push_options(&mut items, &["Viewing live telemetry".to_string()], 0);
         }
         InstallStepType::Complete => {
             items.push("🎉 Installation complete.".to_string());
             push_options(&mut items, &["Exit installer".to_string()], 0);
         }
+    }
+
+    if app.show_debug_overlay {
+        items.push("🧪 Debug overlay (press D to toggle)".to_string());
+        items.push(debug_line("Disk", app.disks.get(app.disk_index).map(|disk| disk.path.clone())));
+        items.push(debug_line(
+            "Scheme",
+            app.partition_schemes
+                .get(app.scheme_index)
+                .map(|scheme| scheme.to_string()),
+        ));
+        items.push(debug_line(
+            "Layout",
+            app.partition_layouts.get(app.layout_index).cloned(),
+        ));
+        items.push(debug_line(
+            "Arming",
+            Some(if app.destructive_armed {
+                "ARMED".to_string()
+            } else {
+                "SAFE".to_string()
+            }),
+        ));
+        items.push(debug_line(
+            "Image",
+            app.images.get(app.image_index).map(|image| image.label.clone()),
+        ));
     }
 
     if let Some(error) = &app.error_message {
@@ -444,6 +485,62 @@ fn status_message(app: &App, progress_state: &ProgressState) -> String {
         app.status_message.clone()
     };
     ensure_emoji_prefix(message)
+}
+
+fn format_partition_scheme(scheme: &crate::cli::PartitionScheme) -> String {
+    match scheme {
+        crate::cli::PartitionScheme::Mbr => "MBR — compatibility & simplicity".to_string(),
+        crate::cli::PartitionScheme::Gpt => "GPT — modern, UEFI-oriented".to_string(),
+    }
+}
+
+fn format_layout_preview(layout: &str) -> Vec<String> {
+    layout
+        .split('|')
+        .map(|part| part.trim())
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let spaced = part.replace("MiB", " MiB").replace("GiB", " GiB");
+            format!("  {}", spaced)
+        })
+        .collect()
+}
+
+fn spinner_frame(start: Option<std::time::Instant>) -> &'static str {
+    let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let elapsed_ms = start
+        .map(|instant| instant.elapsed().as_millis() as usize)
+        .unwrap_or(0);
+    let idx = (elapsed_ms / 100) % frames.len();
+    frames[idx]
+}
+
+fn elapsed_string(start: Option<std::time::Instant>) -> String {
+    let elapsed = start.map(|instant| instant.elapsed()).unwrap_or_default();
+    let secs = elapsed.as_secs();
+    let minutes = secs / 60;
+    let seconds = secs % 60;
+    format!("{:02}:{:02}", minutes, seconds)
+}
+
+fn phase_hint(app: &App) -> String {
+    if let Some(phase) = app.progress_state_snapshot().current_phase {
+        return phase.name().to_string();
+    }
+    let elapsed = app
+        .flash_start_time
+        .map(|instant| instant.elapsed().as_secs())
+        .unwrap_or(0);
+    match (elapsed / 5) % 3 {
+        0 => "Writing image".to_string(),
+        1 => "Syncing data".to_string(),
+        _ => "Finalizing".to_string(),
+    }
+}
+
+fn debug_line(label: &str, value: Option<String>) -> String {
+    let value = value.unwrap_or_else(|| "Unknown".to_string());
+    format!("  {}: {}", label, value)
 }
 
 fn ensure_emoji_prefix(message: String) -> String {
