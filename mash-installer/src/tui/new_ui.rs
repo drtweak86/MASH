@@ -5,7 +5,7 @@
 //! - Right panel: Interactive content for current step
 //! - Bottom bar: Progress gauge, status, warnings
 
-use super::new_app::{App, ConfigStep, ExecutionStep, InstallMode, StepState, ImageSource};
+use super::new_app::{App, ConfigStep, ExecutionStep, ImageSource, InstallMode, StepState};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -20,10 +20,10 @@ pub fn draw(f: &mut Frame, app: &App) {
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(3),  // Title bar
-            Constraint::Min(0),     // Main content (sidebar + panel)
-            Constraint::Length(3),  // Progress bar
-            Constraint::Length(3),  // Status line
+            Constraint::Length(3), // Title bar
+            Constraint::Min(0),    // Main content (sidebar + panel)
+            Constraint::Length(3), // Progress bar
+            Constraint::Length(3), // Status line
         ])
         .split(f.area());
 
@@ -54,17 +54,20 @@ fn draw_title(f: &mut Frame, app: &App, area: Rect) {
         InstallMode::Complete => " - Complete",
     };
 
-    let title = Paragraph::new(format!("MASH Installer{}{}", mode_indicator, dry_run_indicator))
-        .style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        );
+    let title = Paragraph::new(format!(
+        "MASH Installer{}{}",
+        mode_indicator, dry_run_indicator
+    ))
+    .style(
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
     f.render_widget(title, area);
 }
 
@@ -91,7 +94,11 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
     let config_items: Vec<ListItem> = ConfigStep::all()
         .iter()
         .map(|step| {
-            let state = app.state.config_states.get(step).unwrap_or(&StepState::Pending);
+            let state = app
+                .state
+                .config_states
+                .get(step)
+                .unwrap_or(&StepState::Pending);
             let (symbol, style) = step_style(*state);
             let is_current = app.state.current_config == Some(*step);
 
@@ -126,7 +133,11 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
     let exec_items: Vec<ListItem> = ExecutionStep::all()
         .iter()
         .map(|step| {
-            let state = app.state.exec_states.get(step).unwrap_or(&StepState::Pending);
+            let state = app
+                .state
+                .exec_states
+                .get(step)
+                .unwrap_or(&StepState::Pending);
             let (symbol, style) = step_style(*state);
             let is_current = app.state.current_exec == Some(*step);
 
@@ -172,7 +183,9 @@ fn draw_welcome_panel(f: &mut Frame, _app: &App, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "Welcome to MASH Installer",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from("This wizard will guide you through installing Fedora KDE"),
@@ -224,7 +237,9 @@ fn draw_execution_panel(f: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled(
             "Installation in progress...",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
     ];
@@ -265,7 +280,11 @@ fn draw_complete_panel(f: &mut Frame, app: &App, area: Rect) {
                 "Installation Complete!"
             },
             Style::default()
-                .fg(if app.state.error.is_some() { Color::Red } else { Color::Green })
+                .fg(if app.state.error.is_some() {
+                    Color::Red
+                } else {
+                    Color::Green
+                })
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
@@ -313,9 +332,11 @@ fn draw_complete_panel(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .borders(Borders::ALL)
                 .title(" Complete ")
-                .border_style(Style::default().fg(
-                    if app.state.error.is_some() { Color::Red } else { Color::Green }
-                )),
+                .border_style(Style::default().fg(if app.state.error.is_some() {
+                    Color::Red
+                } else {
+                    Color::Green
+                })),
         )
         .alignment(Alignment::Center);
     f.render_widget(paragraph, area);
@@ -348,13 +369,18 @@ fn draw_disk_selection_panel(f: &mut Frame, app: &App, area: Rect) {
             let selected = i == app.ui.selected_disk_idx;
             let prefix = if selected { "> " } else { "  " };
             let style = if selected {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
 
             lines.push(Line::from(Span::styled(
-                format!("{}{} - {} ({} GB)", prefix, disk.path, disk.model, disk.size_gb),
+                format!(
+                    "{}{} - {} ({} GB)",
+                    prefix, disk.path, disk.model, disk.size_gb
+                ),
                 style,
             )));
         }
@@ -366,13 +392,12 @@ fn draw_disk_selection_panel(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(Color::DarkGray),
     )));
 
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Disk Selection ")
-                .border_style(Style::default().fg(Color::Blue)),
-        );
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Disk Selection ")
+            .border_style(Style::default().fg(Color::Blue)),
+    );
     f.render_widget(paragraph, area);
 }
 
@@ -414,13 +439,12 @@ fn draw_disk_confirm_panel(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(Color::DarkGray),
     )));
 
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Confirmation ")
-                .border_style(Style::default().fg(Color::Red)),
-        );
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Confirmation ")
+            .border_style(Style::default().fg(Color::Red)),
+    );
     f.render_widget(paragraph, area);
 }
 
@@ -436,15 +460,23 @@ fn draw_partition_scheme_panel(f: &mut Frame, app: &App, area: Rect) {
     ];
 
     let schemes = [
-        ("MBR (Master Boot Record)", "Traditional, widely compatible (RECOMMENDED)"),
-        ("GPT (GUID Partition Table)", "Modern, supports larger disks"),
+        (
+            "MBR (Master Boot Record)",
+            "Traditional, widely compatible (RECOMMENDED)",
+        ),
+        (
+            "GPT (GUID Partition Table)",
+            "Modern, supports larger disks",
+        ),
     ];
 
     for (i, (name, desc)) in schemes.iter().enumerate() {
         let selected = i == app.ui.partition_scheme_idx;
         let radio = if selected { "(o)" } else { "( )" };
         let style = if selected {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
@@ -466,13 +498,12 @@ fn draw_partition_scheme_panel(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(Color::DarkGray),
     )));
 
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Partition Scheme ")
-                .border_style(Style::default().fg(Color::Blue)),
-        );
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Partition Scheme ")
+            .border_style(Style::default().fg(Color::Blue)),
+    );
     f.render_widget(paragraph, area);
 }
 
@@ -485,9 +516,18 @@ fn draw_partition_layout_panel(f: &mut Frame, app: &App, area: Rect) {
         Line::from(""),
         Line::from("Recommended partition sizes:"),
         Line::from(""),
-        Line::from(format!("  EFI:  {} (FAT32, bootloader)", app.partition_plan.efi_size.display())),
-        Line::from(format!("  BOOT: {} (ext4, kernel)", app.partition_plan.boot_size.display())),
-        Line::from(format!("  ROOT: up to {} (ext4, system)", app.partition_plan.root_end.display())),
+        Line::from(format!(
+            "  EFI:  {} (FAT32, bootloader)",
+            app.partition_plan.efi_size.display()
+        )),
+        Line::from(format!(
+            "  BOOT: {} (ext4, kernel)",
+            app.partition_plan.boot_size.display()
+        )),
+        Line::from(format!(
+            "  ROOT: up to {} (ext4, system)",
+            app.partition_plan.root_end.display()
+        )),
         Line::from(""),
         Line::from(Span::styled(
             "Use recommended layout?",
@@ -503,13 +543,12 @@ fn draw_partition_layout_panel(f: &mut Frame, app: &App, area: Rect) {
         )),
     ];
 
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Partition Layout ")
-                .border_style(Style::default().fg(Color::Blue)),
-        );
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Partition Layout ")
+            .border_style(Style::default().fg(Color::Blue)),
+    );
     f.render_widget(paragraph, area);
 }
 
@@ -535,7 +574,9 @@ fn draw_partition_customize_panel(f: &mut Frame, app: &App, area: Rect) {
         let selected = i == app.ui.partition_edit_idx;
         let prefix = if selected { "> " } else { "  " };
         let style = if selected {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
@@ -567,13 +608,12 @@ fn draw_partition_customize_panel(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(Color::DarkGray),
     )));
 
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Partition Sizes ")
-                .border_style(Style::default().fg(Color::Blue)),
-        );
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Partition Sizes ")
+            .border_style(Style::default().fg(Color::Blue)),
+    );
     f.render_widget(paragraph, area);
 }
 
@@ -597,7 +637,9 @@ fn draw_image_source_panel(f: &mut Frame, app: &App, area: Rect) {
         let selected = i == app.ui.image_source_idx;
         let radio = if selected { "(o)" } else { "( )" };
         let style = if selected {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
@@ -619,13 +661,12 @@ fn draw_image_source_panel(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(Color::DarkGray),
     )));
 
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Image Source ")
-                .border_style(Style::default().fg(Color::Blue)),
-        );
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Image Source ")
+            .border_style(Style::default().fg(Color::Blue)),
+    );
     f.render_widget(paragraph, area);
 }
 
@@ -669,7 +710,9 @@ fn draw_image_selection_panel(f: &mut Frame, app: &App, area: Rect) {
                 let selected = i == app.ui.image_version_idx;
                 let radio = if selected { "(o)" } else { "( )" };
                 let style = if selected {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
@@ -689,13 +732,12 @@ fn draw_image_selection_panel(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(Color::DarkGray),
     )));
 
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Image Selection ")
-                .border_style(Style::default().fg(Color::Blue)),
-        );
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Image Selection ")
+            .border_style(Style::default().fg(Color::Blue)),
+    );
     f.render_widget(paragraph, area);
 }
 
@@ -748,13 +790,12 @@ fn draw_uefi_source_panel(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(Color::DarkGray),
     )));
 
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" UEFI Firmware ")
-                .border_style(Style::default().fg(Color::Blue)),
-        );
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" UEFI Firmware ")
+            .border_style(Style::default().fg(Color::Blue)),
+    );
     f.render_widget(paragraph, area);
 }
 
@@ -779,13 +820,18 @@ fn draw_locale_selection_panel(f: &mut Frame, app: &App, area: Rect) {
         let selected = i == app.ui.selected_locale_idx;
         let prefix = if selected { "> " } else { "  " };
         let style = if selected {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
 
         lines.push(Line::from(Span::styled(
-            format!("{}{} - {} ({})", prefix, locale.code, locale.name, locale.keymap),
+            format!(
+                "{}{} - {} ({})",
+                prefix, locale.code, locale.name, locale.keymap
+            ),
             style,
         )));
     }
@@ -798,26 +844,35 @@ fn draw_locale_selection_panel(f: &mut Frame, app: &App, area: Rect) {
     }
 
     lines.push(Line::from(""));
-    lines.push(Line::from("Use Up/Down or j/k to navigate, Enter to select"));
+    lines.push(Line::from(
+        "Use Up/Down or j/k to navigate, Enter to select",
+    ));
     lines.push(Line::from(Span::styled(
         "Esc: Go back",
         Style::default().fg(Color::DarkGray),
     )));
 
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Locale ")
-                .border_style(Style::default().fg(Color::Blue)),
-        );
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Locale ")
+            .border_style(Style::default().fg(Color::Blue)),
+    );
     f.render_widget(paragraph, area);
 }
 
 fn draw_options_panel(f: &mut Frame, app: &App, area: Rect) {
     let options = [
-        ("Auto-unmount", app.auto_unmount, "Automatically unmount disk partitions before flashing"),
-        ("Early SSH", app.early_ssh, "Enable SSH access on first boot"),
+        (
+            "Auto-unmount",
+            app.auto_unmount,
+            "Automatically unmount disk partitions before flashing",
+        ),
+        (
+            "Early SSH",
+            app.early_ssh,
+            "Enable SSH access on first boot",
+        ),
         (
             match app.partition_plan.scheme {
                 crate::cli::PartitionScheme::Mbr => "Scheme: MBR",
@@ -852,7 +907,9 @@ fn draw_options_panel(f: &mut Frame, app: &App, area: Rect) {
         };
 
         let style = if focused {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
@@ -870,19 +927,19 @@ fn draw_options_panel(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(Color::DarkGray),
     )));
 
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Options ")
-                .border_style(Style::default().fg(Color::Blue)),
-        );
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Options ")
+            .border_style(Style::default().fg(Color::Blue)),
+    );
     f.render_widget(paragraph, area);
 }
 
 fn draw_final_summary_panel(f: &mut Frame, app: &App, area: Rect) {
     let disk = app.selected_disk.as_deref().unwrap_or("(not selected)");
-    let image = app.image_path
+    let image = app
+        .image_path
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| {
@@ -900,7 +957,8 @@ fn draw_final_summary_panel(f: &mut Frame, app: &App, area: Rect) {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(not selected)".to_string())
     };
-    let locale = app.locale
+    let locale = app
+        .locale
         .as_ref()
         .map(|l| format!("{} ({})", l.name, l.code))
         .unwrap_or_else(|| "(default)".to_string());
@@ -908,7 +966,9 @@ fn draw_final_summary_panel(f: &mut Frame, app: &App, area: Rect) {
     let mut lines = vec![
         Line::from(Span::styled(
             "Final Summary - Ready to Flash",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(format!("Target Disk:  {}", disk)),
@@ -916,9 +976,18 @@ fn draw_final_summary_panel(f: &mut Frame, app: &App, area: Rect) {
         Line::from(format!("UEFI:         {}", uefi)),
         Line::from(format!("Locale:       {}", locale)),
         Line::from(format!("Scheme:       {:?}", app.partition_plan.scheme)),
-        Line::from(format!("Auto-unmount: {}", if app.auto_unmount { "Yes" } else { "No" })),
-        Line::from(format!("Early SSH:    {}", if app.early_ssh { "Yes" } else { "No" })),
-        Line::from(format!("Dry Run:      {}", if app.dry_run { "Yes" } else { "No" })),
+        Line::from(format!(
+            "Auto-unmount: {}",
+            if app.auto_unmount { "Yes" } else { "No" }
+        )),
+        Line::from(format!(
+            "Early SSH:    {}",
+            if app.early_ssh { "Yes" } else { "No" }
+        )),
+        Line::from(format!(
+            "Dry Run:      {}",
+            if app.dry_run { "Yes" } else { "No" }
+        )),
         Line::from(""),
         Line::from(Span::styled(
             "THIS IS YOUR FINAL CHANCE TO ABORT!",
@@ -947,13 +1016,12 @@ fn draw_final_summary_panel(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(Color::DarkGray),
     )));
 
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Summary ")
-                .border_style(Style::default().fg(Color::Red)),
-        );
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Summary ")
+            .border_style(Style::default().fg(Color::Red)),
+    );
     f.render_widget(paragraph, area);
 }
 
@@ -993,17 +1061,18 @@ fn draw_status_line(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(Color::Yellow),
         )
     } else {
-        (app.state.status_message.clone(), Style::default().fg(Color::Gray))
+        (
+            app.state.status_message.clone(),
+            Style::default().fg(Color::Gray),
+        )
     };
 
-    let status = Paragraph::new(message)
-        .style(style)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Status ")
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
+    let status = Paragraph::new(message).style(style).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Status ")
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
     f.render_widget(status, area);
 }
 
@@ -1021,7 +1090,9 @@ fn draw_cancel_dialog(f: &mut Frame, _app: &App) {
         Line::from(""),
         Line::from(Span::styled(
             "Cancel Installation?",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from("Installation is in progress."),

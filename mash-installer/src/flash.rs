@@ -4,9 +4,9 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::cli::PartitionScheme;
 use crate::errors::{MashError, Result as MashResult};
@@ -105,7 +105,10 @@ impl CleanupGuard {
 impl Drop for CleanupGuard {
     fn drop(&mut self) {
         log::info!("CleanupGuard: Dropping, initiating cleanup...");
-        let _ = self.sender.as_ref().map(|s| s.send(ProgressEvent::CleanupStarted));
+        let _ = self
+            .sender
+            .as_ref()
+            .map(|s| s.send(ProgressEvent::CleanupStarted));
 
         self.unmount_all();
         self.detach_loop_device();
@@ -126,7 +129,10 @@ impl Drop for CleanupGuard {
                 self.add_warning(warn_msg.clone());
                 log::error!("{}", warn_msg);
             } else {
-                info!("Successfully removed work directory {}", self.work_dir.display());
+                info!(
+                    "Successfully removed work directory {}",
+                    self.work_dir.display()
+                );
             }
         }
 
@@ -216,12 +222,18 @@ impl FlashContext {
 
     fn start_phase(&self, phase: Phase) {
         info!("📍 Starting phase: {}", phase.name());
-        self.send_progress(ExecutionStep::from_phase(phase), ProgressUpdate::PhaseStarted(phase));
+        self.send_progress(
+            ExecutionStep::from_phase(phase),
+            ProgressUpdate::PhaseStarted(phase),
+        );
     }
 
     fn complete_phase(&self, phase: Phase) {
         info!("✅ Completed phase: {}", phase.name());
-        self.send_progress(ExecutionStep::from_phase(phase), ProgressUpdate::PhaseCompleted(phase));
+        self.send_progress(
+            ExecutionStep::from_phase(phase),
+            ProgressUpdate::PhaseCompleted(phase),
+        );
     }
 
     fn status(&self, step: ExecutionStep, msg: &str) {
@@ -300,7 +312,7 @@ pub fn run_installation_pipeline(
         fs::remove_dir_all(&work_dir)?;
     }
     fs::create_dir_all(&work_dir)?;
-    
+
     let cleanup_guard = CleanupGuard::new(work_dir.clone(), config.progress_tx.clone());
 
     let mut ctx = FlashContext {
@@ -371,7 +383,10 @@ fn run_installation(mut ctx: FlashContext) -> Result<()> {
 
     // Setup loop device for image
     ctx.check_cancelled()?;
-    ctx.status(ExecutionStep::Partition, "🔄 Setting up image loop device...");
+    ctx.status(
+        ExecutionStep::Partition,
+        "🔄 Setting up image loop device...",
+    );
     setup_image_loop(&mut ctx)?; // Needs ctx to update loop_device in guard
 
     // Mount source (image) partitions
@@ -425,14 +440,25 @@ fn run_installation(mut ctx: FlashContext) -> Result<()> {
     // Phase 4: Copy boot partition
     ctx.check_cancelled()?;
     ctx.start_phase(Phase::CopyBoot);
-    rsync_with_progress(&ctx, ExecutionStep::CopyBoot, &mounts.src_boot, &mounts.dst_boot, "boot")?;
+    rsync_with_progress(
+        &ctx,
+        ExecutionStep::CopyBoot,
+        &mounts.src_boot,
+        &mounts.dst_boot,
+        "boot",
+    )?;
     ctx.complete_phase(Phase::CopyBoot);
 
     // Phase 5: Copy EFI partition
     ctx.check_cancelled()?;
     ctx.start_phase(Phase::CopyEfi);
     // Copy Fedora EFI tree (safe for vfat)
-    rsync_vfat_safe(&ctx, ExecutionStep::CopyEfi, &mounts.src_efi.join("EFI"), &mounts.dst_efi.join("EFI"))?;
+    rsync_vfat_safe(
+        &ctx,
+        ExecutionStep::CopyEfi,
+        &mounts.src_efi.join("EFI"),
+        &mounts.dst_efi.join("EFI"),
+    )?;
     // Copy UEFI firmware (LAST - overwrites any conflicts)
     rsync_vfat_safe(&ctx, ExecutionStep::CopyEfi, &ctx.uefi_dir, &mounts.dst_efi)?;
     // Write config.txt
@@ -484,13 +510,19 @@ fn simulate_installation(ctx: &FlashContext) -> Result<()> {
     for phase in Phase::all() {
         ctx.check_cancelled()?; // Add cancellation check
         ctx.start_phase(*phase);
-        ctx.status(ExecutionStep::from_phase(*phase), &format!("(dry-run) Would execute: {}", phase.name()));
+        ctx.status(
+            ExecutionStep::from_phase(*phase),
+            &format!("(dry-run) Would execute: {}", phase.name()),
+        );
         std::thread::sleep(std::time::Duration::from_millis(300));
         ctx.complete_phase(*phase);
     }
     // Final complete event for dry run
     if let Some(ref tx) = ctx.progress_tx {
-        let _ = tx.send(ProgressEvent::Complete(ctx.image.clone(), Some(ctx.uefi_dir.clone())));
+        let _ = tx.send(ProgressEvent::Complete(
+            ctx.image.clone(),
+            Some(ctx.uefi_dir.clone()),
+        ));
     }
     Ok(())
 }
@@ -524,7 +556,10 @@ fn unmount_disk_partitions(disk: &str, auto_unmount: bool) -> Result<()> {
 /// Partition disk with MBR (msdos) using parted
 fn partition_disk_mbr(ctx: &FlashContext) -> Result<()> {
     ctx.check_cancelled()?;
-    ctx.status(ExecutionStep::Partition, "🔪 Creating MBR (msdos) partition table with parted...");
+    ctx.status(
+        ExecutionStep::Partition,
+        "🔪 Creating MBR (msdos) partition table with parted...",
+    );
 
     // Wipe existing
     run_command("wipefs", &["-a", &ctx.disk])?;
@@ -600,7 +635,10 @@ fn partition_disk_mbr(ctx: &FlashContext) -> Result<()> {
 
 fn partition_disk_gpt(ctx: &FlashContext) -> Result<()> {
     ctx.check_cancelled()?;
-    ctx.status(ExecutionStep::Partition, "🔪 Creating GPT partition table with parted...");
+    ctx.status(
+        ExecutionStep::Partition,
+        "🔪 Creating GPT partition table with parted...",
+    );
 
     // Wipe existing
     run_command("wipefs", &["-a", &ctx.disk])?;
@@ -682,17 +720,29 @@ fn format_partitions(ctx: &FlashContext) -> Result<()> {
     let p3 = ctx.partition_path(3);
     let p4 = ctx.partition_path(4);
 
-    ctx.status(ExecutionStep::Format, "✨ Formatting EFI partition (FAT32)...");
+    ctx.status(
+        ExecutionStep::Format,
+        "✨ Formatting EFI partition (FAT32)...",
+    );
     run_command("mkfs.vfat", &["-F", "32", "-n", "EFI", &p1])
         .context("Failed to format EFI partition")?;
 
-    ctx.status(ExecutionStep::Format, "✨ Formatting BOOT partition (ext4)...");
+    ctx.status(
+        ExecutionStep::Format,
+        "✨ Formatting BOOT partition (ext4)...",
+    );
     run_command("mkfs.ext4", &["-F", "-L", "BOOT", &p2])?;
 
-    ctx.status(ExecutionStep::Format, "✨ Formatting ROOT partition (btrfs)...");
+    ctx.status(
+        ExecutionStep::Format,
+        "✨ Formatting ROOT partition (btrfs)...",
+    );
     run_command("mkfs.btrfs", &["-f", "-L", "FEDORA", &p3])?;
 
-    ctx.status(ExecutionStep::Format, "✨ Formatting DATA partition (btrfs)...");
+    ctx.status(
+        ExecutionStep::Format,
+        "✨ Formatting DATA partition (btrfs)...",
+    );
     run_command("mkfs.btrfs", &["-f", "-L", "DATA", &p4])?;
 
     udev_settle();
@@ -728,7 +778,8 @@ fn setup_image_loop(ctx: &mut FlashContext) -> Result<()> {
 fn mount_source_partitions(ctx: &FlashContext, mounts: &MountPoints) -> Result<BtrfsSubvols> {
     ctx.check_cancelled()?;
     let loop_dev = ctx
-        .cleanup_guard.loop_device
+        .cleanup_guard
+        .loop_device
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Loop device not set"))?;
 
@@ -918,7 +969,13 @@ fn create_dest_subvols(
 // Copy Functions
 // ============================================================================
 
-fn rsync_with_progress(ctx: &FlashContext, step: ExecutionStep, src: &Path, dst: &Path, label: &str) -> Result<()> {
+fn rsync_with_progress(
+    ctx: &FlashContext,
+    step: ExecutionStep,
+    src: &Path,
+    dst: &Path,
+    label: &str,
+) -> Result<()> {
     ctx.check_cancelled()?;
     ctx.status(step, &format!("📦 Copying {}...", label));
 
@@ -943,12 +1000,15 @@ fn rsync_with_progress(ctx: &FlashContext, step: ExecutionStep, src: &Path, dst:
         for line in reader.lines().map_while(Result::ok) {
             ctx.check_cancelled()?; // Check cancellation during rsync output processing
             if let Some(progress) = parse_rsync_progress(&line) {
-                ctx.send_progress(step, ProgressUpdate::RsyncProgress {
-                    percent: progress.percent,
-                    speed_mbps: progress.speed_mbps,
-                    files_done: progress.files_done,
-                    files_total: progress.files_total,
-                });
+                ctx.send_progress(
+                    step,
+                    ProgressUpdate::RsyncProgress {
+                        percent: progress.percent,
+                        speed_mbps: progress.speed_mbps,
+                        files_done: progress.files_done,
+                        files_total: progress.files_total,
+                    },
+                );
             }
         }
     }
@@ -1118,20 +1178,29 @@ fn patch_bls_entries(ctx: &FlashContext, entries_dir: &Path, root_uuid: &str) ->
 fn configure_locale(ctx: &FlashContext, target_root: &Path) -> Result<()> {
     ctx.check_cancelled()?;
     if let Some(ref locale) = ctx.locale {
-        ctx.status(ExecutionStep::LocaleConfig, &format!(
-            "🗣️ Configuring locale: {} (keymap: {})",
-            locale.lang, locale.keymap
-        ));
+        ctx.status(
+            ExecutionStep::LocaleConfig,
+            &format!(
+                "🗣️ Configuring locale: {} (keymap: {})",
+                locale.lang, locale.keymap
+            ),
+        );
         crate::locale::patch_locale(target_root, locale, false)?;
     } else {
-        ctx.status(ExecutionStep::LocaleConfig, "🗣️ Using default locale settings");
+        ctx.status(
+            ExecutionStep::LocaleConfig,
+            "🗣️ Using default locale settings",
+        );
     }
     Ok(())
 }
 
 fn enable_early_ssh(ctx: &FlashContext, target_root: &Path) -> Result<()> {
     ctx.check_cancelled()?;
-    ctx.status(ExecutionStep::LocaleConfig, "🔐 Enabling early SSH access...");
+    ctx.status(
+        ExecutionStep::LocaleConfig,
+        "🔐 Enabling early SSH access...",
+    );
     let systemd_dir = target_root.join("etc/systemd/system/multi-user.target.wants");
     fs::create_dir_all(&systemd_dir)?;
     let sshd_link = systemd_dir.join("sshd.service");
@@ -1201,7 +1270,10 @@ fn get_partition_uuid(ctx: &FlashContext, device: &str) -> Result<String> {
 
 fn stage_dojo(ctx: &FlashContext, data_mount: &Path) -> Result<()> {
     ctx.check_cancelled()?;
-    ctx.status(ExecutionStep::StageDojo, "🥋 Staging Dojo installation files to DATA partition...");
+    ctx.status(
+        ExecutionStep::StageDojo,
+        "🥋 Staging Dojo installation files to DATA partition...",
+    );
 
     let staging_dir = data_mount.join("mash-staging");
     let logs_dir = data_mount.join("mash-logs");
@@ -1220,19 +1292,19 @@ fn stage_dojo(ctx: &FlashContext, data_mount: &Path) -> Result<()> {
 
 fn decompress_xz_image(ctx: &FlashContext, xz_image_path: &Path) -> Result<PathBuf> {
     ctx.check_cancelled()?;
-    ctx.status(ExecutionStep::DownloadImage, &format!(
-        "Decompressing XZ image: {}...",
-        xz_image_path.display()
-    ));
+    ctx.status(
+        ExecutionStep::DownloadImage,
+        &format!("Decompressing XZ image: {}...", xz_image_path.display()),
+    );
 
     let raw_image_path = xz_image_path.with_extension(""); // Remove .xz extension
 
     // Check if the raw image already exists
     if raw_image_path.exists() {
-        ctx.status(ExecutionStep::DownloadImage, &format!(
-            "Raw image already exists: {}",
-            raw_image_path.display()
-        ));
+        ctx.status(
+            ExecutionStep::DownloadImage,
+            &format!("Raw image already exists: {}", raw_image_path.display()),
+        );
         return Ok(raw_image_path);
     }
 
@@ -1279,11 +1351,14 @@ fn decompress_xz_image(ctx: &FlashContext, xz_image_path: &Path) -> Result<PathB
         );
     }
 
-    ctx.status(ExecutionStep::DownloadImage, &format!(
-        "Decompression complete: {} -> {}",
-        xz_image_path.display(),
-        raw_image_path.display()
-    ));
+    ctx.status(
+        ExecutionStep::DownloadImage,
+        &format!(
+            "Decompression complete: {} -> {}",
+            xz_image_path.display(),
+            raw_image_path.display()
+        ),
+    );
     Ok(raw_image_path)
 }
 
@@ -1312,8 +1387,6 @@ fn parse_size_to_mib(s: &str) -> Result<u64> {
         bail!("Size must be like 1024MiB or 2GiB, got: {}", s)
     }
 }
-
-
 
 fn normalize_disk(d: &str) -> String {
     if d.starts_with("/dev/") {

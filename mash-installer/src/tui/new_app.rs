@@ -1,9 +1,10 @@
-use super::new_ui::{self, draw, centered_rect, draw_cancel_dialog, draw_complete_panel,
-    draw_config_panel, draw_disk_confirm_panel, draw_disk_selection_panel,
-    draw_execution_panel, draw_final_summary_panel, draw_image_selection_panel,
-    draw_image_source_panel, draw_locale_selection_panel, draw_options_panel,
-    draw_partition_customize_panel, draw_partition_layout_panel,
-    draw_partition_scheme_panel, draw_welcome_panel};
+use super::new_ui::{
+    self, centered_rect, draw, draw_cancel_dialog, draw_complete_panel, draw_config_panel,
+    draw_disk_confirm_panel, draw_disk_selection_panel, draw_execution_panel,
+    draw_final_summary_panel, draw_image_selection_panel, draw_image_source_panel,
+    draw_locale_selection_panel, draw_options_panel, draw_partition_customize_panel,
+    draw_partition_layout_panel, draw_partition_scheme_panel, draw_welcome_panel,
+};
 use super::progress::{self, ProgressEvent, ProgressUpdate};
 use super::widgets::{DiskInfo, PartitionSize};
 use crate::cli::Cli;
@@ -19,6 +20,7 @@ use crossterm::{
 };
 use log::{error, info};
 use ratatui::{backend::CrosstermBackend, Terminal};
+use std::path::PathBuf;
 use std::{
     collections::HashMap,
     io,
@@ -29,7 +31,6 @@ use std::{
     thread,
     time::Duration,
 };
-use std::path::PathBuf;
 
 /// Main application state for the single-page TUI
 pub struct App {
@@ -214,7 +215,9 @@ impl App {
 
     /// Get current config step (or first if none active)
     pub fn current_config_step(&self) -> ConfigStep {
-        self.state.current_config.unwrap_or(ConfigStep::DiskSelection)
+        self.state
+            .current_config
+            .unwrap_or(ConfigStep::DiskSelection)
     }
 
     /// Check if we're in execution phase
@@ -231,7 +234,9 @@ impl App {
     pub fn start_configuring(&mut self) {
         self.state.mode = InstallMode::Configuring;
         self.state.current_config = Some(ConfigStep::DiskSelection);
-        self.state.config_states.insert(ConfigStep::DiskSelection, StepState::Current);
+        self.state
+            .config_states
+            .insert(ConfigStep::DiskSelection, StepState::Current);
     }
 
     /// Move to next config step
@@ -239,7 +244,9 @@ impl App {
         let current = self.current_config_step();
 
         // Mark current as completed
-        self.state.config_states.insert(current, StepState::Completed);
+        self.state
+            .config_states
+            .insert(current, StepState::Completed);
 
         // Find next step
         let all_steps = ConfigStep::all();
@@ -283,7 +290,9 @@ impl App {
         self.state.mode = InstallMode::Executing;
         self.state.current_config = None;
         self.state.status_message = "Starting installation...".to_string();
-        self.ui.exec_log.push("Starting installation...".to_string());
+        self.ui
+            .exec_log
+            .push("Starting installation...".to_string());
 
         // Build flash config from current app state
         let mut flash_config = self.build_flash_config();

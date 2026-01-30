@@ -128,7 +128,7 @@ fn main() -> anyhow::Result<()> {
                 locale: parsed_locale,
                 early_ssh: *_early_ssh,
                 progress_tx: Some(progress_tx), // Pass the progress channel
-                cancel_flag: cancel_flag,        // Pass the cancellation flag
+                cancel_flag: cancel_flag,       // Pass the cancellation flag
                 efi_size: efi_size.clone(),
                 boot_size: boot_size.clone(),
                 root_end: root_end.clone(),

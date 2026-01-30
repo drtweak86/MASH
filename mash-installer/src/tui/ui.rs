@@ -456,18 +456,19 @@ fn draw_partition_customize(f: &mut Frame, app: &App, area: Rect) {
             name.to_string()
         };
 
-        let input = Paragraph::new(display_value.clone())
-            .style(style)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!(" {} ", label))
-                    .border_style(border_style),
-            );
+        let input = Paragraph::new(display_value.clone()).style(style).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" {} ", label))
+                .border_style(border_style),
+        );
         f.render_widget(input, *chunk);
 
         if is_editing {
-            f.set_cursor_position((chunk.x + 1 + app.partition_edit_input.len() as u16, chunk.y + 1));
+            f.set_cursor_position((
+                chunk.x + 1 + app.partition_edit_input.len() as u16,
+                chunk.y + 1,
+            ));
         }
     }
 

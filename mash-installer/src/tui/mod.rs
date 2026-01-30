@@ -224,7 +224,9 @@ fn run_legacy_loop(
         let download_result = app.update_download();
 
         // Handle download completion triggering next step
-        if let app::InputResult::StartFlash(_) | app::InputResult::StartDownload(_) = download_result {
+        if let app::InputResult::StartFlash(_) | app::InputResult::StartDownload(_) =
+            download_result
+        {
             return Ok(download_result);
         }
 

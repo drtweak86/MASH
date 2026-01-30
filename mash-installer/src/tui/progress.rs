@@ -116,8 +116,8 @@ pub enum ProgressUpdate {
     Error(String),
 }
 
-use crate::tui::app::ExecutionStep;
 use crate::download::DownloadUpdate;
+use crate::tui::app::ExecutionStep;
 use std::path::PathBuf;
 
 /// Events sent from the installation worker thread to the TUI

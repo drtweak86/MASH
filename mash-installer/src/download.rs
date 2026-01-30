@@ -5,14 +5,14 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use zip::ZipArchive;
 
-use crate::tui::{DownloadUpdate, ProgressEvent};
 use crate::errors::MashError;
+use crate::tui::{DownloadUpdate, ProgressEvent};
 
 // GitHub API types for deserialization
 #[derive(Debug, Deserialize)]
