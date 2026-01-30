@@ -174,6 +174,17 @@ pub fn draw(f: &mut Frame, app: &App) {
             ));
             items.push(ListItem::new("ℹ️ Press Enter to continue.".to_string()));
         }
+        InstallStepType::Confirmation => {
+            items.push(ListItem::new(
+                "✅ Confirmation summary not built yet.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "ℹ️ Expected from selected disk, image, and options.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "⌨️ Final confirmation details will render here.".to_string(),
+            ));
+        }
         _ => {
             items.push(ListItem::new(
                 "ℹ️ Enter to continue - Esc to go back - q to quit".to_string(),
