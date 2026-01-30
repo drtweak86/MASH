@@ -113,6 +113,10 @@ bump-minor:
 bump-patch:
 	@./scripts/bump-version.sh patch
 
+# Rust release tool
+mash-release:
+	@$(CARGO) run --package mash-tools --
+
 # Help
 help:
 	@echo "MASH Installer - Build System"
