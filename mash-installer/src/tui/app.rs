@@ -13,6 +13,7 @@ use super::input::{InputField, InputMode};
 use super::progress::{Phase, ProgressState};
 use super::widgets::DiskInfo;
 use super::flash_config::{FlashConfig, ImageSource, ImageVersionOption, ImageEditionOption};
+use crate::tui::new_app::{DownloadType, InputResult};
 
 // ============================================================================
 // Configuration Steps (user input phase)
@@ -430,26 +431,7 @@ impl InstallStep {
 
 
 
-/// Result of handling input
-pub enum InputResult {
-    Continue,
-    Quit,
-    Complete,
-    StartFlash(FlashConfig),     // New: to signal main.rs to start flashing
-    StartDownload(DownloadType), // New: to signal main.rs to start a download
-}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DownloadType {
-    FedoraImage {
-        version: String,
-        edition: String,
-        dest_dir: PathBuf,
-    },
-    UefiFirmware {
-        dest_dir: PathBuf,
-    },
-}
 
 /// Installation options (checkboxes)
 #[derive(Debug, Clone)]

@@ -3,7 +3,9 @@
 #![allow(dead_code)]
 
 use crate::cli::PartitionScheme;
+use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
+use crate::tui::flash_config::{FlashConfig, ImageEditionOption, ImageSource, ImageVersionOption};
 
 // ============================================================================
 // Step State
@@ -98,6 +100,31 @@ impl Drop for Cleanup {
             task();
         }
     }
+}
+
+// ============================================================================
+// Result of handling input
+// ============================================================================
+
+/// Result of handling input
+pub enum InputResult {
+    Continue,
+    Quit,
+    Complete,
+    StartFlash(FlashConfig),
+    StartDownload(DownloadType),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadType {
+    FedoraImage {
+        version: String,
+        edition: String,
+        dest_dir: PathBuf,
+    },
+    UefiFirmware {
+        dest_dir: PathBuf,
+    },
 }
 
 // ============================================================================

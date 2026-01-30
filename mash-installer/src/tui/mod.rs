@@ -27,7 +27,7 @@ use std::thread;
 use std::time::Duration;
 
 /// Run the TUI wizard
-pub fn run(_cli: &Cli, _watch: bool, _dry_run: bool) -> Result<app::InputResult> {
+pub fn run(_cli: &Cli, _watch: bool, _dry_run: bool) -> Result<new_app::InputResult> { // Changed app::InputResult to new_app::InputResult
     use std::io::IsTerminal;
 
     // Check if we have a real terminal
@@ -72,7 +72,7 @@ pub fn run(_cli: &Cli, _watch: bool, _dry_run: bool) -> Result<app::InputResult>
     terminal.show_cursor()?;
 
     // For now, we'll just return Quit
-    Ok(app::InputResult::Quit)
+    Ok(new_app::InputResult::Quit) // Changed app::InputResult::Quit to new_app::InputResult::Quit
 }
 
 /// Main application loop (single screen)
