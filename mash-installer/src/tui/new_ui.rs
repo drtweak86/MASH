@@ -88,6 +88,17 @@ pub fn draw(f: &mut Frame, app: &App) {
                 "⌨️ Scheme options will render here.".to_string(),
             ));
         }
+        InstallStepType::PartitionLayout => {
+            items.push(ListItem::new(
+                "📐 Partition layout not calculated yet.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "ℹ️ Expected from selected scheme and disk size.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "⌨️ Layout preview will render here.".to_string(),
+            ));
+        }
         InstallStepType::FirstBootUser => {
             items.push(ListItem::new(
                 "🧑‍💻 First boot will prompt you to create a user.".to_string(),
