@@ -1,6 +1,6 @@
 # Releasing MASH
 
-This project uses Rust tooling for release automation. The authoritative workflow is the `mash-release` tool under `tools/mash-release/`.
+This project uses Rust tooling for release automation. The authoritative workflow is the `mash-tools` release CLI under `tools/mash-tools/`.
 
 ## Requirements
 
@@ -10,18 +10,17 @@ This project uses Rust tooling for release automation. The authoritative workflo
 
 ## Standard Release Flow
 
-1. Run a dry run to review the plan:
+1. Bump the version in `mash-installer/Cargo.toml`:
    ```bash
-   cargo run --manifest-path tools/mash-release/Cargo.toml -- --dry-run
+   cargo run --package mash-tools -- release bump X.Y.Z
    ```
-2. Perform the release (example bump):
+2. Create and push the tag:
    ```bash
-   cargo run --manifest-path tools/mash-release/Cargo.toml -- --bump patch --yes
+   cargo run --package mash-tools -- release tag X.Y.Z
    ```
 
-The tool will update `mash-installer/Cargo.toml`, optionally update the README title line if it contains `vX.Y.Z`, run formatting and tests, then commit, tag, and push (unless `--no-tag` or `--no-push` are provided).
+The tool updates `mash-installer/Cargo.toml`, runs workspace checks, and enforces clean working tree unless `--allow-dirty` is supplied. Tags are always `vX.Y.Z`.
 
 ## Notes
 
-- The legacy bash script remains in `tools/release/release.sh` for reference only.
 - Do not manually insert non-SemVer version strings into `mash-installer/Cargo.toml`.

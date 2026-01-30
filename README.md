@@ -98,6 +98,7 @@ The binary is output to `mash-installer/target/release/mash`.
 - [Quick Start Guide](docs/QUICKSTART.md) — Get running in minutes
 - [Architecture](docs/ARCHITECTURE.md) — Technical design and module structure
 - [Deployment](docs/DEPLOYMENT.md) — Packaging and distribution
+- [Releasing](docs/RELEASING.md) — Release workflow and tooling
 - [Development Principles](docs/DOJO.md) — Code philosophy and rules
 
 ---
