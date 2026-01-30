@@ -143,6 +143,17 @@ pub fn draw(f: &mut Frame, app: &App) {
                 "⌨️ UEFI directory picker will render here.".to_string(),
             ));
         }
+        InstallStepType::LocaleSelection => {
+            items.push(ListItem::new(
+                "🗣️ Locale options not loaded yet.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "ℹ️ Expected from locale defaults or system list.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "⌨️ Locale and keymap options will render here.".to_string(),
+            ));
+        }
         InstallStepType::FirstBootUser => {
             items.push(ListItem::new(
                 "🧑‍💻 First boot will prompt you to create a user.".to_string(),
