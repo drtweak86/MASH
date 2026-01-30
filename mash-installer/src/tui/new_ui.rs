@@ -56,9 +56,7 @@ pub fn draw(f: &mut Frame, app: &App) {
             ));
         }
         InstallStepType::DiskConfirmation => {
-            items.push(ListItem::new(
-                "⚠️ No target disk selected yet.".to_string(),
-            ));
+            items.push(ListItem::new("⚠️ No target disk selected yet.".to_string()));
             items.push(ListItem::new(
                 "ℹ️ Expected from disk scan selection in DiskSelection.".to_string(),
             ));
@@ -122,9 +120,7 @@ pub fn draw(f: &mut Frame, app: &App) {
             ));
         }
         InstallStepType::ImageSelection => {
-            items.push(ListItem::new(
-                "🖼️ Image list not loaded yet.".to_string(),
-            ));
+            items.push(ListItem::new("🖼️ Image list not loaded yet.".to_string()));
             items.push(ListItem::new(
                 "ℹ️ Expected from download list or local file picker.".to_string(),
             ));
@@ -133,9 +129,7 @@ pub fn draw(f: &mut Frame, app: &App) {
             ));
         }
         InstallStepType::UefiDirectory => {
-            items.push(ListItem::new(
-                "📁 UEFI directory not set yet.".to_string(),
-            ));
+            items.push(ListItem::new("📁 UEFI directory not set yet.".to_string()));
             items.push(ListItem::new(
                 "ℹ️ Expected from local directory selection or download.".to_string(),
             ));
@@ -192,7 +186,9 @@ pub fn draw(f: &mut Frame, app: &App) {
             items.push(ListItem::new(
                 "ℹ️ Expected from downloader telemetry.".to_string(),
             ));
-            items.push(ListItem::new("⌨️ Download status will render here.".to_string()));
+            items.push(ListItem::new(
+                "⌨️ Download status will render here.".to_string(),
+            ));
         }
         InstallStepType::DownloadingUefi => {
             items.push(ListItem::new(
@@ -201,7 +197,9 @@ pub fn draw(f: &mut Frame, app: &App) {
             items.push(ListItem::new(
                 "ℹ️ Expected from downloader telemetry.".to_string(),
             ));
-            items.push(ListItem::new("⌨️ Download status will render here.".to_string()));
+            items.push(ListItem::new(
+                "⌨️ Download status will render here.".to_string(),
+            ));
         }
         InstallStepType::Flashing => {
             items.push(ListItem::new(
@@ -218,11 +216,6 @@ pub fn draw(f: &mut Frame, app: &App) {
                 "ℹ️ Final summary will render here.".to_string(),
             ));
             items.push(ListItem::new("⌨️ Press Enter to exit.".to_string()));
-        }
-        _ => {
-            items.push(ListItem::new(
-                "ℹ️ Enter to continue - Esc to go back - q to quit".to_string(),
-            ));
         }
     }
 
