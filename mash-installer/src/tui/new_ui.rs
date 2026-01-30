@@ -385,7 +385,6 @@ fn expected_actions(step: InstallStepType) -> String {
         | InstallStepType::LocaleSelection
         | InstallStepType::FirstBootUser
         | InstallStepType::Confirmation => "Up/Down, Enter, Esc, A, q".to_string(),
-        _ => "Enter, Esc, q".to_string(),
     }
 }
 

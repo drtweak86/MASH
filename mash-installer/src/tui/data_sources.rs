@@ -65,10 +65,10 @@ pub fn scan_disks() -> Vec<DiskInfo> {
                 .join(&name)
                 .join("device/vendor"),
         );
-        let label = match (vendor, model) {
+        let label = match (vendor.as_ref(), model.as_ref()) {
             (Some(vendor), Some(model)) => Some(format!("{} {}", vendor, model).trim().to_string()),
-            (Some(vendor), None) => Some(vendor),
-            (None, Some(model)) => Some(model),
+            (Some(vendor), None) => Some(vendor.to_string()),
+            (None, Some(model)) => Some(model.to_string()),
             _ => None,
         };
         let removable_path = PathBuf::from("/sys/block").join(&name).join("removable");
@@ -78,6 +78,7 @@ pub fn scan_disks() -> Vec<DiskInfo> {
             name: label.unwrap_or_else(|| name.clone()),
             path: format!("/dev/{}", name),
             size_bytes,
+            model,
             removable,
         });
     }

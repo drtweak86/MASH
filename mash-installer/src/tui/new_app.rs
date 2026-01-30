@@ -791,8 +791,7 @@ impl App {
                     }
                     if !self.destructive_armed {
                         self.error_message = Some(
-                            "Destructive operations are disarmed. Arm before starting."
-                                .to_string(),
+                            "Destructive operations are disarmed. Arm before starting.".to_string(),
                         );
                         return InputResult::Continue;
                     }
