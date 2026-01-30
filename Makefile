@@ -103,7 +103,7 @@ dist: build-cli build-qt
 	rm -rf mash-installer-$$VERSION; \
 	echo "✅ Created dist/$$TARBALL"
 
-# Bump version
+# Bump version (via mash-tools)
 bump-major:
 	@VERSION=$$(sed -n 's/^version = "\\(.*\\)"/\\1/p' mash-installer/Cargo.toml); \
 	MAJOR=$${VERSION%%.*}; \
@@ -152,9 +152,9 @@ help:
 	@echo "  format         Format code"
 	@echo "  lint           Lint code"
 	@echo "  dist           Create distribution tarball"
-	@echo "  bump-major     Bump major version (X.0.0)"
-	@echo "  bump-minor     Bump minor version (0.X.0)"
-	@echo "  bump-patch     Bump patch version (0.0.X)"
+	@echo "  bump-major     Bump major version (X.0.0) via mash-tools"
+	@echo "  bump-minor     Bump minor version (0.X.0) via mash-tools"
+	@echo "  bump-patch     Bump patch version (0.0.X) via mash-tools"
 	@echo "  help           Show this help"
 	@echo ""
 	@echo "Variables:"
