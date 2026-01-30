@@ -203,6 +203,15 @@ pub fn draw(f: &mut Frame, app: &App) {
             ));
             items.push(ListItem::new("⌨️ Download status will render here.".to_string()));
         }
+        InstallStepType::Flashing => {
+            items.push(ListItem::new(
+                "💾 Flashing progress is shown below.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "ℹ️ Live telemetry expected from flash.rs progress updates.".to_string(),
+            ));
+            items.push(ListItem::new("⌨️ Press Enter when complete.".to_string()));
+        }
         _ => {
             items.push(ListItem::new(
                 "ℹ️ Enter to continue - Esc to go back - q to quit".to_string(),
