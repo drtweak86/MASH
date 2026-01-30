@@ -3,15 +3,20 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use toml_edit::{DocumentMut, Item};
 
 mod version;
 
-use version::{bump_version, format_tag, parse_strict_version, BumpKind};
+use version::{BumpKind, bump_version, format_tag, parse_strict_version};
 
 #[derive(Debug, Parser)]
 #[command(name = "mash-release")]
 #[command(about = "Release helper for the MASH installer")]
 struct Cli {
+    /// Allow dirty git working tree
+    #[arg(long)]
+    allow_dirty: bool,
+
     /// Which SemVer component to bump
     #[arg(long, value_enum, default_value = "patch")]
     bump: BumpArg,
@@ -61,6 +66,7 @@ impl From<BumpArg> for BumpKind {
 fn main() -> Result<(), String> {
     let cli = Cli::parse();
     let repo_root = repo_root()?;
+    ensure_clean_worktree(&repo_root, cli.allow_dirty)?;
     let cargo_path = repo_root.join("mash-installer").join("Cargo.toml");
     let readme_path = repo_root.join("README.md");
 
@@ -73,7 +79,13 @@ fn main() -> Result<(), String> {
     let tag = format_tag(&next_version);
 
     if cli.dry_run {
-        print_plan(&current_version, &next_version, &tag, &cargo_path, &readme_path)?;
+        print_plan(
+            &current_version,
+            &next_version,
+            &tag,
+            &cargo_path,
+            &readme_path,
+        )?;
         return Ok(());
     }
 
@@ -106,8 +118,8 @@ fn main() -> Result<(), String> {
 }
 
 fn repo_root() -> Result<PathBuf, String> {
-    let mut current = std::env::current_dir()
-        .map_err(|err| format!("failed to read current dir: {}", err))?;
+    let mut current =
+        std::env::current_dir().map_err(|err| format!("failed to read current dir: {}", err))?;
     loop {
         if current.join(".git").exists() {
             return Ok(current);
@@ -121,53 +133,40 @@ fn repo_root() -> Result<PathBuf, String> {
 fn read_cargo_version(path: &Path) -> Result<semver::Version, String> {
     let content = fs::read_to_string(path)
         .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
-    let mut in_package = false;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') {
-            in_package = trimmed == "[package]";
-            continue;
-        }
-        if in_package && trimmed.starts_with("version") {
-            let version = trimmed
-                .split('=')
-                .nth(1)
-                .map(|value| value.trim().trim_matches('"'))
-                .ok_or_else(|| "invalid version line".to_string())?;
-            return parse_strict_version(version);
-        }
-    }
-    Err("version not found in mash-installer/Cargo.toml".to_string())
+    let doc = content
+        .parse::<DocumentMut>()
+        .map_err(|err| format!("failed to parse {}: {}", path.display(), err))?;
+    let version = doc
+        .get("package")
+        .and_then(Item::as_table)
+        .and_then(|table| table.get("version"))
+        .and_then(Item::as_str)
+        .ok_or_else(|| "version not found in mash-installer/Cargo.toml".to_string())?;
+    parse_strict_version(version)
 }
 
 fn update_cargo_version(path: &Path, version: &semver::Version) -> Result<bool, String> {
     let content = fs::read_to_string(path)
         .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
-    let mut updated = Vec::new();
-    let mut in_package = false;
-    let mut changed = false;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') {
-            in_package = trimmed == "[package]";
-            updated.push(line.to_string());
-            continue;
-        }
-        if in_package && trimmed.starts_with("version") {
-            let new_line = format!("version = \"{}\"", version);
-            if trimmed != new_line {
-                changed = true;
-            }
-            updated.push(new_line);
-        } else {
-            updated.push(line.to_string());
-        }
+    let mut doc = content
+        .parse::<DocumentMut>()
+        .map_err(|err| format!("failed to parse {}: {}", path.display(), err))?;
+    let package = doc
+        .get_mut("package")
+        .and_then(Item::as_table_mut)
+        .ok_or_else(|| "missing [package] table in Cargo.toml".to_string())?;
+    let current = package
+        .get("version")
+        .and_then(Item::as_str)
+        .unwrap_or_default();
+    let next = version.to_string();
+    if current == next {
+        return Ok(false);
     }
-    if changed {
-        fs::write(path, updated.join("\n") + "\n")
-            .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
-    }
-    Ok(changed)
+    package["version"] = toml_edit::value(next);
+    fs::write(path, doc.to_string())
+        .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
+    Ok(true)
 }
 
 fn update_readme_title(path: &Path, tag: &str) -> Result<bool, String> {
@@ -178,13 +177,13 @@ fn update_readme_title(path: &Path, tag: &str) -> Result<bool, String> {
         return Ok(false);
     }
     let first = lines[0].clone();
-    if let Some(updated) = replace_version_in_title(&first, tag) {
-        if updated != first {
-            lines[0] = updated;
-            fs::write(path, lines.join("\n") + "\n")
-                .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
-            return Ok(true);
-        }
+    if let Some(updated) = replace_version_in_title(&first, tag)
+        && updated != first
+    {
+        lines[0] = updated;
+        fs::write(path, lines.join("\n") + "\n")
+            .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
+        return Ok(true);
     }
     Ok(false)
 }
@@ -193,8 +192,8 @@ fn replace_version_in_title(line: &str, tag: &str) -> Option<String> {
     if !line.contains("MASH") {
         return None;
     }
-    let mut chars = line.char_indices();
-    while let Some((idx, ch)) = chars.next() {
+    let chars = line.char_indices();
+    for (idx, ch) in chars {
         if ch != 'v' {
             continue;
         }
@@ -246,6 +245,23 @@ fn run_command(mut cmd: Command, label: &str) -> Result<(), String> {
         return Err(format!("{} failed", label));
     }
     Ok(())
+}
+
+fn ensure_clean_worktree(repo_root: &Path, allow_dirty: bool) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(repo_root)
+        .output()
+        .map_err(|err| format!("failed to run git status: {}", err))?;
+    if !output.status.success() {
+        return Err("failed to read git status".to_string());
+    }
+    let status = String::from_utf8_lossy(&output.stdout);
+    if status.trim().is_empty() || allow_dirty {
+        Ok(())
+    } else {
+        Err("working tree is dirty (use --allow-dirty to override)".to_string())
+    }
 }
 
 fn resolve_commit_message(tag: &str, message: Option<String>, yes: bool) -> Result<String, String> {
