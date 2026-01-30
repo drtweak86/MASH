@@ -14,4 +14,4 @@ jobs:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           prompt: "Review code changes."
           sandbox: workspace-write
-          codex-args: --full-autoCopied!   
+          codex-args: --full-auto
