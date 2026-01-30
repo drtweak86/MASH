@@ -1,14 +1,3 @@
-//! Flash module - Full installation pipeline for MASH
-//!
-//! Handles partitioning, formatting, copying, and configuration of
-//! Fedora KDE for Raspberry Pi 4 with UEFI boot.
-//!
-//! Based on holy-loop-fedora-uefi-gpt.sh - GPT with 4 partitions:
-//!   p1: EFI (vfat) - esp flag
-//!   p2: BOOT (ext4)
-//!   p3: ROOT (btrfs with subvols: root, home, var)
-//!   p4: DATA (ext4) - for mash-staging
-
 use anyhow::{bail, Context, Result};
 use log::{debug, info};
 use std::fs;
@@ -16,14 +5,146 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::cli::PartitionScheme;
-use crate::errors::MashError;
+use crate::errors::{MashError, Result as MashResult};
 use crate::locale::LocaleConfig;
-use crate::tui::progress::{Phase, ProgressUpdate};
-use crate::tui::FlashConfig;
+use crate::tui::progress::{Phase, ProgressEvent, ProgressUpdate};
+use crate::tui::{ExecutionStep, FlashConfig};
 
-/// Mount points for the installation
+/// A guard that ensures cleanup operations are performed when it goes out of scope.
+/// This includes unmounting all known mount points and detaching loop devices.
+pub struct CleanupGuard {
+    pub work_dir: PathBuf,
+    pub loop_device: Option<String>,
+    pub sender: Option<Sender<ProgressEvent>>, // To send cleanup status to UI
+    pub warnings: Arc<Mutex<Vec<String>>>,
+}
+
+impl CleanupGuard {
+    pub fn new(work_dir: PathBuf, sender: Option<Sender<ProgressEvent>>) -> Self {
+        CleanupGuard {
+            work_dir,
+            loop_device: None,
+            sender,
+            warnings: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Add a warning to be reported later
+    pub fn add_warning(&self, warning: String) {
+        if let Ok(mut warnings) = self.warnings.lock() {
+            warnings.push(warning);
+        }
+    }
+
+    /// Unmount all directories potentially used by the installer
+    fn unmount_all(&self) {
+        info!("🧹 CleanupGuard: Attempting to unmount all known mount points...");
+        let base = &self.work_dir;
+        let mount_points = [
+            base.join("dst/root_sub_var"),
+            base.join("dst/root_sub_home"),
+            base.join("dst/root_sub_root"),
+            base.join("dst/root_top"),
+            base.join("dst/data"),
+            base.join("dst/boot"),
+            base.join("dst/efi"),
+            base.join("src/root_sub_var"),
+            base.join("src/home_subvol"),
+            base.join("src/root_subvol"),
+            base.join("src/root_top"),
+            base.join("src/boot"),
+            base.join("src/efi"),
+        ];
+
+        for mp in &mount_points {
+            if mp.exists() {
+                let status = Command::new("umount")
+                    .args(["-R", mp.to_str().unwrap()])
+                    .status();
+                if let Err(e) = status {
+                    let warn_msg = format!("Failed to umount {}: {}", mp.display(), e);
+                    self.add_warning(warn_msg.clone());
+                    log::warn!("{}", warn_msg);
+                } else if !status.unwrap().success() {
+                    let warn_msg = format!("umount {} exited with non-zero status", mp.display());
+                    self.add_warning(warn_msg.clone());
+                    log::warn!("{}", warn_msg);
+                } else {
+                    info!("Successfully unmounted {}", mp.display());
+                }
+            }
+        }
+        udev_settle();
+    }
+
+    /// Detach loop device if one was set
+    fn detach_loop_device(&self) {
+        if let Some(ref loop_dev) = self.loop_device {
+            info!("🧹 CleanupGuard: Detaching loop device {}...", loop_dev);
+            let status = Command::new("losetup").args(["-d", loop_dev]).status();
+            if let Err(e) = status {
+                let warn_msg = format!("Failed to detach loop device {}: {}", loop_dev, e);
+                self.add_warning(warn_msg.clone());
+                log::warn!("{}", warn_msg);
+            } else if !status.unwrap().success() {
+                let warn_msg = format!("losetup -d {} exited with non-zero status", loop_dev);
+                self.add_warning(warn_msg.clone());
+                log::warn!("{}", warn_msg);
+            } else {
+                info!("Successfully detached loop device {}", loop_dev);
+            }
+            udev_settle();
+        }
+    }
+}
+
+impl Drop for CleanupGuard {
+    fn drop(&mut self) {
+        log::info!("CleanupGuard: Dropping, initiating cleanup...");
+        let _ = self.sender.as_ref().map(|s| s.send(ProgressEvent::CleanupStarted));
+
+        self.unmount_all();
+        self.detach_loop_device();
+
+        // Attempt to remove work directory
+        if self.work_dir.exists() {
+            info!(
+                "🧹 CleanupGuard: Removing work directory {}...",
+                self.work_dir.display()
+            );
+            let remove_result = fs::remove_dir_all(&self.work_dir);
+            if let Err(e) = remove_result {
+                let warn_msg = format!(
+                    "Failed to remove work directory {}: {}",
+                    self.work_dir.display(),
+                    e
+                );
+                self.add_warning(warn_msg.clone());
+                log::error!("{}", warn_msg);
+            } else {
+                info!("Successfully removed work directory {}", self.work_dir.display());
+            }
+        }
+
+        if let Ok(warnings) = self.warnings.lock() {
+            if !warnings.is_empty() {
+                let all_warnings = warnings.join("\n");
+                log::warn!("Cleanup completed with warnings:\n{}", all_warnings);
+                let _ = self.sender.as_ref().map(|s| {
+                    s.send(ProgressEvent::Error(format!(
+                        "Cleanup completed with warnings:\n{}",
+                        all_warnings
+                    )))
+                });
+            }
+        }
+        log::info!("CleanupGuard: Cleanup complete.");
+    }
+}
 struct MountPoints {
     // Source (image) mounts
     src_efi: PathBuf,
@@ -86,55 +207,26 @@ impl MountPoints {
     }
 }
 
-/// Detected btrfs subvolumes in source image
-struct BtrfsSubvols {
-    has_root: bool,
-    has_home: bool,
-    has_var: bool,
-}
-
-/// Installation context with all configuration
-pub struct FlashContext {
-    pub image: PathBuf,
-    pub disk: String,
-    pub scheme: PartitionScheme,
-    pub uefi_dir: PathBuf,
-    pub dry_run: bool,
-    pub auto_unmount: bool,
-    pub locale: Option<LocaleConfig>,
-    pub early_ssh: bool,
-    pub progress_tx: Option<Sender<ProgressUpdate>>,
-    pub work_dir: PathBuf,
-    pub loop_device: Option<String>,
-    pub efi_size: String,
-    pub boot_size: String,
-    pub root_end: String,
-    pub download_uefi_firmware: bool,                    // Add this
-    pub image_source_selection: crate::tui::ImageSource, // Add this
-    pub image_version: String,                           // Add this
-    pub image_edition: String,                           // Add this
-}
-
 impl FlashContext {
-    fn send_progress(&self, update: ProgressUpdate) {
+    fn send_progress(&self, step: ExecutionStep, update: ProgressUpdate) {
         if let Some(ref tx) = self.progress_tx {
-            let _ = tx.send(update);
+            let _ = tx.send(ProgressEvent::FlashUpdate(step, update));
         }
     }
 
     fn start_phase(&self, phase: Phase) {
         info!("📍 Starting phase: {}", phase.name());
-        self.send_progress(ProgressUpdate::PhaseStarted(phase));
+        self.send_progress(ExecutionStep::from_phase(phase), ProgressUpdate::PhaseStarted(phase));
     }
 
     fn complete_phase(&self, phase: Phase) {
         info!("✅ Completed phase: {}", phase.name());
-        self.send_progress(ProgressUpdate::PhaseCompleted(phase));
+        self.send_progress(ExecutionStep::from_phase(phase), ProgressUpdate::PhaseCompleted(phase));
     }
 
-    fn status(&self, msg: &str) {
+    fn status(&self, step: ExecutionStep, msg: &str) {
         info!("{}", msg);
-        self.send_progress(ProgressUpdate::Status(msg.to_string()));
+        self.send_progress(step, ProgressUpdate::Status(msg.to_string()));
     }
 
     /// Get partition device path (handles nvme/mmcblk naming)
@@ -145,56 +237,28 @@ impl FlashContext {
             format!("{}{}", self.disk, num)
         }
     }
-}
 
-/// Simple run function for CLI compatibility
-pub fn run(
-    image: &Path,
-    disk: &str,
-    scheme: PartitionScheme,
-    uefi_dir: &Path,
-    dry_run: bool,
-    auto_unmount: bool,
-    yes_i_know: bool,
-    locale: Option<LocaleConfig>,
-    early_ssh: bool,
-    efi_size: &str,
-    boot_size: &str,
-    root_end: &str,
-) -> Result<()> {
-    // Create a temporary FlashConfig for CLI run
-    let cli_flash_config = FlashConfig {
-        image: image.to_path_buf(),
-        disk: disk.to_string(),
-        scheme,
-        uefi_dir: uefi_dir.to_path_buf(),
-        dry_run,
-        auto_unmount,
-        watch: false, // No watch mode for CLI
-        locale,
-        early_ssh,
-        progress_tx: None, // No progress reporting for simple CLI run
-        efi_size: efi_size.to_string(),
-        boot_size: boot_size.to_string(),
-        root_end: root_end.to_string(),
-        download_uefi_firmware: false, // Not applicable for direct CLI flash
-        image_source_selection: crate::tui::ImageSource::LocalFile, // Not applicable for direct CLI flash
-        image_version: String::new(), // Not applicable for direct CLI flash
-        image_edition: String::new(), // Not applicable for direct CLI flash
-    };
+    /// Check if cancellation has been requested
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel_flag.load(Ordering::SeqCst)
+    }
 
-    run_with_progress(
-        &cli_flash_config,
-        yes_i_know, // yes_i_know is still a separate parameter for safety
-        None,       // progress_tx is handled by FlashConfig now
-    )
+    /// Check cancellation and return error if cancelled.
+    /// Call this at safe points between major operations.
+    pub fn check_cancelled(&self) -> Result<()> {
+        if self.is_cancelled() {
+            info!("🛑 Cancellation detected, stopping installation");
+            return Err(MashError::Cancelled.into());
+        }
+        Ok(())
+    }
 }
 
 /// Full run function with progress reporting
-pub fn run_with_progress(
+pub fn run_installation_pipeline(
     config: &FlashConfig,
-    yes_i_know: bool, // Still required separately for explicit confirmation
-    progress_tx: Option<Sender<ProgressUpdate>>, // Explicitly passed for thread ownership
+    yes_i_know: bool,
+    progress_rx: Receiver<ProgressEvent>,
 ) -> Result<()> {
     info!("🍠 MASH Full-Loop Installer: Fedora KDE + UEFI Boot for RPi4");
     info!("📋 GPT layout with 4 partitions (EFI, BOOT, ROOT/btrfs, DATA)");
@@ -230,12 +294,14 @@ pub fn run_with_progress(
 
     show_lsblk(&disk)?;
 
-    // Create work directory
+    // Create work directory and CleanupGuard
     let work_dir = PathBuf::from("/tmp/mash-install");
     if work_dir.exists() {
         fs::remove_dir_all(&work_dir)?;
     }
     fs::create_dir_all(&work_dir)?;
+    
+    let cleanup_guard = CleanupGuard::new(work_dir.clone(), config.progress_tx.clone());
 
     let mut ctx = FlashContext {
         image: config.image.clone(),
@@ -246,9 +312,9 @@ pub fn run_with_progress(
         auto_unmount: config.auto_unmount,
         locale: config.locale.clone(),
         early_ssh: config.early_ssh,
-        progress_tx, // Use the passed progress_tx
-        work_dir: work_dir.clone(),
-        loop_device: None,
+        progress_tx: config.progress_tx.clone(), // Use the passed progress_tx
+        cancel_flag: Arc::clone(&config.cancel_flag),
+        cleanup_guard, // Assign the new CleanupGuard
         efi_size: config.efi_size.clone(),
         boot_size: config.boot_size.clone(),
         root_end: config.root_end.clone(),
@@ -260,141 +326,172 @@ pub fn run_with_progress(
 
     // If the image is an .xz file, decompress it
     if ctx.image.extension().is_some_and(|ext| ext == "xz") {
+        ctx.check_cancelled()?;
         let decompressed_image = decompress_xz_image(&ctx, &ctx.image)?;
         ctx.image = decompressed_image;
     }
 
-    let result = run_installation(&mut ctx);
-    cleanup(&ctx);
-    let _ = fs::remove_dir_all(&work_dir);
-    result
+    run_installation(&mut ctx)
 }
 
 /// Main installation sequence
-fn run_installation(ctx: &mut FlashContext) -> Result<()> {
-    let mounts = MountPoints::new(&ctx.work_dir);
+fn run_installation(mut ctx: FlashContext) -> Result<()> {
+    // Rely on CleanupGuard for automatic cleanup
+    // We explicitly hold it until the end of this function
+    let _guard = ctx.cleanup_guard;
+
+    let mounts = MountPoints::new(&_guard.work_dir);
+
+    // Check cancellation before starting
+    ctx.check_cancelled()?;
 
     if ctx.dry_run {
         info!("🧪 DRY-RUN MODE - No changes will be made");
-        simulate_installation(ctx)?;
+        simulate_installation(&ctx)?;
         return Ok(());
     }
 
     mounts.create_all()?;
 
     // Phase 1: Partition (GPT with parted)
+    ctx.check_cancelled()?;
     ctx.start_phase(Phase::Partition);
     unmount_disk_partitions(&ctx.disk, ctx.auto_unmount)?;
     match ctx.scheme {
-        PartitionScheme::Mbr => partition_disk_mbr(ctx)?,
-        PartitionScheme::Gpt => partition_disk_gpt(ctx)?,
+        PartitionScheme::Mbr => partition_disk_mbr(&ctx)?,
+        PartitionScheme::Gpt => partition_disk_gpt(&ctx)?,
     };
     ctx.complete_phase(Phase::Partition);
 
     // Phase 2: Format
+    ctx.check_cancelled()?;
     ctx.start_phase(Phase::Format);
-    format_partitions(ctx)?;
+    format_partitions(&ctx)?;
     ctx.complete_phase(Phase::Format);
 
     // Setup loop device for image
-    ctx.status("🔄 Setting up image loop device...");
-    setup_image_loop(ctx)?;
+    ctx.check_cancelled()?;
+    ctx.status(ExecutionStep::Partition, "🔄 Setting up image loop device...");
+    setup_image_loop(&mut ctx)?; // Needs ctx to update loop_device in guard
 
     // Mount source (image) partitions
-    ctx.status("📂 Mounting image partitions...");
-    let subvols = mount_source_partitions(ctx, &mounts)?;
+    ctx.check_cancelled()?;
+    ctx.status(ExecutionStep::Partition, "📂 Mounting image partitions...");
+    let subvols = mount_source_partitions(&ctx, &mounts)?;
 
     // Mount destination (target) partitions
-    ctx.status("📂 Mounting target partitions...");
-    mount_dest_partitions(ctx, &mounts)?;
+    ctx.check_cancelled()?;
+    ctx.status(ExecutionStep::Partition, "📂 Mounting target partitions...");
+    mount_dest_partitions(&ctx, &mounts)?;
 
     // Create btrfs subvolumes on destination
-    ctx.status("🌳 Creating btrfs subvolumes...");
-    create_dest_subvols(ctx, &mounts, &subvols)?;
+    ctx.check_cancelled()?;
+    ctx.status(ExecutionStep::Partition, "🌳 Creating btrfs subvolumes...");
+    create_dest_subvols(&ctx, &mounts, &subvols)?;
 
     // Phase 3: Copy root filesystem (btrfs subvol: root)
+    ctx.check_cancelled()?;
     ctx.start_phase(Phase::CopyRoot);
     rsync_with_progress(
-        ctx,
+        &ctx,
+        ExecutionStep::CopyRoot,
         &mounts.src_root_subvol,
         &mounts.dst_root_subvol,
         "root subvol",
     )?;
+    ctx.check_cancelled()?;
     if subvols.has_home {
         rsync_with_progress(
-            ctx,
+            &ctx,
+            ExecutionStep::CopyRoot,
             &mounts.src_home_subvol,
             &mounts.dst_home_subvol,
             "home subvol",
         )?;
+        ctx.check_cancelled()?;
     }
     if subvols.has_var {
         rsync_with_progress(
-            ctx,
+            &ctx,
+            ExecutionStep::CopyRoot,
             &mounts.src_var_subvol,
             &mounts.dst_var_subvol,
             "var subvol",
         )?;
+        ctx.check_cancelled()?;
     }
     ctx.complete_phase(Phase::CopyRoot);
 
     // Phase 4: Copy boot partition
+    ctx.check_cancelled()?;
     ctx.start_phase(Phase::CopyBoot);
-    rsync_with_progress(ctx, &mounts.src_boot, &mounts.dst_boot, "boot")?;
+    rsync_with_progress(&ctx, ExecutionStep::CopyBoot, &mounts.src_boot, &mounts.dst_boot, "boot")?;
     ctx.complete_phase(Phase::CopyBoot);
 
     // Phase 5: Copy EFI partition
+    ctx.check_cancelled()?;
     ctx.start_phase(Phase::CopyEfi);
     // Copy Fedora EFI tree (safe for vfat)
-    rsync_vfat_safe(&mounts.src_efi.join("EFI"), &mounts.dst_efi.join("EFI"))?;
+    rsync_vfat_safe(&ctx, ExecutionStep::CopyEfi, &mounts.src_efi.join("EFI"), &mounts.dst_efi.join("EFI"))?;
     // Copy UEFI firmware (LAST - overwrites any conflicts)
-    rsync_vfat_safe(&ctx.uefi_dir, &mounts.dst_efi)?;
+    rsync_vfat_safe(&ctx, ExecutionStep::CopyEfi, &ctx.uefi_dir, &mounts.dst_efi)?;
     // Write config.txt
-    write_config_txt(&mounts.dst_efi)?;
+    write_config_txt(&ctx, ExecutionStep::CopyEfi, &mounts.dst_efi)?;
     ctx.complete_phase(Phase::CopyEfi);
 
     // Phase 6: Apply UEFI/boot configuration
+    ctx.check_cancelled()?;
     ctx.start_phase(Phase::UefiConfig);
-    configure_boot(ctx, &mounts, &subvols)?;
+    configure_boot(&ctx, &mounts, &subvols)?;
     ctx.complete_phase(Phase::UefiConfig);
 
     // Phase 7: Configure locale
+    ctx.check_cancelled()?;
     ctx.start_phase(Phase::LocaleConfig);
-    configure_locale(ctx, &mounts.dst_root_subvol)?;
+    configure_locale(&ctx, &mounts.dst_root_subvol)?;
     if ctx.early_ssh {
-        enable_early_ssh(&mounts.dst_root_subvol)?;
+        enable_early_ssh(&ctx, &mounts.dst_root_subvol)?;
     }
     ctx.complete_phase(Phase::LocaleConfig);
 
     // Phase 8: Generate fstab
+    ctx.check_cancelled()?;
     ctx.start_phase(Phase::Fstab);
-    generate_fstab(ctx, &mounts.dst_root_subvol, &subvols)?;
+    generate_fstab(&ctx, &mounts.dst_root_subvol, &subvols)?;
     ctx.complete_phase(Phase::Fstab);
 
     // Phase 9: Stage Dojo to DATA partition
     ctx.start_phase(Phase::StageDojo);
-    stage_dojo(ctx, &mounts.dst_data)?;
+    stage_dojo(&ctx, &mounts.dst_data)?;
     ctx.complete_phase(Phase::StageDojo);
 
-    // Phase 10: Cleanup
-    ctx.start_phase(Phase::Cleanup);
-    ctx.status("💾 Syncing filesystems...");
+    // Phase 10: Cleanup (final sync)
+    ctx.check_cancelled()?;
+    ctx.start_phase(Phase::Cleanup); // Indicate cleanup phase start for UI
+    ctx.status(ExecutionStep::Cleanup, "💾 Syncing filesystems...");
     let _ = Command::new("sync").status();
     ctx.complete_phase(Phase::Cleanup);
 
-    ctx.send_progress(ProgressUpdate::Complete);
+    // Send overall complete event
+    if let Some(ref tx) = ctx.progress_tx {
+        let _ = tx.send(ProgressEvent::Complete(ctx.image, Some(ctx.uefi_dir)));
+    }
     info!("🎉 Installation complete!");
     Ok(())
 }
 
 fn simulate_installation(ctx: &FlashContext) -> Result<()> {
     for phase in Phase::all() {
+        ctx.check_cancelled()?; // Add cancellation check
         ctx.start_phase(*phase);
-        ctx.status(&format!("(dry-run) Would execute: {}", phase.name()));
+        ctx.status(ExecutionStep::from_phase(*phase), &format!("(dry-run) Would execute: {}", phase.name()));
         std::thread::sleep(std::time::Duration::from_millis(300));
         ctx.complete_phase(*phase);
     }
-    ctx.send_progress(ProgressUpdate::Complete);
+    // Final complete event for dry run
+    if let Some(ref tx) = ctx.progress_tx {
+        let _ = tx.send(ProgressEvent::Complete(ctx.image.clone(), Some(ctx.uefi_dir.clone())));
+    }
     Ok(())
 }
 
@@ -426,7 +523,8 @@ fn unmount_disk_partitions(disk: &str, auto_unmount: bool) -> Result<()> {
 
 /// Partition disk with MBR (msdos) using parted
 fn partition_disk_mbr(ctx: &FlashContext) -> Result<()> {
-    ctx.status("🔪 Creating MBR (msdos) partition table with parted...");
+    ctx.check_cancelled()?;
+    ctx.status(ExecutionStep::Partition, "🔪 Creating MBR (msdos) partition table with parted...");
 
     // Wipe existing
     run_command("wipefs", &["-a", &ctx.disk])?;
@@ -500,7 +598,8 @@ fn partition_disk_mbr(ctx: &FlashContext) -> Result<()> {
 }
 
 fn partition_disk_gpt(ctx: &FlashContext) -> Result<()> {
-    ctx.status("🔪 Creating GPT partition table with parted...");
+    ctx.check_cancelled()?;
+    ctx.status(ExecutionStep::Partition, "🔪 Creating GPT partition table with parted...");
 
     // Wipe existing
     run_command("wipefs", &["-a", &ctx.disk])?;
@@ -575,21 +674,22 @@ fn partition_disk_gpt(ctx: &FlashContext) -> Result<()> {
 }
 
 fn format_partitions(ctx: &FlashContext) -> Result<()> {
+    ctx.check_cancelled()?;
     let p1 = ctx.partition_path(1);
     let p2 = ctx.partition_path(2);
     let p3 = ctx.partition_path(3);
     let p4 = ctx.partition_path(4);
 
-    ctx.status("✨ Formatting EFI partition (FAT32)...");
+    ctx.status(ExecutionStep::Format, "✨ Formatting EFI partition (FAT32)...");
     run_command("mkfs.vfat", &["-F", "32", "-n", "EFI", &p1])?;
 
-    ctx.status("✨ Formatting BOOT partition (ext4)...");
+    ctx.status(ExecutionStep::Format, "✨ Formatting BOOT partition (ext4)...");
     run_command("mkfs.ext4", &["-F", "-L", "BOOT", &p2])?;
 
-    ctx.status("✨ Formatting ROOT partition (btrfs)...");
+    ctx.status(ExecutionStep::Format, "✨ Formatting ROOT partition (btrfs)...");
     run_command("mkfs.btrfs", &["-f", "-L", "FEDORA", &p3])?;
 
-    ctx.status("✨ Formatting DATA partition (btrfs)...");
+    ctx.status(ExecutionStep::Format, "✨ Formatting DATA partition (btrfs)...");
     run_command("mkfs.btrfs", &["-f", "-L", "DATA", &p4])?;
 
     udev_settle();
@@ -601,6 +701,7 @@ fn format_partitions(ctx: &FlashContext) -> Result<()> {
 // ============================================================================
 
 fn setup_image_loop(ctx: &mut FlashContext) -> Result<()> {
+    ctx.check_cancelled()?;
     let output = Command::new("losetup")
         .args(["--show", "-Pf", ctx.image.to_str().unwrap()])
         .output()
@@ -615,15 +716,16 @@ fn setup_image_loop(ctx: &mut FlashContext) -> Result<()> {
 
     let loop_dev = String::from_utf8_lossy(&output.stdout).trim().to_string();
     info!("🔄 Image mounted at loop device: {}", loop_dev);
-    ctx.loop_device = Some(loop_dev);
+    ctx.cleanup_guard.loop_device = Some(loop_dev); // Update loop_device in the guard
 
     std::thread::sleep(std::time::Duration::from_secs(1));
     Ok(())
 }
 
 fn mount_source_partitions(ctx: &FlashContext, mounts: &MountPoints) -> Result<BtrfsSubvols> {
+    ctx.check_cancelled()?;
     let loop_dev = ctx
-        .loop_device
+        .cleanup_guard.loop_device
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Loop device not set"))?;
 
@@ -712,6 +814,7 @@ fn mount_source_partitions(ctx: &FlashContext, mounts: &MountPoints) -> Result<B
 }
 
 fn mount_dest_partitions(ctx: &FlashContext, mounts: &MountPoints) -> Result<()> {
+    ctx.check_cancelled()?;
     let p1 = ctx.partition_path(1);
     let p2 = ctx.partition_path(2);
     let p3 = ctx.partition_path(3);
@@ -733,6 +836,7 @@ fn create_dest_subvols(
     mounts: &MountPoints,
     subvols: &BtrfsSubvols,
 ) -> Result<()> {
+    ctx.check_cancelled()?;
     let p3 = ctx.partition_path(3);
 
     // Create subvolumes
@@ -811,8 +915,9 @@ fn create_dest_subvols(
 // Copy Functions
 // ============================================================================
 
-fn rsync_with_progress(ctx: &FlashContext, src: &Path, dst: &Path, label: &str) -> Result<()> {
-    ctx.status(&format!("📦 Copying {}...", label));
+fn rsync_with_progress(ctx: &FlashContext, step: ExecutionStep, src: &Path, dst: &Path, label: &str) -> Result<()> {
+    ctx.check_cancelled()?;
+    ctx.status(step, &format!("📦 Copying {}...", label));
 
     let src_str = format!("{}/", src.to_str().unwrap());
     let dst_str = dst.to_str().unwrap();
@@ -833,8 +938,9 @@ fn rsync_with_progress(ctx: &FlashContext, src: &Path, dst: &Path, label: &str) 
     if let Some(stdout) = child.stdout.take() {
         let reader = BufReader::new(stdout);
         for line in reader.lines().map_while(Result::ok) {
+            ctx.check_cancelled()?; // Check cancellation during rsync output processing
             if let Some(progress) = parse_rsync_progress(&line) {
-                ctx.send_progress(ProgressUpdate::RsyncProgress {
+                ctx.send_progress(step, ProgressUpdate::RsyncProgress {
                     percent: progress.percent,
                     speed_mbps: progress.speed_mbps,
                     files_done: progress.files_done,
@@ -852,7 +958,8 @@ fn rsync_with_progress(ctx: &FlashContext, src: &Path, dst: &Path, label: &str) 
 }
 
 /// VFAT-safe rsync (no ownership/permissions)
-fn rsync_vfat_safe(src: &Path, dst: &Path) -> Result<()> {
+fn rsync_vfat_safe(ctx: &FlashContext, step: ExecutionStep, src: &Path, dst: &Path) -> Result<()> {
+    ctx.check_cancelled()?;
     fs::create_dir_all(dst)?;
     run_command(
         "rsync",
@@ -928,13 +1035,14 @@ fn parse_rsync_progress(line: &str) -> Option<RsyncProgress> {
 // Configuration Functions
 // ============================================================================
 
-fn write_config_txt(efi_mount: &Path) -> Result<()> {
+fn write_config_txt(ctx: &FlashContext, step: ExecutionStep, efi_mount: &Path) -> Result<()> {
+    ctx.check_cancelled()?;
+    ctx.status(step, "📝 Writing config.txt for UEFI boot...");
     let config = r#"# Pi4 UEFI (PFTF) boot config for Fedora on USB (GPT, 4-part)
 arm_64bit=1
 enable_uart=1
 enable_gic=1
 armstub=RPI_EFI.fd
-disable_commandline_tags=2
 
 [pi4]
 dtoverlay=upstream-pi4
@@ -946,11 +1054,12 @@ dtoverlay=upstream-pi4
 }
 
 fn configure_boot(ctx: &FlashContext, mounts: &MountPoints, _subvols: &BtrfsSubvols) -> Result<()> {
-    let boot_uuid = get_partition_uuid(&ctx.partition_path(2))?;
-    let root_uuid = get_partition_uuid(&ctx.partition_path(3))?;
+    ctx.check_cancelled()?;
+    let boot_uuid = get_partition_uuid(ctx, &ctx.partition_path(2))?;
+    let root_uuid = get_partition_uuid(ctx, &ctx.partition_path(3))?;
 
     // Write GRUB stub on EFI -> points to /boot UUID
-    ctx.status("📝 Writing GRUB stub...");
+    ctx.status(ExecutionStep::UefiConfig, "📝 Writing GRUB stub...");
     let grub_dir = mounts.dst_efi.join("EFI/fedora");
     fs::create_dir_all(&grub_dir)?;
     let grub_stub = format!(
@@ -960,13 +1069,14 @@ fn configure_boot(ctx: &FlashContext, mounts: &MountPoints, _subvols: &BtrfsSubv
     fs::write(grub_dir.join("grub.cfg"), grub_stub)?;
 
     // Patch BLS entries
-    ctx.status("🩹 Patching BLS boot entries...");
-    patch_bls_entries(&mounts.dst_boot.join("loader/entries"), &root_uuid)?;
+    ctx.status(ExecutionStep::UefiConfig, "🩹 Patching BLS boot entries...");
+    patch_bls_entries(ctx, &mounts.dst_boot.join("loader/entries"), &root_uuid)?;
 
     Ok(())
 }
 
-fn patch_bls_entries(entries_dir: &Path, root_uuid: &str) -> Result<()> {
+fn patch_bls_entries(ctx: &FlashContext, entries_dir: &Path, root_uuid: &str) -> Result<()> {
+    ctx.check_cancelled()?;
     if !entries_dir.exists() {
         info!("⚠️ No BLS entries found at {}", entries_dir.display());
         return Ok(());
@@ -978,6 +1088,7 @@ fn patch_bls_entries(entries_dir: &Path, root_uuid: &str) -> Result<()> {
     );
 
     for entry in fs::read_dir(entries_dir)? {
+        ctx.check_cancelled()?;
         let entry = entry?;
         let path = entry.path();
         if path.extension().map(|e| e == "conf").unwrap_or(false) {
@@ -1002,20 +1113,22 @@ fn patch_bls_entries(entries_dir: &Path, root_uuid: &str) -> Result<()> {
 }
 
 fn configure_locale(ctx: &FlashContext, target_root: &Path) -> Result<()> {
+    ctx.check_cancelled()?;
     if let Some(ref locale) = ctx.locale {
-        ctx.status(&format!(
+        ctx.status(ExecutionStep::LocaleConfig, &format!(
             "🗣️ Configuring locale: {} (keymap: {})",
             locale.lang, locale.keymap
         ));
         crate::locale::patch_locale(target_root, locale, false)?;
     } else {
-        ctx.status("🗣️ Using default locale settings");
+        ctx.status(ExecutionStep::LocaleConfig, "🗣️ Using default locale settings");
     }
     Ok(())
 }
 
-fn enable_early_ssh(target_root: &Path) -> Result<()> {
-    info!("🔐 Enabling early SSH access...");
+fn enable_early_ssh(ctx: &FlashContext, target_root: &Path) -> Result<()> {
+    ctx.check_cancelled()?;
+    ctx.status(ExecutionStep::LocaleConfig, "🔐 Enabling early SSH access...");
     let systemd_dir = target_root.join("etc/systemd/system/multi-user.target.wants");
     fs::create_dir_all(&systemd_dir)?;
     let sshd_link = systemd_dir.join("sshd.service");
@@ -1026,12 +1139,13 @@ fn enable_early_ssh(target_root: &Path) -> Result<()> {
 }
 
 fn generate_fstab(ctx: &FlashContext, target_root: &Path, subvols: &BtrfsSubvols) -> Result<()> {
-    ctx.status("📋 Generating /etc/fstab...");
+    ctx.check_cancelled()?;
+    ctx.status(ExecutionStep::Fstab, "📋 Generating /etc/fstab...");
 
-    let efi_uuid = get_partition_uuid(&ctx.partition_path(1))?;
-    let boot_uuid = get_partition_uuid(&ctx.partition_path(2))?;
-    let root_uuid = get_partition_uuid(&ctx.partition_path(3))?;
-    let data_uuid = get_partition_uuid(&ctx.partition_path(4))?;
+    let efi_uuid = get_partition_uuid(ctx, &ctx.partition_path(1))?;
+    let boot_uuid = get_partition_uuid(ctx, &ctx.partition_path(2))?;
+    let root_uuid = get_partition_uuid(ctx, &ctx.partition_path(3))?;
+    let data_uuid = get_partition_uuid(ctx, &ctx.partition_path(4))?;
 
     let mut fstab = String::from("# /etc/fstab - Generated by MASH Installer\n");
     fstab.push_str(&format!(
@@ -1070,7 +1184,8 @@ fn generate_fstab(ctx: &FlashContext, target_root: &Path, subvols: &BtrfsSubvols
     Ok(())
 }
 
-fn get_partition_uuid(device: &str) -> Result<String> {
+fn get_partition_uuid(ctx: &FlashContext, device: &str) -> Result<String> {
+    ctx.check_cancelled()?;
     let output = Command::new("blkid")
         .args(["-s", "UUID", "-o", "value", device])
         .output()
@@ -1082,7 +1197,8 @@ fn get_partition_uuid(device: &str) -> Result<String> {
 }
 
 fn stage_dojo(ctx: &FlashContext, data_mount: &Path) -> Result<()> {
-    ctx.status("🥋 Staging Dojo installation files to DATA partition...");
+    ctx.check_cancelled()?;
+    ctx.status(ExecutionStep::StageDojo, "🥋 Staging Dojo installation files to DATA partition...");
 
     let staging_dir = data_mount.join("mash-staging");
     let logs_dir = data_mount.join("mash-logs");
@@ -1100,7 +1216,8 @@ fn stage_dojo(ctx: &FlashContext, data_mount: &Path) -> Result<()> {
 }
 
 fn decompress_xz_image(ctx: &FlashContext, xz_image_path: &Path) -> Result<PathBuf> {
-    ctx.status(&format!(
+    ctx.check_cancelled()?;
+    ctx.status(ExecutionStep::DownloadImage, &format!(
         "Decompressing XZ image: {}...",
         xz_image_path.display()
     ));
@@ -1109,7 +1226,7 @@ fn decompress_xz_image(ctx: &FlashContext, xz_image_path: &Path) -> Result<PathB
 
     // Check if the raw image already exists
     if raw_image_path.exists() {
-        ctx.status(&format!(
+        ctx.status(ExecutionStep::DownloadImage, &format!(
             "Raw image already exists: {}",
             raw_image_path.display()
         ));
@@ -1135,7 +1252,20 @@ fn decompress_xz_image(ctx: &FlashContext, xz_image_path: &Path) -> Result<PathB
         .stdout
         .take()
         .context("Failed to get stdout from xz process")?;
-    std::io::copy(&mut stdout, &mut output_file).context("Failed to copy decompressed data")?;
+
+    // Copy with cancellation checks
+    let mut total_copied = 0;
+    let mut buffer = [0; 8192];
+    loop {
+        ctx.check_cancelled()?;
+        let bytes_read = stdout.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        output_file.write_all(&buffer[..bytes_read])?;
+        total_copied += bytes_read;
+        // Optionally send progress updates if decompressing takes long
+    }
 
     let status = child.wait().context("Failed to wait for xz process")?;
 
@@ -1146,7 +1276,7 @@ fn decompress_xz_image(ctx: &FlashContext, xz_image_path: &Path) -> Result<PathB
         );
     }
 
-    ctx.status(&format!(
+    ctx.status(ExecutionStep::DownloadImage, &format!(
         "Decompression complete: {} -> {}",
         xz_image_path.display(),
         raw_image_path.display()
@@ -1180,45 +1310,7 @@ fn parse_size_to_mib(s: &str) -> Result<u64> {
     }
 }
 
-// ============================================================================
-// Cleanup and Helper Functions
-// ============================================================================
 
-fn cleanup(ctx: &FlashContext) {
-    info!("🧹 Cleaning up...");
-
-    // Unmount everything (best effort, reverse order)
-    let base = &ctx.work_dir;
-    let mount_points = [
-        base.join("dst/root_sub_var"),
-        base.join("dst/root_sub_home"),
-        base.join("dst/root_sub_root"),
-        base.join("dst/root_top"),
-        base.join("dst/data"),
-        base.join("dst/boot"),
-        base.join("dst/efi"),
-        base.join("src/root_sub_var"),
-        base.join("src/root_sub_home"),
-        base.join("src/root_sub_root"),
-        base.join("src/root_top"),
-        base.join("src/boot"),
-        base.join("src/efi"),
-    ];
-
-    for mp in &mount_points {
-        if mp.exists() {
-            let _ = Command::new("umount")
-                .args(["-R", mp.to_str().unwrap()])
-                .status();
-        }
-    }
-
-    if let Some(ref loop_dev) = ctx.loop_device {
-        let _ = Command::new("losetup").args(["-d", loop_dev]).status();
-    }
-
-    udev_settle();
-}
 
 fn normalize_disk(d: &str) -> String {
     if d.starts_with("/dev/") {
@@ -1266,6 +1358,10 @@ mod tests {
 
     #[test]
     fn test_partition_path() {
+        let work_dir = PathBuf::from("/tmp/test_mash_install");
+        let cleanup_guard = CleanupGuard::new(work_dir.clone(), None);
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+
         let ctx = FlashContext {
             image: PathBuf::new(),
             disk: "/dev/sda".to_string(),
@@ -1276,8 +1372,8 @@ mod tests {
             locale: None,
             early_ssh: false,
             progress_tx: None,
-            work_dir: PathBuf::new(),
-            loop_device: None,
+            cancel_flag,
+            cleanup_guard,
             efi_size: "512M".to_string(),
             boot_size: "1G".to_string(),
             root_end: "100%".to_string(),
@@ -1288,5 +1384,7 @@ mod tests {
         };
         assert_eq!(ctx.partition_path(1), "/dev/sda1");
         assert_eq!(ctx.partition_path(4), "/dev/sda4");
+        // Ensure work_dir is cleaned up after test
+        let _ = std::fs::remove_dir_all(work_dir);
     }
 }
