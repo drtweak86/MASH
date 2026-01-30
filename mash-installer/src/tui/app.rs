@@ -9,10 +9,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 
+use super::flash_config::{FlashConfig, ImageEditionOption, ImageSource, ImageVersionOption};
 use super::input::{InputField, InputMode};
 use super::progress::{Phase, ProgressState};
 use super::widgets::DiskInfo;
-use super::flash_config::{FlashConfig, ImageSource, ImageVersionOption, ImageEditionOption};
 use crate::tui::new_app::{DownloadType, InputResult};
 
 // ============================================================================
@@ -425,14 +425,6 @@ impl InstallStep {
     }
 }
 
-
-
-
-
-
-
-
-
 /// Installation options (checkboxes)
 #[derive(Debug, Clone)]
 pub struct InstallOptions {
@@ -493,8 +485,6 @@ pub enum DownloadUpdate {
     Complete(PathBuf), // Include downloaded path
     Error(String),
 }
-
-
 
 /// Application state
 pub struct App {

@@ -1,0 +1,250 @@
+{
+  "model": {
+    "name": "gemini-2.5-pro"
+  },
+  "general": {
+    "preferredEditor": "nvim",
+    "vimMode": true,
+    "disableAutoUpdate": true,
+    "enablePromptCompletion": false,
+    "checkpointing": {
+      "enabled": true
+    },
+    "previewFeatures": true,
+    "enableAutoUpdate": false
+  },
+  "ui": {
+    "theme": "Default",
+    "hideBanner": true,
+    "hideTips": true
+  },
+  "tools": {
+    "shell": {
+      "enableInteractiveShell": true
+    },
+    "core": [
+      "list_directory",
+      "read_file",
+      "write_file",
+      "glob",
+      "search_file_content",
+      "replace",
+      "smart-edit",
+      "run_shell_command",
+      "web_fetch",
+      "google_web_search",
+      "ready_many_files",
+      "save_memory",
+      "write_todos",
+      "fetch",
+      "get-library-docs",
+      "resolve-library-id",
+      "crash",
+      "click",
+      "close_page",
+      "drag",
+      "emulate",
+      "evaluate_script",
+      "fill",
+      "fill_form",
+      "get_console_message",
+      "get_network_request",
+      "handle_dialog",
+      "hover",
+      "list_console_messages",
+      "list_network_requests",
+      "list_pages",
+      "navigate_page",
+      "new_page",
+      "performance_analyze_insight",
+      "performance_start_trace",
+      "performance_stop_trace",
+      "press_key",
+      "resize_page",
+      "select_page",
+      "take_screenshot",
+      "take_snapshot",
+      "upload_file",
+      "wait_for",
+      "browser_click",
+      "browser_close",
+      "browser_console_messages",
+      "browser_drag",
+      "browser_evaluate",
+      "browser_file_upload",
+      "browser_fill_form",
+      "browser_handle_dialog",
+      "browser_hover",
+      "browser_install",
+      "browser_navigate",
+      "browser_navigate_back",
+      "browser_network_requests",
+      "browser_press_key",
+      "browser_resize",
+      "browser_select_option",
+      "browser_snapshot",
+      "browser_tabs",
+      "browser_take_screenshot",
+      "browser_type",
+      "browser_wait_for",
+      "create_design_system_rules",
+      "get_code_connect_map",
+      "get_design_context",
+      "get_figjam",
+      "get_metadata",
+      "get_screenshot",
+      "get_variable_defs",
+      "whoami",
+      "find_line_numbers",
+      "edit_image",
+      "generate_diagram",
+      "generate_icon",
+      "generate_image",
+      "generate_pattern",
+      "generate_story",
+      "restore_image"
+    ],
+    "allowed": [
+      "run_shell_command(gcli prompt)",
+      "run_shell_command(chmod)",
+      "run_shell_command(ls)",
+      "run_shell_command(git)",
+      "run_shell_command(npm)",
+      "run_shell_command(yarn)",
+      "run_shell_command(npx)"
+    ]
+  },
+  "security": {
+    "auth": {
+      "selectedType": "oauth-personal"
+    }
+  },
+  "context": {
+    "fileName": [
+      "GEMINI.md",
+      "AGENTS.md",
+      "CONTEXT.md"
+    ]
+  },
+  "mcpServers": {
+    "fetch": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-fetch"
+      ],
+      "trust": true
+    },
+    "context7": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ],
+      "env": {
+        "DEFAULT_MINIMUM_TOKENS": "6000"
+      },
+      "trust": true
+    },
+    "crash": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "crash-mcp"
+      ],
+      "trust": true
+    },
+    "chrome-devtools": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@latest"
+      ],
+      "trust": true
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--extension"
+      ],
+      "env": {
+        "PLAYWRIGHT_MCP_EXTENSION_TOKEN": "$PLAYWRIGHT_MCP_EXTENSION_TOKEN"
+      },
+      "trust": true
+    }
+  },
+  "inactiveMcpServers": {
+    "server-sequential-thinking": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    },
+    "gitmcp": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://gitmcp.io/{owner}/{repo}"
+      ]
+    },
+    "time": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-time"
+      ]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "~/Projects/"
+      ],
+      "trust": true
+    },
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ]
+    },
+    "git": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-git",
+        "--repository",
+        "."
+      ],
+      "trust": true
+    },
+    "github": {
+      "httpUrl": "https://api.githubcopilot.com/mcp/",
+      "trust": true,
+      "headers": {
+        "Authorization": "Bearer $GITHUB_PERSONAL_ACCESS_TOKEN"
+      }
+    },
+    "sequential-thinking": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/arben-adm/mcp-sequential-thinking",
+        "--with",
+        "portalocker",
+        "mcp-sequential-thinking"
+      ]
+    },
+    "mcp-sequentialthinking-tools": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-sequentialthinking-tools"
+      ],
+      "env": {
+        "MAX_HISTORY_SIZE": "1000"
+      }
+    }
+  }
+}
