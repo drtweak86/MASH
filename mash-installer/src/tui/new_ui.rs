@@ -231,6 +231,7 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
             items.push("✅ Review configuration summary:".to_string());
             if let Some(disk) = app.disks.get(app.disk_index) {
                 items.push(format!("Disk: {} ({})", disk.path, disk.size));
+                items.push(format!("Disk label: {}", disk.label));
             }
             if let Some(scheme) = app.partition_schemes.get(app.scheme_index) {
                 items.push(format!("Scheme: {}", scheme));
@@ -257,6 +258,23 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
             if let Some(locale) = app.locales.get(app.locale_index) {
                 items.push(format!("Locale: {}", locale));
             }
+            let download_fedora = app
+                .options
+                .iter()
+                .find(|option| option.label == "Download Fedora image")
+                .map(|option| option.enabled)
+                .unwrap_or(false);
+            let download_uefi = app
+                .options
+                .iter()
+                .find(|option| option.label == "Download UEFI firmware")
+                .map(|option| option.enabled)
+                .unwrap_or(false);
+            items.push(format!(
+                "Downloads: Fedora={} | UEFI={}",
+                if download_fedora { "Yes" } else { "No" },
+                if download_uefi { "Yes" } else { "No" }
+            ));
             items.push("Options:".to_string());
             for option in &app.options {
                 items.push(format!(
