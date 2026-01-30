@@ -37,6 +37,15 @@ pub fn draw(f: &mut Frame, app: &App) {
     items.push(ListItem::new(format!("🧭 Step: {}", current_step_title)));
 
     match app.current_step_type {
+        InstallStepType::Welcome => {
+            items.push(ListItem::new(
+                "👋 Welcome screen content not loaded yet.".to_string(),
+            ));
+            items.push(ListItem::new(
+                "ℹ️ Expected from static copy in wizard config.".to_string(),
+            ));
+            items.push(ListItem::new("⌨️ Press Enter to begin.".to_string()));
+        }
         InstallStepType::DiskSelection => {
             items.push(ListItem::new("💽 Disk list not available yet.".to_string()));
             items.push(ListItem::new(
