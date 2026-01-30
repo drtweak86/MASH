@@ -62,7 +62,8 @@ fn main() -> anyhow::Result<()> {
             if *download_uefi {
                 log::info!("⬇️ Downloading UEFI firmware...");
                 let uefi_dest_dir = downloads_dir.join("uefi");
-                final_uefi_dir = Some(download::download_uefi_firmware(&uefi_dest_dir)?);
+                download::download_uefi_firmware(&uefi_dest_dir)?;
+                final_uefi_dir = Some(uefi_dest_dir);
             }
 
             if *download_image {

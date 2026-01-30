@@ -12,7 +12,7 @@ pub mod progress;
 mod ui;
 mod widgets;
 
-pub use app::{DownloadUpdate, FlashConfig, ImageSource};
+pub use app::{FlashConfig, ImageSource};
 
 use crate::{cli::Cli, errors::Result};
 use crossterm::{
