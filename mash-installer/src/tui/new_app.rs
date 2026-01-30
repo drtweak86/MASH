@@ -413,6 +413,40 @@ impl App {
             .iter()
             .position(|scheme| *scheme == PartitionScheme::Mbr)
             .unwrap_or(0);
+        let images = if flags.images {
+            let search_paths = data_sources::default_image_search_paths();
+            let mut images = data_sources::collect_local_images(&search_paths);
+            images.extend(data_sources::collect_remote_images());
+            images
+        } else {
+            Vec::new()
+        };
+        let images = if images.is_empty() {
+            vec![
+                ImageOption {
+                    label: "Fedora 43 KDE".to_string(),
+                    version: "43".to_string(),
+                    edition: "KDE".to_string(),
+                    path: PathBuf::from("/tmp/fedora-43-kde.raw"),
+                },
+                ImageOption {
+                    label: "Fedora 42 Server".to_string(),
+                    version: "42".to_string(),
+                    edition: "Server".to_string(),
+                    path: PathBuf::from("/tmp/fedora-42-server.raw"),
+                },
+            ]
+        } else {
+            images
+                .into_iter()
+                .map(|image| ImageOption {
+                    label: image.label,
+                    version: image.version,
+                    edition: image.edition,
+                    path: image.path,
+                })
+                .collect()
+        };
 
         Self {
             current_step_type: InstallStepType::Welcome, // NEW
@@ -459,20 +493,7 @@ impl App {
                 },
             ],
             image_source_index: 0,
-            images: vec![
-                ImageOption {
-                    label: "Fedora 43 KDE".to_string(),
-                    version: "43".to_string(),
-                    edition: "KDE".to_string(),
-                    path: PathBuf::from("/tmp/fedora-43-kde.raw"),
-                },
-                ImageOption {
-                    label: "Fedora 42 Server".to_string(),
-                    version: "42".to_string(),
-                    edition: "Server".to_string(),
-                    path: PathBuf::from("/tmp/fedora-42-server.raw"),
-                },
-            ],
+            images,
             image_index: 0,
             uefi_dirs: vec![
                 PathBuf::from("/tmp/uefi"),

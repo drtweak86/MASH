@@ -4,6 +4,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::tui::flash_config::{ImageEditionOption, ImageVersionOption};
+
 #[derive(Debug, Clone, Copy)]
 pub struct DataFlags {
     pub disks: bool,
@@ -18,6 +20,15 @@ pub struct DiskInfo {
     pub size_bytes: u64,
     pub model: Option<String>,
     pub removable: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImageMeta {
+    pub label: String,
+    pub version: String,
+    pub edition: String,
+    pub path: PathBuf,
+    pub is_remote: bool,
 }
 
 pub fn data_flags() -> DataFlags {
@@ -95,11 +106,118 @@ pub fn human_size(bytes: u64) -> String {
     }
 }
 
+pub fn collect_local_images(search_paths: &[PathBuf]) -> Vec<ImageMeta> {
+    let mut images = Vec::new();
+    for dir in search_paths {
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Unnamed image".to_string());
+            if !is_image_file(&name) {
+                continue;
+            }
+            let (version, edition) = parse_version_edition(&name);
+            images.push(ImageMeta {
+                label: format!("{} (local)", name),
+                version,
+                edition,
+                path,
+                is_remote: false,
+            });
+        }
+    }
+
+    images
+}
+
+pub fn default_image_search_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Ok(value) = env::var("MASH_TUI_IMAGE_DIRS") {
+        for part in value.split(':').filter(|part| !part.trim().is_empty()) {
+            paths.push(PathBuf::from(part));
+        }
+    }
+    paths.push(PathBuf::from("./images"));
+    paths.push(PathBuf::from("."));
+    paths.push(PathBuf::from("/opt/mash/images"));
+    paths.push(PathBuf::from("/usr/local/share/mash/images"));
+    paths.push(PathBuf::from("/var/lib/mash/images"));
+    paths.push(PathBuf::from("/tmp"));
+    paths
+}
+
+pub fn collect_remote_images() -> Vec<ImageMeta> {
+    let mut images = Vec::new();
+    for version in ImageVersionOption::all() {
+        for edition in ImageEditionOption::all() {
+            let label = format!(
+                "{} {} (remote)",
+                version.display(),
+                edition.display()
+            );
+            let filename = format!(
+                "fedora-{}-{}-aarch64.raw.xz",
+                version.version_str().to_lowercase(),
+                edition.edition_str().to_lowercase()
+            );
+            images.push(ImageMeta {
+                label,
+                version: version.version_str().to_string(),
+                edition: edition.edition_str().to_string(),
+                path: PathBuf::from("/tmp").join(filename),
+                is_remote: true,
+            });
+        }
+    }
+
+    images
+}
+
 fn env_flag(name: &str) -> bool {
     match env::var(name) {
         Ok(value) => matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"),
         Err(_) => false,
     }
+}
+
+fn is_image_file(name: &str) -> bool {
+    let name = name.to_lowercase();
+    name.ends_with(".raw") || name.ends_with(".img") || name.ends_with(".raw.xz")
+}
+
+fn parse_version_edition(name: &str) -> (String, String) {
+    let lower = name.to_lowercase();
+    let version = if lower.contains("43") {
+        "43".to_string()
+    } else if lower.contains("42") {
+        "42".to_string()
+    } else {
+        "local".to_string()
+    };
+    let edition = if lower.contains("kde") {
+        "KDE".to_string()
+    } else if lower.contains("xfce") {
+        "Xfce".to_string()
+    } else if lower.contains("lxqt") {
+        "LXQt".to_string()
+    } else if lower.contains("server") {
+        "Server".to_string()
+    } else if lower.contains("minimal") {
+        "Minimal".to_string()
+    } else {
+        "Local".to_string()
+    };
+
+    (version, edition)
 }
 
 fn should_skip_block_device(name: &str) -> bool {
