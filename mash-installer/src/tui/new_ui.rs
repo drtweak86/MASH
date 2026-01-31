@@ -138,12 +138,18 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::DiskSelection => {
             items.push("💽 Select a target disk:".to_string());
+            items
+                .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
+            if app.disks.is_empty() {
+                items.push("No disks detected. Press r to refresh.".to_string());
+            }
             let options = app.disks.iter().map(format_disk_entry).collect::<Vec<_>>();
             push_options(&mut items, &options, app.disk_index);
         }
         InstallStepType::DiskConfirmation => {
             let disk = app.disks.get(app.disk_index);
             items.push("⚠️ Confirm disk destruction:".to_string());
+            items.push("Type DESTROY to confirm • Esc to go back.".to_string());
             if let Some(disk) = disk {
                 let model = disk.model.as_deref().unwrap_or("Unknown model").trim();
                 items.push(format!(
@@ -251,6 +257,8 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::ImageSelection => {
             items.push("🖼️ Select Fedora image:".to_string());
+            items
+                .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
             let options = app
                 .images
                 .iter()
@@ -301,6 +309,8 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::FirstBootUser => {
             items.push("🧑‍💻 First-boot user setup:".to_string());
+            items
+                .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
             push_options(&mut items, &app.first_boot_options, app.first_boot_index);
         }
         InstallStepType::Confirmation => {
@@ -378,6 +388,7 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
                 "⬇️ Ready to simulate Fedora download."
             };
             items.push(status.to_string());
+            items.push("Use ↑/↓ to choose • Enter to continue • Esc to go back.".to_string());
             push_options(
                 &mut items,
                 &[
@@ -394,6 +405,7 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
                 "⬇️ Ready to simulate UEFI download."
             };
             items.push(status.to_string());
+            items.push("Use ↑/↓ to choose • Enter to continue • Esc to go back.".to_string());
             push_options(
                 &mut items,
                 &[
@@ -414,6 +426,7 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::Complete => {
             items.push("🎉 Installation complete.".to_string());
+            items.push("Press Enter to exit.".to_string());
             push_options(&mut items, &["Exit installer".to_string()], 0);
         }
     }
