@@ -266,7 +266,11 @@ impl ProgressState {
             ProgressUpdate::Error(msg) => {
                 self.is_complete = true;
                 self.error = Some(msg.clone());
-                self.status = format!("❌ Error: {}", msg);
+                if msg.to_lowercase().contains("cancel") {
+                    self.status = "🛑 Cancelled.".to_string();
+                } else {
+                    self.status = format!("❌ Error: {}", msg);
+                }
             }
         }
     }

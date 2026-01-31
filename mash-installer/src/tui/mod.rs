@@ -150,6 +150,9 @@ pub fn run_new_ui(
                 match result {
                     Ok(outcome) => {
                         if outcome.cancelled {
+                            if let Ok(mut state) = app.progress_state.lock() {
+                                state.apply_update(ProgressUpdate::Error("Cancelled".to_string()));
+                            }
                             app.error_message = Some("Download cancelled.".to_string());
                             app.status_message = "🛑 Download cancelled.".to_string();
                         } else {
@@ -159,8 +162,20 @@ pub fn run_new_ui(
                         }
                     }
                     Err(err) => {
-                        app.error_message = Some(format!("Download failed: {}", err));
-                        app.status_message = "❌ Download failed.".to_string();
+                        let msg = err.to_string();
+                        if msg.to_lowercase().contains("cancel") {
+                            if let Ok(mut state) = app.progress_state.lock() {
+                                state.apply_update(ProgressUpdate::Error("Cancelled".to_string()));
+                            }
+                            app.error_message = Some("Execution cancelled.".to_string());
+                            app.status_message = "🛑 Execution cancelled.".to_string();
+                        } else {
+                            if let Ok(mut state) = app.progress_state.lock() {
+                                state.apply_update(ProgressUpdate::Error(msg.clone()));
+                            }
+                            app.error_message = Some(format!("Execution failed: {}", msg));
+                            app.status_message = "❌ Execution failed.".to_string();
+                        }
                     }
                 }
             }

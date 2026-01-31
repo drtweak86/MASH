@@ -430,6 +430,13 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
             items.push(format!("Phase: {}", phase_hint(app)));
             items.push(format!("Elapsed: {}", elapsed));
             items.push(status_message(app, &progress_state));
+            if app
+                .cancel_requested
+                .load(std::sync::atomic::Ordering::Relaxed)
+                && !progress_state.is_complete
+            {
+                items.push("🛑 Cancel requested • Cleaning up...".to_string());
+            }
             items.push(format!(
                 "Overall: {}% • Step: {}% • ETA: {}",
                 overall,
