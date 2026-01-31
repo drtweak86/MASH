@@ -424,9 +424,18 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
         InstallStepType::Flashing => {
             let spinner = spinner_frame(app.flash_start_time);
             let elapsed = elapsed_string(app.flash_start_time);
+            let overall = progress_state.overall_percent.round().clamp(0.0, 100.0) as u16;
+            let phase_percent = progress_state.phase_percent.round().clamp(0.0, 100.0) as u16;
             items.push(format!("{} Flashing in progress...", spinner));
             items.push(format!("Phase: {}", phase_hint(app)));
             items.push(format!("Elapsed: {}", elapsed));
+            items.push(status_message(app, &progress_state));
+            items.push(format!(
+                "Overall: {}% • Step: {}% • ETA: {}",
+                overall,
+                phase_percent,
+                progress_state.eta_string()
+            ));
             items.extend(progress_phase_lines(&progress_state));
             push_options(&mut items, &["Viewing live telemetry".to_string()], 0);
         }
@@ -604,7 +613,12 @@ fn progress_phase_lines(progress_state: &ProgressState) -> Vec<String> {
     lines.push("Execution steps:".to_string());
     for phase in Phase::all() {
         let symbol = progress_state.phase_symbol(*phase);
-        lines.push(format!(" {} {}", symbol, phase.name()));
+        let marker = if progress_state.current_phase == Some(*phase) {
+            "▶"
+        } else {
+            " "
+        };
+        lines.push(format!("{} {} {}", marker, symbol, phase.name()));
     }
     lines
 }
