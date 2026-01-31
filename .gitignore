@@ -43,6 +43,11 @@ bundle/
 *.log
 *.tmp
 
+# Local status/notes
+COMMIT.txt
+STATUS.txt
+RUSTIFICATION_AUDIT_*.md
+
 # Release artifacts
 artifacts/
 checksums.txt
