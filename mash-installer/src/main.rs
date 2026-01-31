@@ -16,6 +16,7 @@ mod flash;
 mod locale;
 mod logging;
 mod preflight;
+mod stages;
 mod tui;
 
 fn main() -> anyhow::Result<()> {
@@ -24,6 +25,12 @@ fn main() -> anyhow::Result<()> {
 
     if cli.dump_tui {
         tui::dump_all_steps()?;
+        return Ok(());
+    }
+
+    if let Some(stage) = cli.stage.as_deref() {
+        log::info!("🧩 Running stage: {}", stage);
+        stages::run_stage(stage, &cli.stage_arg)?;
         return Ok(());
     }
 

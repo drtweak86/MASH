@@ -33,6 +33,14 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
 
+    /// Run a specific installation stage and exit (e.g., 10_locale_uk)
+    #[arg(short = 's', long, global = true)]
+    pub stage: Option<String>,
+
+    /// Arguments for the selected stage (repeatable)
+    #[arg(long, global = true)]
+    pub stage_arg: Vec<String>,
+
     /// Run in dry-run mode (no changes made)
     #[arg(long, global = true)]
     pub dry_run: bool,
