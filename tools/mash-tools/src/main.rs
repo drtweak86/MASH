@@ -82,17 +82,21 @@ fn ensure_clean_worktree(repo_root: &Path, allow_dirty: bool) -> Result<()> {
 
 fn bump_version(repo_root: &Path, version: &str) -> Result<()> {
     let version = normalize_version(version)?;
-    let cargo_path = repo_root.join("mash-installer").join("Cargo.toml");
+    let cargo_path = repo_root.join("Cargo.toml");
     let content = fs::read_to_string(&cargo_path)
         .with_context(|| format!("failed to read {}", cargo_path.display()))?;
     let mut doc = content
         .parse::<DocumentMut>()
         .with_context(|| format!("failed to parse {}", cargo_path.display()))?;
-    let package = doc
+    let workspace = doc
+        .get_mut("workspace")
+        .and_then(Item::as_table_mut)
+        .ok_or_else(|| anyhow!("missing [workspace] table in Cargo.toml"))?;
+    let workspace_package = workspace
         .get_mut("package")
         .and_then(Item::as_table_mut)
-        .ok_or_else(|| anyhow!("missing [package] table in mash-installer/Cargo.toml"))?;
-    package["version"] = toml_edit::value(version);
+        .ok_or_else(|| anyhow!("missing [workspace.package] table in Cargo.toml"))?;
+    workspace_package["version"] = toml_edit::value(version);
     fs::write(&cargo_path, doc.to_string())
         .with_context(|| format!("failed to write {}", cargo_path.display()))?;
     run_checks(repo_root)?;
