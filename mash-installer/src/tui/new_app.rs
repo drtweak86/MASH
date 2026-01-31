@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use crate::cli::PartitionScheme;
-use crate::locale::LOCALES;
+use crate::locale::{LocaleConfig, LOCALES};
 use crate::tui::flash_config::{FlashConfig, ImageSource};
 use clap::ValueEnum;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers}; // New import for KeyEvent
@@ -381,6 +381,7 @@ pub struct App {
     pub confirmation_input: String,
     pub cancel_requested: Arc<std::sync::atomic::AtomicBool>,
     pub customize_error_field: Option<CustomizeField>,
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -597,8 +598,15 @@ impl App {
             confirmation_input: String::new(),
             cancel_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             customize_error_field: None,
+            dry_run: false,
         }
         .with_partition_defaults()
+    }
+
+    pub fn new_with_flags(dry_run: bool) -> Self {
+        let mut app = Self::new();
+        app.dry_run = dry_run;
+        app
     }
 
     // New: handle input for step advancement
@@ -1338,7 +1346,6 @@ impl App {
                 .clone()
                 .or_else(|| self.uefi_dirs.get(self.uefi_index).cloned())
                 .unwrap_or_else(|| PathBuf::from(self.uefi_source_path.clone())),
-            dry_run: true,
             auto_unmount: self
                 .options
                 .iter()
@@ -1346,7 +1353,10 @@ impl App {
                 .map(|option| option.enabled)
                 .unwrap_or(true),
             watch: false,
-            locale: None,
+            locale: self
+                .locales
+                .get(self.locale_index)
+                .and_then(|locale| LocaleConfig::parse_from_str(locale).ok()),
             early_ssh: self
                 .options
                 .iter()
@@ -1378,6 +1388,7 @@ impl App {
                 .get(self.image_index)
                 .map(|image| image.edition.clone())
                 .unwrap_or_else(|| "KDE".to_string()),
+            dry_run: self.dry_run,
         })
     }
 }
@@ -1695,5 +1706,25 @@ mod tests {
         }
         let config = app.build_flash_config().expect("config");
         assert!(config.download_uefi_firmware);
+    }
+
+    #[test]
+    fn build_flash_config_uses_partition_sizes() {
+        let mut app = App::new();
+        app.efi_size = "512MiB".to_string();
+        app.boot_size = "1024MiB".to_string();
+        app.root_end = "4096MiB".to_string();
+        let config = app.build_flash_config().expect("config");
+        assert_eq!(config.efi_size, "512MiB");
+        assert_eq!(config.boot_size, "1024MiB");
+        assert_eq!(config.root_end, "4096MiB");
+    }
+
+    #[test]
+    fn build_flash_config_respects_dry_run_flag() {
+        let mut app = App::new();
+        app.dry_run = true;
+        let config = app.build_flash_config().expect("config");
+        assert!(config.dry_run);
     }
 }

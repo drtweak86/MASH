@@ -15,7 +15,9 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::cli::PartitionScheme;
 use crate::errors::MashError;
@@ -120,6 +122,14 @@ impl FlashContext {
         if let Some(ref tx) = self.progress_tx {
             let _ = tx.send(update);
         }
+    }
+
+    fn check_cancel(&self) -> Result<()> {
+        if cancel_requested() {
+            self.status("🧹 Cleaning up...");
+            bail!("Cancelled");
+        }
+        Ok(())
     }
 
     fn start_phase(&self, phase: Phase) {
@@ -274,13 +284,16 @@ fn run_installation(ctx: &mut FlashContext) -> Result<()> {
 
     if ctx.dry_run {
         info!("🧪 DRY-RUN MODE - No changes will be made");
+        ctx.check_cancel()?;
         simulate_installation(ctx)?;
         return Ok(());
     }
 
+    ctx.check_cancel()?;
     mounts.create_all()?;
 
     // Phase 1: Partition (GPT with parted)
+    ctx.check_cancel()?;
     ctx.start_phase(Phase::Partition);
     unmount_disk_partitions(&ctx.disk, ctx.auto_unmount)?;
     match ctx.scheme {
@@ -290,27 +303,33 @@ fn run_installation(ctx: &mut FlashContext) -> Result<()> {
     ctx.complete_phase(Phase::Partition);
 
     // Phase 2: Format
+    ctx.check_cancel()?;
     ctx.start_phase(Phase::Format);
     format_partitions(ctx)?;
     ctx.complete_phase(Phase::Format);
 
     // Setup loop device for image
+    ctx.check_cancel()?;
     ctx.status("🔄 Setting up image loop device...");
     setup_image_loop(ctx)?;
 
     // Mount source (image) partitions
+    ctx.check_cancel()?;
     ctx.status("📂 Mounting image partitions...");
     let subvols = mount_source_partitions(ctx, &mounts)?;
 
     // Mount destination (target) partitions
+    ctx.check_cancel()?;
     ctx.status("📂 Mounting target partitions...");
     mount_dest_partitions(ctx, &mounts)?;
 
     // Create btrfs subvolumes on destination
+    ctx.check_cancel()?;
     ctx.status("🌳 Creating btrfs subvolumes...");
     create_dest_subvols(ctx, &mounts, &subvols)?;
 
     // Phase 3: Copy root filesystem (btrfs subvol: root)
+    ctx.check_cancel()?;
     ctx.start_phase(Phase::CopyRoot);
     rsync_with_progress(
         ctx,
@@ -337,11 +356,13 @@ fn run_installation(ctx: &mut FlashContext) -> Result<()> {
     ctx.complete_phase(Phase::CopyRoot);
 
     // Phase 4: Copy boot partition
+    ctx.check_cancel()?;
     ctx.start_phase(Phase::CopyBoot);
     rsync_with_progress(ctx, &mounts.src_boot, &mounts.dst_boot, "boot")?;
     ctx.complete_phase(Phase::CopyBoot);
 
     // Phase 5: Copy EFI partition
+    ctx.check_cancel()?;
     ctx.start_phase(Phase::CopyEfi);
     // Copy Fedora EFI tree (safe for vfat)
     rsync_vfat_safe(&mounts.src_efi.join("EFI"), &mounts.dst_efi.join("EFI"))?;
@@ -352,11 +373,13 @@ fn run_installation(ctx: &mut FlashContext) -> Result<()> {
     ctx.complete_phase(Phase::CopyEfi);
 
     // Phase 6: Apply UEFI/boot configuration
+    ctx.check_cancel()?;
     ctx.start_phase(Phase::UefiConfig);
     configure_boot(ctx, &mounts, &subvols)?;
     ctx.complete_phase(Phase::UefiConfig);
 
     // Phase 7: Configure locale
+    ctx.check_cancel()?;
     ctx.start_phase(Phase::LocaleConfig);
     configure_locale(ctx, &mounts.dst_root_subvol)?;
     if ctx.early_ssh {
@@ -367,16 +390,19 @@ fn run_installation(ctx: &mut FlashContext) -> Result<()> {
     ctx.complete_phase(Phase::LocaleConfig);
 
     // Phase 8: Generate fstab
+    ctx.check_cancel()?;
     ctx.start_phase(Phase::Fstab);
     generate_fstab(ctx, &mounts.dst_root_subvol, &subvols)?;
     ctx.complete_phase(Phase::Fstab);
 
     // Phase 9: Stage Dojo to DATA partition
+    ctx.check_cancel()?;
     ctx.start_phase(Phase::StageDojo);
     stage_dojo(ctx, &mounts.dst_data)?;
     ctx.complete_phase(Phase::StageDojo);
 
     // Phase 10: Cleanup
+    ctx.check_cancel()?;
     ctx.start_phase(Phase::Cleanup);
     ctx.status("💾 Syncing filesystems...");
     let _ = Command::new("sync").status();
@@ -389,6 +415,10 @@ fn run_installation(ctx: &mut FlashContext) -> Result<()> {
 
 fn simulate_installation(ctx: &FlashContext) -> Result<()> {
     for phase in Phase::all() {
+        ctx.check_cancel()?;
+        if matches!(phase, Phase::DownloadImage | Phase::DownloadUefi) {
+            continue;
+        }
         ctx.start_phase(*phase);
         ctx.status(&format!("(dry-run) Would execute: {}", phase.name()));
         std::thread::sleep(std::time::Duration::from_millis(300));
@@ -833,6 +863,10 @@ fn rsync_with_progress(ctx: &FlashContext, src: &Path, dst: &Path, label: &str) 
     if let Some(stdout) = child.stdout.take() {
         let reader = BufReader::new(stdout);
         for line in reader.lines().map_while(Result::ok) {
+            if cancel_requested() {
+                let _ = child.kill();
+                bail!("Cancelled");
+            }
             if let Some(progress) = parse_rsync_progress(&line) {
                 ctx.send_progress(ProgressUpdate::RsyncProgress {
                     percent: progress.percent,
@@ -849,6 +883,31 @@ fn rsync_with_progress(ctx: &FlashContext, src: &Path, dst: &Path, label: &str) 
         bail!("rsync failed for {}", label);
     }
     Ok(())
+}
+
+static CANCEL_FLAG: OnceLock<Mutex<Option<Arc<AtomicBool>>>> = OnceLock::new();
+
+pub fn set_cancel_flag(flag: Arc<AtomicBool>) {
+    let lock = CANCEL_FLAG.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = lock.lock() {
+        *guard = Some(flag);
+    }
+}
+
+pub fn clear_cancel_flag() {
+    if let Some(lock) = CANCEL_FLAG.get() {
+        if let Ok(mut guard) = lock.lock() {
+            *guard = None;
+        }
+    }
+}
+
+fn cancel_requested() -> bool {
+    CANCEL_FLAG
+        .get()
+        .and_then(|lock| lock.lock().ok())
+        .and_then(|guard| guard.as_ref().map(|flag| flag.load(Ordering::Relaxed)))
+        .unwrap_or(false)
 }
 
 /// VFAT-safe rsync (no ownership/permissions)

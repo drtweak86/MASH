@@ -18,7 +18,7 @@ pub use flash_config::{FlashConfig, ImageSource}; // Update the pub use statemen
 
 use crate::download;
 use crate::tui::progress::{Phase, ProgressUpdate};
-use crate::{cli::Cli, errors::Result};
+use crate::{cli::Cli, errors::Result, flash};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -53,7 +53,7 @@ pub fn run(_cli: &Cli, _watch: bool, _dry_run: bool) -> Result<new_app::InputRes
     let mut terminal = Terminal::new(backend)?;
 
     // Create app state
-    let mut app = new_app::App::new();
+    let mut app = new_app::App::new_with_flags(_dry_run);
 
     // Main loop
     let final_result = run_new_ui(&mut terminal, &mut app)?;
@@ -113,8 +113,9 @@ pub fn run_new_ui(
                         let (tx, rx) = mpsc::channel();
                         flash_result_rx = Some(rx);
                         let cancel_flag = app.cancel_requested.clone();
+                        let yes_i_know = app.destructive_armed;
                         std::thread::spawn(move || {
-                            let result = run_download_pipeline(&config, cancel_flag);
+                            let result = run_execution_pipeline(config, yes_i_know, cancel_flag);
                             let _ = tx.send(result);
                         });
                     }
@@ -173,10 +174,12 @@ struct DownloadOutcome {
     cancelled: bool,
 }
 
-fn run_download_pipeline(
-    config: &FlashConfig,
+fn run_execution_pipeline(
+    mut config: FlashConfig,
+    yes_i_know: bool,
     cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<DownloadOutcome> {
+    flash::set_cancel_flag(cancel_flag.clone());
     let tx = config.progress_tx.clone();
     let send = |update: ProgressUpdate| {
         if let Some(ref tx) = tx {
@@ -292,33 +295,41 @@ fn run_download_pipeline(
         send(ProgressUpdate::PhaseSkipped(Phase::DownloadUefi));
     }
 
-    for phase in Phase::all() {
-        if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
-            send(ProgressUpdate::Status("🧹 Cleaning up...".to_string()));
-            if let Some(ref path) = downloaded_image {
-                let _ = std::fs::remove_file(path);
-            }
-            if let Some(ref path) = downloaded_uefi {
-                let _ = std::fs::remove_dir_all(path);
-            }
-            send(ProgressUpdate::Error("Cancelled".to_string()));
-            return Ok(DownloadOutcome {
-                image_path: None,
-                uefi_dir: None,
-                cancelled: true,
-            });
+    if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
+        send(ProgressUpdate::Status("🧹 Cleaning up...".to_string()));
+        if let Some(ref path) = downloaded_image {
+            let _ = std::fs::remove_file(path);
         }
-        if matches!(phase, Phase::DownloadImage | Phase::DownloadUefi) {
-            continue;
+        if let Some(ref path) = downloaded_uefi {
+            let _ = std::fs::remove_dir_all(path);
         }
-        send(ProgressUpdate::PhaseSkipped(*phase));
+        send(ProgressUpdate::Error("Cancelled".to_string()));
+        flash::clear_cancel_flag();
+        return Ok(DownloadOutcome {
+            image_path: None,
+            uefi_dir: None,
+            cancelled: true,
+        });
     }
-    send(ProgressUpdate::Complete);
-    Ok(DownloadOutcome {
-        image_path: downloaded_image,
-        uefi_dir: downloaded_uefi,
-        cancelled: false,
-    })
+
+    if let Some(path) = downloaded_image.clone() {
+        config.image = path;
+    }
+    if let Some(path) = downloaded_uefi.clone() {
+        config.uefi_dir = path;
+    }
+
+    let flash_result = flash::run_with_progress(&config, yes_i_know);
+    flash::clear_cancel_flag();
+
+    match flash_result {
+        Ok(()) => Ok(DownloadOutcome {
+            image_path: downloaded_image,
+            uefi_dir: downloaded_uefi,
+            cancelled: false,
+        }),
+        Err(err) => Err(err),
+    }
 }
 
 fn cleanup_fedora_artifacts(base: &std::path::Path, version: &str, edition: &str) {
