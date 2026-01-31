@@ -9,6 +9,7 @@ use ratatui::{
     widgets::{Block, Borders, Gauge, List, ListItem, Paragraph},
     Frame,
 };
+use std::path::PathBuf;
 
 pub fn draw(f: &mut Frame, app: &App) {
     let progress_state = app.progress_state_snapshot();
@@ -320,6 +321,32 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
             items.push("✅ Review configuration summary:".to_string());
             items.push("Type FLASH to begin execution.".to_string());
             items.push(format!("Input: {}", app.confirmation_input));
+            let effective_image = app
+                .downloaded_image_path
+                .clone()
+                .or_else(|| {
+                    app.images
+                        .get(app.image_index)
+                        .map(|image| image.path.clone())
+                })
+                .unwrap_or_else(|| PathBuf::from(app.image_source_path.clone()));
+            let download_uefi = app
+                .options
+                .iter()
+                .find(|option| option.label == "Download UEFI firmware")
+                .map(|option| option.enabled)
+                .unwrap_or(false);
+            let effective_uefi = app
+                .downloaded_uefi_dir
+                .clone()
+                .or_else(|| {
+                    if download_uefi {
+                        app.uefi_dirs.get(app.uefi_index).cloned()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| PathBuf::from(app.uefi_source_path.clone()));
             if let Some(disk) = app.disks.get(app.disk_index) {
                 items.push(format!("Disk: {} ({})", disk.path, disk.size));
                 items.push(format!("Disk label: {}", disk.label));
@@ -327,12 +354,10 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
             if let Some(scheme) = app.partition_schemes.get(app.scheme_index) {
                 items.push(format!("Scheme: {}", scheme));
             }
-            if let Some(image) = app.images.get(app.image_index) {
-                items.push(format!("Image: {}", image.label));
-            }
             if let Some(source) = app.image_sources.get(app.image_source_index) {
-                items.push(format!("Source: {}", source.label));
+                items.push(format!("Image source: {}", source.label));
             }
+            items.push(format!("Image path: {}", effective_image.display()));
             if let Some(layout) = app.partition_layouts.get(app.layout_index) {
                 items.push(format!("Layout: {}", layout));
             }
@@ -340,9 +365,10 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
                 "Partitions: EFI {} | BOOT {} | ROOT {} | DATA remainder",
                 app.efi_size, app.boot_size, app.root_end
             ));
-            if let Some(uefi_dir) = app.uefi_dirs.get(app.uefi_index) {
-                items.push(format!("UEFI: {}", uefi_dir.display()));
+            if download_uefi {
+                items.push("UEFI: Download bundle".to_string());
             }
+            items.push(format!("UEFI path: {}", effective_uefi.display()));
             if let Some(locale) = app.locales.get(app.locale_index) {
                 items.push(format!("Locale: {}", locale));
             }
@@ -363,6 +389,9 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
                 if download_fedora { "Yes" } else { "No" },
                 if download_uefi { "Yes" } else { "No" }
             ));
+            if app.dry_run {
+                items.push("Mode: DRY-RUN (no disk writes)".to_string());
+            }
             items.push("Options:".to_string());
             for option in &app.options {
                 items.push(format!(

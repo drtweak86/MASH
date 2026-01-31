@@ -1331,6 +1331,13 @@ impl App {
         // The actual values would come from fields in the App struct (e.g., self.selected_disk, etc.)
         // This is a minimal implementation to allow FlashConfig construction.
 
+        let download_uefi_firmware = self
+            .options
+            .iter()
+            .find(|option| option.label == "Download UEFI firmware")
+            .map(|option| option.enabled)
+            .unwrap_or(false);
+
         Some(FlashConfig {
             image: self
                 .downloaded_image_path
@@ -1353,7 +1360,13 @@ impl App {
             uefi_dir: self
                 .downloaded_uefi_dir
                 .clone()
-                .or_else(|| self.uefi_dirs.get(self.uefi_index).cloned())
+                .or_else(|| {
+                    if download_uefi_firmware {
+                        self.uefi_dirs.get(self.uefi_index).cloned()
+                    } else {
+                        None
+                    }
+                })
                 .unwrap_or_else(|| PathBuf::from(self.uefi_source_path.clone())),
             auto_unmount: self
                 .options
@@ -1376,12 +1389,7 @@ impl App {
             efi_size: self.efi_size.clone(),
             boot_size: self.boot_size.clone(),
             root_end: self.root_end.clone(),
-            download_uefi_firmware: self
-                .options
-                .iter()
-                .find(|option| option.label == "Download UEFI firmware")
-                .map(|option| option.enabled)
-                .unwrap_or(false),
+            download_uefi_firmware,
             image_source_selection: self
                 .image_sources
                 .get(self.image_source_index)
