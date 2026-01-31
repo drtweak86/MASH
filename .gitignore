@@ -25,6 +25,7 @@ cmake_install.cmake
 dist/
 release/
 bundle/
+*.tar
 *.tar.gz
 *.zip
 *.deb
@@ -47,6 +48,11 @@ bundle/
 COMMIT.txt
 STATUS.txt
 RUSTIFICATION_AUDIT_*.md
+RUSTIFICATION_PLAN.md
+install.sh.bak
+install.sh.backup
+install-fix.patch
+*.sha256
 
 # Release artifacts
 artifacts/
