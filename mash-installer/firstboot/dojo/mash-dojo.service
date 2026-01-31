@@ -1,0 +1,17 @@
+[Unit]
+Description=MASH Dojo First-Boot Setup
+ConditionPathExists=!/var/lib/mash/dojo.completed
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mash-dojo
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+
+[Install]
+WantedBy=multi-user.target

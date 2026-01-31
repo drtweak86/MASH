@@ -13,6 +13,7 @@ use anyhow::{bail, Context, Result};
 use log::{debug, info};
 use std::fs;
 use std::io::{BufRead, BufReader};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -398,7 +399,7 @@ fn run_installation(ctx: &mut FlashContext) -> Result<()> {
     // Phase 9: Stage Dojo to DATA partition
     ctx.check_cancel()?;
     ctx.start_phase(Phase::StageDojo);
-    stage_dojo(ctx, &mounts.dst_data)?;
+    stage_dojo(ctx, &mounts.dst_data, &mounts.dst_root_subvol)?;
     ctx.complete_phase(Phase::StageDojo);
 
     // Phase 10: Cleanup
@@ -1296,7 +1297,7 @@ fn get_partition_uuid(device: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn stage_dojo(ctx: &FlashContext, data_mount: &Path) -> Result<()> {
+fn stage_dojo(ctx: &FlashContext, data_mount: &Path, target_root: &Path) -> Result<()> {
     ctx.status("🥋 Staging Dojo installation files to DATA partition...");
 
     let staging_dir = data_mount.join("mash-staging");
@@ -1310,8 +1311,52 @@ fn stage_dojo(ctx: &FlashContext, data_mount: &Path) -> Result<()> {
     fs::write(&dojo_script, script_content.replace("{{PLACEHOLDER}}", ""))?;
     run_command("chmod", &["+x", dojo_script.to_str().unwrap()])?;
 
+    stage_firstboot_dojo(ctx, target_root)?;
+
     info!("🥋 Dojo staging complete at {}", staging_dir.display());
     Ok(())
+}
+
+fn stage_firstboot_dojo(ctx: &FlashContext, target_root: &Path) -> Result<()> {
+    ctx.status("🥋 Staging MASH Dojo first-boot service...");
+    if ctx.dry_run {
+        ctx.status("(dry-run) Would stage mash-dojo binary and service");
+        return Ok(());
+    }
+
+    let dojo_bin = resolve_mash_dojo_binary()?;
+    let bin_dir = target_root.join("usr/local/bin");
+    fs::create_dir_all(&bin_dir)?;
+    let target_bin = bin_dir.join("mash-dojo");
+    fs::copy(&dojo_bin, &target_bin)?;
+    fs::set_permissions(&target_bin, fs::Permissions::from_mode(0o755))?;
+
+    let service_content = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/firstboot/dojo/mash-dojo.service"
+    ));
+    let service_dir = target_root.join("etc/systemd/system");
+    fs::create_dir_all(&service_dir)?;
+    let service_path = service_dir.join("mash-dojo.service");
+    fs::write(&service_path, service_content)?;
+
+    let wants_dir = service_dir.join("multi-user.target.wants");
+    fs::create_dir_all(&wants_dir)?;
+    let link = wants_dir.join("mash-dojo.service");
+    if !link.exists() {
+        std::os::unix::fs::symlink("/etc/systemd/system/mash-dojo.service", &link)?;
+    }
+
+    Ok(())
+}
+
+fn resolve_mash_dojo_binary() -> Result<PathBuf> {
+    let exe = std::env::current_exe().context("Failed to locate running mash binary")?;
+    let candidate = exe.with_file_name("mash-dojo");
+    if candidate.exists() {
+        return Ok(candidate);
+    }
+    bail!("mash-dojo binary not found next to {}", exe.display());
 }
 
 fn decompress_xz_image(ctx: &FlashContext, xz_image_path: &Path) -> Result<PathBuf> {
