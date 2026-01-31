@@ -161,6 +161,9 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
             } else {
                 items.push("No disk selected.".to_string());
             }
+            if let Some(error) = &app.error_message {
+                items.push(format!("❌ {}", error));
+            }
         }
         InstallStepType::BackupConfirmation => {
             items.push("⚠️ This will erase data on the selected disk.".to_string());
@@ -209,7 +212,7 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
         InstallStepType::PartitionCustomize => {
             items.push("🛠️ Customize partitions:".to_string());
             items.push(
-                "Use Tab/↑/↓ to select • Type to edit • Backspace to delete • Enter to continue."
+                "Use Tab/↑/↓ to select • Type to edit • Backspace to delete • R to reset • Enter."
                     .to_string(),
             );
             let options = app
@@ -380,6 +383,9 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
                     .unwrap_or_else(|| "Prompt to create user".to_string())
             ));
             push_options(&mut items, &["Go back".to_string()], 0);
+            if let Some(error) = &app.error_message {
+                items.push(format!("❌ {}", error));
+            }
         }
         InstallStepType::DownloadingFedora => {
             let status = if app.downloaded_fedora {
@@ -464,7 +470,12 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
     }
 
     if let Some(error) = &app.error_message {
-        if app.current_step_type == InstallStepType::PartitionCustomize {
+        if matches!(
+            app.current_step_type,
+            InstallStepType::PartitionCustomize
+                | InstallStepType::DiskConfirmation
+                | InstallStepType::Confirmation
+        ) {
             return items;
         }
         items.push(format!("❌ {}", error));
@@ -498,7 +509,7 @@ fn expected_actions(step: InstallStepType) -> String {
         InstallStepType::PartitionLayout => "Up/Down/Tab, Y/N, Enter, Esc, q".to_string(),
         InstallStepType::PartitionScheme => "Up/Down/Tab, Enter, Esc, q".to_string(),
         InstallStepType::PartitionCustomize => {
-            "Up/Down/Tab, Type, Backspace, Enter, Esc, q".to_string()
+            "Up/Down/Tab, Type, Backspace, R, Enter, Esc, q".to_string()
         }
         InstallStepType::Confirmation => "Type FLASH, Enter, Esc, q".to_string(),
         InstallStepType::DiskSelection

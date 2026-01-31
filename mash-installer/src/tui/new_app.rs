@@ -1126,6 +1126,15 @@ impl App {
                 }
                 InputResult::Continue
             }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                self.efi_size = "1024MiB".to_string();
+                self.boot_size = "2048MiB".to_string();
+                self.root_end = "1800GiB".to_string();
+                self.error_message = None;
+                self.customize_error_field = None;
+                self.refresh_partition_customizations();
+                InputResult::Continue
+            }
             KeyCode::Esc => {
                 if let Some(prev) = self.current_step_type.prev() {
                     self.current_step_type = prev;
