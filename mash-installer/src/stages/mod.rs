@@ -6,6 +6,7 @@ pub mod stage_02_early_ssh;
 pub mod stage_02_internet_wait;
 pub mod stage_03_fail2ban_lite;
 pub mod stage_03_stage_starship_toml;
+pub mod stage_05_fonts_essential;
 
 pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
     match stage {
@@ -17,6 +18,7 @@ pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
         "03_stage_starship_toml" | "03-stage-starship-toml" => {
             stage_03_stage_starship_toml::run(args)
         }
+        "05_fonts_essential" | "05-fonts-essential" => stage_05_fonts_essential::run(args),
         _ => Err(anyhow!("unknown stage: {stage}")),
     }
 }
