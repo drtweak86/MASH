@@ -1318,7 +1318,7 @@ fn stage_dojo(ctx: &FlashContext, data_mount: &Path, target_root: &Path) -> Resu
 }
 
 fn stage_firstboot_dojo(ctx: &FlashContext, target_root: &Path) -> Result<()> {
-    ctx.status("🥋 Staging MASH Dojo first-boot service...");
+    ctx.status("🥋 Staging MASH Dojo to /usr/local/bin and /etc/systemd/system...");
     if ctx.dry_run {
         ctx.status("(dry-run) Would stage mash-dojo binary and service");
         return Ok(());
