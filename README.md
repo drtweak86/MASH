@@ -29,6 +29,12 @@ Launch the terminal wizard — it guides you through every step:
 sudo mash
 ```
 
+On first boot, a **MASH Dojo** TUI runs once to finish setup. To rerun it later:
+```bash
+sudo rm /var/lib/mash/dojo.completed
+sudo systemctl enable --now mash-dojo.service
+```
+
 ### 2. CLI Mode (For Scripting)
 
 Fully automated installation with command-line flags:
@@ -68,7 +74,14 @@ MASH creates a 4-partition layout:
 | ROOT | ~1.8 TiB | btrfs | System root (subvols: root, home, var) |
 | DATA | Remaining | ext4 | User data and staging |
 
+Defaults: MBR scheme, EFI 1 GiB, BOOT 2 GiB, ROOT end 1800 GiB, DATA remainder.
 Partition sizes are configurable via CLI flags (`--efi-size`, `--boot-size`, `--root-end`).
+
+---
+
+## 🧮 Versioning
+
+MASH uses strict SemVer (`X.Y.Z`) and tags releases as `vX.Y.Z`.
 
 ---
 

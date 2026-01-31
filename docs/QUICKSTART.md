@@ -84,6 +84,8 @@ The TUI guides you through:
 5. Creating your first-boot user (no autologin)
 6. Final confirmation before flashing
 
+Defaults: MBR scheme, EFI 1 GiB, BOOT 2 GiB, ROOT end 1800 GiB, DATA remainder.
+
 ### Option B: CLI Mode (For Automation)
 
 Run with all options on the command line:
@@ -153,6 +155,12 @@ The system should boot to:
 - UEFI firmware screen briefly
 - GRUB bootloader
 - Fedora KDE desktop
+
+On first boot, the **MASH Dojo** TUI runs once to finish setup. To rerun it later:
+```bash
+sudo rm /var/lib/mash/dojo.completed
+sudo systemctl enable --now mash-dojo.service
+```
 
 ---
 
