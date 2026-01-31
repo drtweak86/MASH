@@ -418,6 +418,8 @@ fn simulate_installation(ctx: &FlashContext) -> Result<()> {
     for phase in Phase::all() {
         ctx.check_cancel()?;
         if matches!(phase, Phase::DownloadImage | Phase::DownloadUefi) {
+            ctx.send_progress(ProgressUpdate::PhaseSkipped(*phase));
+            ctx.status(&format!("(dry-run) Skipping {}", phase.name()));
             continue;
         }
         ctx.start_phase(*phase);
