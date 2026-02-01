@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 
 mod argon_one;
+mod audio;
 mod bootcount;
 mod early_ssh;
 mod install_dojo;
@@ -12,6 +13,7 @@ pub fn run_task(task: &str, args: &[String]) -> Result<()> {
         "early_ssh" | "early-ssh" => early_ssh::run(args),
         "internet_wait" | "internet-wait" => internet_wait::run(args),
         "argon_one" | "argon-one" => argon_one::run(args),
+        "audio" => audio::run(args),
         "bootcount" => bootcount::run(args),
         _ => Err(anyhow!("unknown dojo task: {task}")),
     }
