@@ -1,28 +1,47 @@
 //! Core logic for MASH, ported from scripts/mash-full-loop.py.
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use regex::Regex;
 use std::path::Path;
+use std::process::Command;
 
 // ---- Helpers (mash-full-loop.py:55-214) ----
 
 /// Corresponds to `sh` helper (mash-full-loop.py:55-72).
-pub fn sh(_cmd: &str) -> Result<()> {
-    todo!("Implement shell command execution, corresponds to mash-full-loop.py:55-72");
+pub fn sh(cmd: &str) -> Result<String> {
+    let output = Command::new("sh").arg("-c").arg(cmd).output()?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "command failed (status {}): {}",
+            output.status,
+            cmd
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// Corresponds to `need` helper (mash-full-loop.py:75-78).
-pub fn need(_binname: &str) -> Result<()> {
-    todo!("Implement dependency check, corresponds to mash-full-loop.py:75-78");
+pub fn need(binname: &str) -> Result<()> {
+    let output = Command::new("which").arg(binname).output()?;
+    if !output.status.success() {
+        return Err(anyhow!("Missing required command: {}", binname));
+    }
+    Ok(())
 }
 
 /// Corresponds to `die` helper (mash-full-loop.py:80-82).
-pub fn die(_msg: &str, _code: i32) -> Result<()> {
-    todo!("Implement fatal error handling, corresponds to mash-full-loop.py:80-82");
+pub fn die(msg: &str, code: i32) -> ! {
+    eprintln!("\n[FATAL] {}\n", msg);
+    std::process::exit(code);
 }
 
 /// Corresponds to `banner` helper (mash-full-loop.py:85-89).
-pub fn banner(_title: &str) -> Result<()> {
-    todo!("Implement banner output, corresponds to mash-full-loop.py:85-89");
+pub fn banner(title: &str) -> Result<()> {
+    let line = "─".repeat(title.chars().count() + 4);
+    println!("\n╭{}╮", line);
+    println!("│  {}  │", title);
+    println!("╰{}╯", line);
+    Ok(())
 }
 
 /// Corresponds to `mkdirp` helper (mash-full-loop.py:92-93).
@@ -51,8 +70,14 @@ pub fn blkid_uuid(_dev: &str) -> Result<String> {
 }
 
 /// Corresponds to `parse_size_to_mib` helper (mash-full-loop.py:112-119).
-pub fn parse_size_to_mib(_size: &str) -> Result<u64> {
-    todo!("Implement size parsing, corresponds to mash-full-loop.py:112-119");
+pub fn parse_size_to_mib(size: &str) -> Result<u64> {
+    let re = Regex::new(r"^(\d+)\s*(MiB|GiB)$")?;
+    let caps = re
+        .captures(size.trim())
+        .ok_or_else(|| anyhow!("Size must be like 1024MiB or 2GiB, got: {}", size))?;
+    let value: u64 = caps[1].parse()?;
+    let unit = caps[2].to_lowercase();
+    Ok(if unit == "mib" { value } else { value * 1024 })
 }
 
 /// Corresponds to `rsync_progress` helper (mash-full-loop.py:122-153).
