@@ -10,6 +10,7 @@ use anyhow::Context;
 use clap::Parser;
 
 mod cli;
+mod dojo;
 mod download;
 mod errors;
 mod flash;
@@ -147,6 +148,11 @@ fn main() -> anyhow::Result<()> {
 
             flash::run_with_progress(&cli_flash_config, *yes_i_know)?;
             return Ok(()); // Exit after CLI flash
+        }
+        Some(cli::Command::Dojo { task, task_args }) => {
+            log::info!("🥋 Running Dojo task: {}", task);
+            dojo::run_task(task, task_args)?;
+            return Ok(()); // Exit after Dojo task
         }
     }
 

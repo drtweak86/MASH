@@ -126,4 +126,14 @@ pub enum Command {
         #[arg(long, default_value = "KDE")]
         image_edition: String,
     },
+
+    /// 🥋 Run MASH Dojo helper tasks
+    Dojo {
+        /// Dojo task name (e.g., install_dojo, early_ssh, internet_wait)
+        task: String,
+
+        /// Arguments for the selected Dojo task (repeatable)
+        #[arg(trailing_var_arg = true)]
+        task_args: Vec<String>,
+    },
 }
