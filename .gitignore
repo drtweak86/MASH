@@ -86,6 +86,30 @@ mash-installer/*.bak.*
 .docker/
 .github/skills/
 
+# Docker artifacts (issue #15)
+.docker/
+.docker/**
+**/.dockerignore
+**/docker-compose.yaml.bak
+**/docker-compose.yml.bak
+**/Dockerfile.bak
+**/buildx-cache/
+**/buildx-cache/**
+**/containerd/
+**/containerd/**
+**/docker-build-cache/
+**/docker-build-cache/**
+**/docker-compose/
+**/docker-compose/**
+**/docker-images/
+**/docker-images/**
+**/docker-volumes/
+**/docker-volumes/**
+**/tmp/docker/
+**/tmp/docker/**
+**/var/lib/docker/
+**/var/lib/docker/**
+
 # local agent junk
 .claude/
 .docker/
