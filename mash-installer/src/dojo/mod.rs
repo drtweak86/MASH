@@ -13,6 +13,7 @@ mod graphics;
 mod install_dojo;
 mod internet_wait;
 mod menu;
+mod mount_data;
 
 pub fn run_task(task: &str, args: &[String]) -> Result<()> {
     match task {
@@ -29,6 +30,7 @@ pub fn run_task(task: &str, args: &[String]) -> Result<()> {
         "firewall" => firewall::run(args),
         "graphics" => graphics::run(args),
         "menu" => menu::run(args),
+        "mount_data" | "mount-data" => mount_data::run(args),
         _ => Err(anyhow!("unknown dojo task: {task}")),
     }
 }
