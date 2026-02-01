@@ -15,6 +15,7 @@ pub mod stage_14_packages_dev;
 pub mod stage_15_packages_desktop;
 pub mod stage_16_mount_data;
 pub mod stage_17_brave_browser;
+pub mod stage_17_brave_default;
 
 pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
     match stage {
@@ -35,6 +36,7 @@ pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
         "15_packages_desktop" | "15-packages-desktop" => stage_15_packages_desktop::run(args),
         "16_mount_data" | "16-mount-data" => stage_16_mount_data::run(args),
         "17_brave_browser" | "17-brave-browser" => stage_17_brave_browser::run(args),
+        "17_brave_default" | "17-brave-default" => stage_17_brave_default::run(args),
         _ => Err(anyhow!("unknown stage: {stage}")),
     }
 }
