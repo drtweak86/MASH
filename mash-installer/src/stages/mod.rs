@@ -18,6 +18,7 @@ pub mod stage_17_brave_browser;
 pub mod stage_17_brave_default;
 pub mod stage_20_argon_one;
 pub mod stage_21_zsh_starship;
+pub mod stage_22_kde_screensaver_nuke;
 
 pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
     match stage {
@@ -41,6 +42,9 @@ pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
         "17_brave_default" | "17-brave-default" => stage_17_brave_default::run(args),
         "20_argon_one" | "20-argon-one" => stage_20_argon_one::run(args),
         "21_zsh_starship" | "21-zsh-starship" => stage_21_zsh_starship::run(args),
+        "22_kde_screensaver_nuke" | "22-kde-screensaver-nuke" => {
+            stage_22_kde_screensaver_nuke::run(args)
+        }
         _ => Err(anyhow!("unknown stage: {stage}")),
     }
 }
