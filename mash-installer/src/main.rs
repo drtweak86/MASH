@@ -35,10 +35,29 @@ fn main() -> anyhow::Result<()> {
     }
 
     match &cli.command {
-        // No subcommand = launch TUI wizard (default)
+        // No subcommand = run self-contained stages in order (no external args required)
         None => {
-            log::info!("🎉 Launching MASH TUI wizard...");
-            tui::run(&cli, cli.watch, cli.dry_run)?;
+            log::info!("🧩 Running default self-contained stages (no external args)...");
+            let default_stages = [
+                "00_write_config_txt",
+                "03_fail2ban_lite",
+                "05_fonts_essential",
+                "10_locale_uk",
+                "11_snapper_init",
+                "13_packages_core",
+                "14_packages_dev",
+                "15_packages_desktop",
+                "16_mount_data",
+                "17_brave_browser",
+                "17_brave_default",
+                "20_argon_one",
+                "21_zsh_starship",
+                "22_kde_screensaver_nuke",
+            ];
+            for stage in default_stages {
+                log::info!("🧩 Running stage: {}", stage);
+                stages::run_stage(stage, &[])?;
+            }
         }
         // Preflight checks
         Some(cli::Command::Preflight) => {
