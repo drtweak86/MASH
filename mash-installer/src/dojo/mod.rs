@@ -4,6 +4,7 @@ mod argon_one;
 mod audio;
 mod bootcount;
 mod bootstrap;
+mod borg;
 mod early_ssh;
 mod install_dojo;
 mod internet_wait;
@@ -17,6 +18,7 @@ pub fn run_task(task: &str, args: &[String]) -> Result<()> {
         "audio" => audio::run(args),
         "bootcount" => bootcount::run(args),
         "bootstrap" => bootstrap::run(args),
+        "borg" => borg::run(args),
         _ => Err(anyhow!("unknown dojo task: {task}")),
     }
 }
