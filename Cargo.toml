@@ -9,8 +9,31 @@ members = [
 [workspace.package]
 version = "1.2.14"
 
-[profile.release]
+#
+# === Workspace Build Profiles ===
+#
+
+# Development Profile: Optimized for fast iteration and debugging.
+[profile.dev]
+panic = "unwind"
+
+# For faster dev rebuilds, compile dependencies with optimizations.
+# This makes the initial dependency build slower, but subsequent builds are much faster.
+[profile.dev.package."*"]
 opt-level = 3
-lto = true
-codegen-units = 1
-strip = true
+debug = 0
+
+# Release Profile: Tuned for optimized, small, and fast release binaries.
+[workspace.profile.release]
+opt-level = 3
+lto = "thin"       # Use ThinLTO for a good balance of performance and compile time.
+codegen-units = 1  # Maximize optimizations across the crate.
+strip = true       # Strip debug symbols from the final binary.
+panic = "unwind"
+
+# Optional: For debugging release-specific issues.
+# Build with: cargo build --profile release-debug
+[profile.release-debug]
+inherits = "release"
+debug = 1
+strip = false
