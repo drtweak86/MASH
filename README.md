@@ -106,6 +106,12 @@ The binary is output to `mash-installer/target/release/mash`.
 
 ---
 
+### Build and Development Orchestration
+
+The `Makefile` serves as the primary build, test, installation, and release orchestration tool for the MASH project, integrating both Rust and Qt components. It provides a unified interface for common development tasks. Refer to `make help` for a list of available commands and their descriptions.
+
+---
+
 ## 📚 Documentation
 
 - [Quick Start Guide](docs/QUICKSTART.md) — Get running in minutes
