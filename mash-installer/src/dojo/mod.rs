@@ -15,6 +15,7 @@ mod internet_wait;
 mod menu;
 mod mount_data;
 mod rclone;
+mod snapper;
 
 pub fn run_task(task: &str, args: &[String]) -> Result<()> {
     match task {
@@ -33,6 +34,7 @@ pub fn run_task(task: &str, args: &[String]) -> Result<()> {
         "menu" => menu::run(args),
         "mount_data" | "mount-data" => mount_data::run(args),
         "rclone" => rclone::run(args),
+        "snapper" => snapper::run(args),
         _ => Err(anyhow!("unknown dojo task: {task}")),
     }
 }
