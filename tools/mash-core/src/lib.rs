@@ -62,12 +62,16 @@ pub fn udev_settle() -> Result<()> {
 
 /// Corresponds to `lsblk_tree` helper (mash-full-loop.py:104-105).
 pub fn lsblk_tree(_disk: &str) -> Result<()> {
-    todo!("Implement lsblk tree display, corresponds to mash-full-loop.py:104-105");
+    let cmd = format!("lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS,MODEL {}", _disk);
+    let _ = sh(&cmd)?;
+    Ok(())
 }
 
 /// Corresponds to `blkid_uuid` helper (mash-full-loop.py:108-109).
 pub fn blkid_uuid(_dev: &str) -> Result<String> {
-    todo!("Implement blkid UUID lookup, corresponds to mash-full-loop.py:108-109");
+    let cmd = format!("blkid -s UUID -o value {}", _dev);
+    let output = sh(&cmd)?;
+    Ok(output)
 }
 
 /// Corresponds to `parse_size_to_mib` helper (mash-full-loop.py:112-119).
@@ -169,6 +173,41 @@ pub fn parse_args_and_validate() -> Result<Args> {
     }
 
     Ok(args)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BtrfsSubvolsInfo {
+    pub has_root: bool,
+    pub has_home: bool,
+    pub has_var: bool,
+}
+
+/// Corresponds to btrfs subvolume detection (mash-full-loop.py:363-367).
+pub fn read_btrfs_subvols(path: &Path) -> Result<BtrfsSubvolsInfo> {
+    let output = sh(&format!("btrfs subvolume list {}", path.display()))?;
+    let root_re = Regex::new(r"\bpath\s+root$")?;
+    let home_re = Regex::new(r"\bpath\s+home$")?;
+    let var_re = Regex::new(r"\bpath\s+var$")?;
+
+    let mut info = BtrfsSubvolsInfo {
+        has_root: false,
+        has_home: false,
+        has_var: false,
+    };
+
+    for line in output.lines() {
+        if root_re.is_match(line) {
+            info.has_root = true;
+        }
+        if home_re.is_match(line) {
+            info.has_home = true;
+        }
+        if var_re.is_match(line) {
+            info.has_var = true;
+        }
+    }
+
+    Ok(info)
 }
 
 /// Corresponds to cleanup routine (mash-full-loop.py:252-283).
