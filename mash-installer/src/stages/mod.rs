@@ -12,6 +12,7 @@ pub mod stage_11_snapper_init;
 pub mod stage_12_firewall_sane;
 pub mod stage_13_packages_core;
 pub mod stage_14_packages_dev;
+pub mod stage_15_packages_desktop;
 
 pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
     match stage {
@@ -29,6 +30,7 @@ pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
         "12_firewall_sane" | "12-firewall-sane" => stage_12_firewall_sane::run(args),
         "13_packages_core" | "13-packages-core" => stage_13_packages_core::run(args),
         "14_packages_dev" | "14-packages-dev" => stage_14_packages_dev::run(args),
+        "15_packages_desktop" | "15-packages-desktop" => stage_15_packages_desktop::run(args),
         _ => Err(anyhow!("unknown stage: {stage}")),
     }
 }
