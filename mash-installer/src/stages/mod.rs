@@ -13,6 +13,7 @@ pub mod stage_12_firewall_sane;
 pub mod stage_13_packages_core;
 pub mod stage_14_packages_dev;
 pub mod stage_15_packages_desktop;
+pub mod stage_16_mount_data;
 
 pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
     match stage {
@@ -31,6 +32,7 @@ pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
         "13_packages_core" | "13-packages-core" => stage_13_packages_core::run(args),
         "14_packages_dev" | "14-packages-dev" => stage_14_packages_dev::run(args),
         "15_packages_desktop" | "15-packages-desktop" => stage_15_packages_desktop::run(args),
+        "16_mount_data" | "16-mount-data" => stage_16_mount_data::run(args),
         _ => Err(anyhow!("unknown stage: {stage}")),
     }
 }
