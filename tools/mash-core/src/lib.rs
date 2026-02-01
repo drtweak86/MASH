@@ -1,8 +1,9 @@
 //! Core logic for MASH, ported from scripts/mash-full-loop.py.
 
 use anyhow::{anyhow, Result};
+use clap::{Parser, ValueEnum};
 use regex::Regex;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 // ---- Helpers (mash-full-loop.py:55-214) ----
@@ -102,9 +103,72 @@ pub fn patch_bls_entries(_boot_entries_dir: &Path, _root_uuid: &str) -> Result<(
 
 // ---- Main flow (mash-full-loop.py:216-545) ----
 
+#[derive(Debug, Clone, ValueEnum)]
+pub enum Scheme {
+    Gpt,
+    Mbr,
+}
+
+#[derive(Debug, Parser)]
+pub struct Args {
+    /// Fedora *.raw image
+    pub image: PathBuf,
+
+    /// Target disk (MASH)
+    #[arg(long, default_value = "/dev/sda")]
+    pub disk: String,
+
+    /// PFTF UEFI dir (must contain RPI_EFI.fd)
+    #[arg(long, default_value = "./rpi4uefi")]
+    pub uefi_dir: PathBuf,
+
+    /// Partition scheme (gpt recommended)
+    #[arg(long, value_enum, default_value_t = Scheme::Gpt)]
+    pub scheme: Scheme,
+
+    /// Create /data partition (GPT recommended)
+    #[arg(long)]
+    pub make_data: bool,
+
+    /// EFI size (default 1024MiB)
+    #[arg(long, default_value = "1024MiB")]
+    pub efi_size: String,
+
+    /// /boot size (default 2048MiB)
+    #[arg(long, default_value = "2048MiB")]
+    pub boot_size: String,
+
+    /// MBR-only: end of ROOT partition (default 1800GiB)
+    #[arg(long, default_value = "1800GiB")]
+    pub mbr_root_end: String,
+
+    /// Skip dracut (not recommended)
+    #[arg(long)]
+    pub no_dracut: bool,
+}
+
 /// Corresponds to argument parsing and validation (mash-full-loop.py:220-245).
-pub fn parse_args_and_validate() -> Result<()> {
-    todo!("Implement CLI parsing and validation, corresponds to mash-full-loop.py:220-245");
+pub fn parse_args_and_validate() -> Result<Args> {
+    let args = Args::parse();
+
+    if unsafe { libc::geteuid() } != 0 {
+        die("Run as root: sudo ./holy-loop-fedora-ninja-final.py ...", 1);
+    }
+
+    if !args.image.exists() {
+        return Err(anyhow!("Image not found: {}", args.image.display()));
+    }
+
+    if !Path::new(&args.disk).exists() {
+        return Err(anyhow!("Disk not found: {}", args.disk));
+    }
+
+    let uefi_firmware = args.uefi_dir.join("RPI_EFI.fd");
+    if !uefi_firmware.exists() {
+        return Err(anyhow!("Missing {}/RPI_EFI.fd", args.uefi_dir.display()));
+    }
+
+    Ok(args)
 }
 
 /// Corresponds to cleanup routine (mash-full-loop.py:252-283).
