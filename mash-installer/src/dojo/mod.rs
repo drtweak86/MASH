@@ -9,6 +9,7 @@ mod browser;
 mod dojo_entry;
 mod early_ssh;
 mod firewall;
+mod graphics;
 mod install_dojo;
 mod internet_wait;
 
@@ -25,6 +26,7 @@ pub fn run_task(task: &str, args: &[String]) -> Result<()> {
         "browser" => browser::run(args),
         "dojo" => dojo_entry::run(args),
         "firewall" => firewall::run(args),
+        "graphics" => graphics::run(args),
         _ => Err(anyhow!("unknown dojo task: {task}")),
     }
 }
