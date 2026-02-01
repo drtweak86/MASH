@@ -8,6 +8,7 @@ pub mod stage_03_fail2ban_lite;
 pub mod stage_03_stage_starship_toml;
 pub mod stage_05_fonts_essential;
 pub mod stage_10_locale_uk;
+pub mod stage_11_snapper_init;
 
 pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
     match stage {
@@ -21,6 +22,7 @@ pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
         }
         "05_fonts_essential" | "05-fonts-essential" => stage_05_fonts_essential::run(args),
         "10_locale_uk" | "10-locale-uk" => stage_10_locale_uk::run(args),
+        "11_snapper_init" | "11-snapper-init" => stage_11_snapper_init::run(args),
         _ => Err(anyhow!("unknown stage: {stage}")),
     }
 }
