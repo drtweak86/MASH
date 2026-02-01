@@ -7,7 +7,7 @@ use toml_edit::{DocumentMut, Item};
 
 mod version;
 
-use version::{BumpKind, bump_version, format_tag, parse_strict_version};
+use version::{bump_version, format_tag, parse_strict_version, BumpKind};
 
 #[derive(Debug, Parser)]
 #[command(name = "mash-release")]
@@ -177,13 +177,13 @@ fn update_readme_title(path: &Path, tag: &str) -> Result<bool, String> {
         return Ok(false);
     }
     let first = lines[0].clone();
-    if let Some(updated) = replace_version_in_title(&first, tag)
-        && updated != first
-    {
-        lines[0] = updated;
-        fs::write(path, lines.join("\n") + "\n")
-            .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
-        return Ok(true);
+    if let Some(updated) = replace_version_in_title(&first, tag) {
+        if updated != first {
+            lines[0] = updated;
+            fs::write(path, lines.join("\n") + "\n")
+                .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
+            return Ok(true);
+        }
     }
     Ok(false)
 }
