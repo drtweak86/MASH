@@ -32,7 +32,7 @@ Scope: Non-legacy scripts only. Excludes `legacy/` and `legacy_scripts/` entirel
 - helpers/22_kde_screensaver_nuke.sh
 
 ## Port to `mash-installer` main flow (scripts/*.py)
-- scripts/mash-full-loop.py
+- scripts/mash-full-loop.py (quarantined as reference-only at reference/quarantine/mash-full-loop.py)
 
 ## Replace with wrapper
 - install.sh (wrapper to `./mash-installer "$@"` per Issue #9)
@@ -63,4 +63,3 @@ Scope: Non-legacy scripts only. Excludes `legacy/` and `legacy_scripts/` entirel
 - scripts/
 - dojo_bundle/
 - reference/ (Issue #9 acceptance criteria)
-

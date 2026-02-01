@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 # ==============================================================================
+# REFERENCE ONLY — DO NOT PORT/EXECUTE
+# Not part of Issue #9.
+# If you see a WO referencing this, STOP and ask.
+# ==============================================================================
+# ==============================================================================
 # MASH Full Loop (MASTER) — consolidated from historical "holy-loop-fedora" scripts
 #
 # Source-of-truth repo: drtweak86/MASH
