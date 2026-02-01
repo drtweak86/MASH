@@ -9,3 +9,4 @@ homepage.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+anyhow = "1"
