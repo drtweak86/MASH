@@ -10,6 +10,7 @@ pub mod stage_05_fonts_essential;
 pub mod stage_10_locale_uk;
 pub mod stage_11_snapper_init;
 pub mod stage_12_firewall_sane;
+pub mod stage_13_packages_core;
 
 pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
     match stage {
@@ -25,6 +26,7 @@ pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
         "10_locale_uk" | "10-locale-uk" => stage_10_locale_uk::run(args),
         "11_snapper_init" | "11-snapper-init" => stage_11_snapper_init::run(args),
         "12_firewall_sane" | "12-firewall-sane" => stage_12_firewall_sane::run(args),
+        "13_packages_core" | "13-packages-core" => stage_13_packages_core::run(args),
         _ => Err(anyhow!("unknown stage: {stage}")),
     }
 }
