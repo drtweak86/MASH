@@ -2,6 +2,7 @@
 
 use std::io::IsTerminal;
 
+pub mod cancel;
 pub mod confirm;
 pub mod style;
 pub mod validation;

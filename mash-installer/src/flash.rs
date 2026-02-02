@@ -935,6 +935,16 @@ pub fn clear_cancel_flag() {
     }
 }
 
+pub fn request_cancel() {
+    if let Some(lock) = CANCEL_FLAG.get() {
+        if let Ok(guard) = lock.lock() {
+            if let Some(flag) = guard.as_ref() {
+                flag.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
 fn cancel_requested() -> bool {
     CANCEL_FLAG
         .get()
@@ -1549,6 +1559,7 @@ fn udev_settle() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_normalize_disk() {
@@ -1581,5 +1592,47 @@ mod tests {
         };
         assert_eq!(ctx.partition_path(1), "/dev/sda1");
         assert_eq!(ctx.partition_path(4), "/dev/sda4");
+    }
+
+    #[test]
+    fn cancel_request_sets_flag() {
+        let flag = Arc::new(AtomicBool::new(false));
+        set_cancel_flag(flag.clone());
+        request_cancel();
+        assert!(flag.load(Ordering::Relaxed));
+        clear_cancel_flag();
+    }
+
+    #[test]
+    fn cancel_aborts_installation_early() {
+        let temp = tempdir().expect("tempdir");
+        let flag = Arc::new(AtomicBool::new(true));
+        set_cancel_flag(flag);
+
+        let mut ctx = FlashContext {
+            image: temp.path().join("image.raw"),
+            disk: "/dev/null".to_string(),
+            scheme: PartitionScheme::Mbr,
+            uefi_dir: temp.path().join("uefi"),
+            dry_run: true,
+            auto_unmount: false,
+            locale: None,
+            early_ssh: false,
+            progress_tx: None,
+            work_dir: temp.path().join("work"),
+            loop_device: None,
+            efi_size: "512M".to_string(),
+            boot_size: "1G".to_string(),
+            root_end: "100%".to_string(),
+            download_uefi_firmware: false,
+            image_source_selection: crate::tui::ImageSource::LocalFile,
+            image_version: String::new(),
+            image_edition: String::new(),
+            progress: None,
+        };
+
+        let result = run_installation(&mut ctx);
+        assert!(result.is_err());
+        clear_cancel_flag();
     }
 }

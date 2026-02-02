@@ -24,6 +24,9 @@ mod ui;
 fn main() -> anyhow::Result<()> {
     logging::init();
     let cli = cli::Cli::parse();
+    ui::cancel::install_ctrlc_handler(|| {
+        flash::request_cancel();
+    })?;
 
     if cli.dump_tui {
         tui::dump_all_steps()?;
@@ -81,6 +84,8 @@ fn main() -> anyhow::Result<()> {
             image_edition,
         }) => {
             log::info!("{} Running flash in CLI mode...", ui::style::emoji::DISK);
+            let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            flash::set_cancel_flag(cancel_flag.clone());
 
             let mut final_image_path = image.clone();
             let mut final_uefi_dir = uefi_dir.clone();
@@ -159,7 +164,9 @@ fn main() -> anyhow::Result<()> {
                 confirmed = true;
             }
 
-            flash::run_with_progress(&cli_flash_config, confirmed)?;
+            let result = flash::run_with_progress(&cli_flash_config, confirmed);
+            flash::clear_cancel_flag();
+            result?;
             return Ok(()); // Exit after CLI flash
         }
     }
