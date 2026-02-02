@@ -19,6 +19,7 @@ mod logging;
 mod preflight;
 mod stages;
 mod tui;
+mod ui;
 
 fn main() -> anyhow::Result<()> {
     logging::init();
