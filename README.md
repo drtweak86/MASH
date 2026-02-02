@@ -1,14 +1,14 @@
 # MASH 🍠 v1.2.14
 
-**Minimal, Automated, Self-Hosting installer for Fedora on Raspberry Pi 4B**
+**Minimal, automated, Rust-first installer for Fedora on Raspberry Pi 4B**
 
-MASH is an opinionated installer that automates Fedora KDE installation on Raspberry Pi 4 with UEFI boot support. It is **destructive by design** — it will completely erase and repartition your target disk.
+MASH is an opinionated installer that automates Fedora KDE installation on Raspberry Pi 4 with UEFI boot support. The installer is **destructive by design** — it will completely erase and repartition your target disk. Critical disk operations are implemented in Rust with explicit confirmations, validation guard rails, and deterministic execution paths.
 
 ---
 
 ## ✨ What MASH Does
 
-- 📥 **Downloads Fedora** — Automatically fetches Fedora 42/43 aarch64 images (KDE, Xfce, LXQt, Minimal, Server)
+- 📥 **Downloads Fedora** — Fetches Fedora 42/43 aarch64 images (KDE, Xfce, LXQt, Minimal, Server)
 - 📥 **Downloads UEFI firmware** — Fetches the latest RPi4 UEFI firmware from GitHub
 - 🗜️ **Decompresses** — Safely extracts `.raw.xz` → `.raw`
 - 🔄 **Loop-mounts** — Mounts the source image for filesystem-level copying
@@ -16,6 +16,7 @@ MASH is an opinionated installer that automates Fedora KDE installation on Raspb
 - 🔧 **Configures UEFI boot** — Ensures `EFI/BOOT/BOOTAA64.EFI` is correctly placed
 - 🌍 **Applies locale settings** — Configures keyboard layout and language
 - ✅ **Supports MBR and GPT** — You choose the partition scheme
+- 🧰 **Rust-native disk ops** — Partitioning, formatting, and mount verification are handled by `mash_installer::disk_ops`
 
 ---
 
@@ -23,7 +24,7 @@ MASH is an opinionated installer that automates Fedora KDE installation on Raspb
 
 ### 1. Interactive TUI Mode (Recommended)
 
-Launch the terminal wizard — it guides you through every step:
+Launch the terminal wizard — it guides you through every step and requires explicit confirmations before destructive actions:
 
 ```bash
 sudo mash
@@ -48,6 +49,10 @@ sudo mash flash \
   --auto-unmount \
   --yes-i-know
 ```
+
+Notes:
+- `--yes-i-know` is required for non-dry-run destructive operations.
+- Use `--dry-run` to validate configuration and disk plans without touching the disk.
 
 ---
 
