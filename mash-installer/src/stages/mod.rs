@@ -8,10 +8,17 @@ pub mod stage_02_internet_wait;
 pub mod stage_03_fail2ban_lite;
 pub mod stage_03_stage_starship_toml;
 pub mod stage_05_fonts_essential;
+pub mod stage_10_locale_uk;
+pub mod stage_11_snapper_init;
+pub mod stage_12_firewall_sane;
 pub mod stage_13_packages_core;
 pub mod stage_14_packages_dev;
 pub mod stage_15_packages_desktop;
+pub mod stage_17_brave_browser;
+pub mod stage_17_brave_default;
+pub mod stage_20_argon_one;
 pub mod stage_21_zsh_starship;
+pub mod stage_22_kde_screensaver_nuke;
 
 pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
     match stage {
@@ -24,10 +31,19 @@ pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
             stage_03_stage_starship_toml::run(args)
         }
         "05_fonts_essential" | "05-fonts-essential" => stage_05_fonts_essential::run(args),
+        "10_locale_uk" | "10-locale-uk" => stage_10_locale_uk::run(args),
+        "11_snapper_init" | "11-snapper-init" => stage_11_snapper_init::run(args),
+        "12_firewall_sane" | "12-firewall-sane" => stage_12_firewall_sane::run(args),
         "13_packages_core" | "13-packages-core" => stage_13_packages_core::run(args),
         "14_packages_dev" | "14-packages-dev" => stage_14_packages_dev::run(args),
         "15_packages_desktop" | "15-packages-desktop" => stage_15_packages_desktop::run(args),
+        "17_brave_browser" | "17-brave-browser" => stage_17_brave_browser::run(args),
+        "17_brave_default" | "17-brave-default" => stage_17_brave_default::run(args),
+        "20_argon_one" | "20-argon-one" => stage_20_argon_one::run(args),
         "21_zsh_starship" | "21-zsh-starship" => stage_21_zsh_starship::run(args),
+        "22_kde_screensaver_nuke" | "22-kde-screensaver-nuke" => {
+            stage_22_kde_screensaver_nuke::run(args)
+        }
         _ => Err(anyhow!("unknown stage: {stage}")),
     }
 }
