@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 
+pub mod package_management;
 pub mod stage_00_write_config_txt;
 pub mod stage_01_stage_bootstrap;
 pub mod stage_02_early_ssh;
@@ -7,6 +8,9 @@ pub mod stage_02_internet_wait;
 pub mod stage_03_fail2ban_lite;
 pub mod stage_03_stage_starship_toml;
 pub mod stage_05_fonts_essential;
+pub mod stage_13_packages_core;
+pub mod stage_14_packages_dev;
+pub mod stage_15_packages_desktop;
 
 pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
     match stage {
@@ -19,6 +23,9 @@ pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
             stage_03_stage_starship_toml::run(args)
         }
         "05_fonts_essential" | "05-fonts-essential" => stage_05_fonts_essential::run(args),
+        "13_packages_core" | "13-packages-core" => stage_13_packages_core::run(args),
+        "14_packages_dev" | "14-packages-dev" => stage_14_packages_dev::run(args),
+        "15_packages_desktop" | "15-packages-desktop" => stage_15_packages_desktop::run(args),
         _ => Err(anyhow!("unknown stage: {stage}")),
     }
 }
