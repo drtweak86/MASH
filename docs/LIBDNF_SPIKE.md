@@ -15,7 +15,7 @@ These provide the headers (`libdnf`) and `libclang` needed by `bindgen`.
 
 ## POC Crate
 
-`crates/libdnf-sys-poc` is a minimal sys crate that:
+`crates/libdnf-sys` is a minimal sys crate that:
 
 - Uses `pkg-config` to locate `libdnf` headers.
 - Runs `bindgen` in `build.rs`.

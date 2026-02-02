@@ -4,3 +4,7 @@
 #![allow(clippy::all)]
 
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+
+pub fn bindings_marker() -> &'static str {
+    "libdnf-sys-bindings"
+}

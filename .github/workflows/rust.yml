@@ -41,7 +41,7 @@ jobs:
         working-directory: mash-installer
         run: cargo test
 
-  libdnf_poc:
+  libdnf_feature:
     runs-on: ubuntu-latest
     container: fedora:40
 
@@ -70,8 +70,11 @@ jobs:
           workspaces: |
             . -> target
 
-      - name: Build libdnf POC (x86_64)
-        run: cargo check -p libdnf-sys-poc --target x86_64-unknown-linux-gnu
+      - name: Build libdnf sys crate (x86_64)
+        run: cargo check -p libdnf-sys --target x86_64-unknown-linux-gnu
 
-      - name: Build libdnf POC (aarch64)
-        run: cargo check -p libdnf-sys-poc --target aarch64-unknown-linux-gnu
+      - name: Build libdnf sys crate (aarch64)
+        run: cargo check -p libdnf-sys --target aarch64-unknown-linux-gnu
+
+      - name: Build mash-core with libdnf feature
+        run: cargo test -p mash-core --features libdnf --all-targets

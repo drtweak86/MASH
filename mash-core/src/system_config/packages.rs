@@ -71,17 +71,57 @@ fn run_command(spec: &CommandSpec) -> Result<()> {
 }
 
 #[cfg(feature = "libdnf")]
-#[derive(Debug, Default)]
-pub struct LibDnfManager;
+pub trait LibDnfBackend {
+    fn install(&self, pkgs: &[String]) -> Result<()>;
+    fn update(&self) -> Result<()>;
+}
 
 #[cfg(feature = "libdnf")]
-impl PackageManager for LibDnfManager {
-    fn install(&self, _pkgs: &[String]) -> Result<()> {
-        Err(anyhow!("libdnf support not implemented"))
+pub struct LibDnfPackageManager<B: LibDnfBackend> {
+    backend: B,
+}
+
+#[cfg(feature = "libdnf")]
+impl<B: LibDnfBackend> LibDnfPackageManager<B> {
+    pub fn new(backend: B) -> Self {
+        Self { backend }
+    }
+}
+
+#[cfg(feature = "libdnf")]
+impl<B: LibDnfBackend> PackageManager for LibDnfPackageManager<B> {
+    fn install(&self, pkgs: &[String]) -> Result<()> {
+        if pkgs.is_empty() {
+            return Ok(());
+        }
+        self.backend.install(pkgs)
     }
 
     fn update(&self) -> Result<()> {
-        Err(anyhow!("libdnf support not implemented"))
+        self.backend.update()
+    }
+}
+
+#[cfg(feature = "libdnf")]
+#[derive(Debug, Default)]
+pub struct RealLibDnfBackend;
+
+#[cfg(feature = "libdnf")]
+impl RealLibDnfBackend {
+    pub fn new() -> Self {
+        let _ = libdnf_sys::bindings_marker();
+        Self
+    }
+}
+
+#[cfg(feature = "libdnf")]
+impl LibDnfBackend for RealLibDnfBackend {
+    fn install(&self, _pkgs: &[String]) -> Result<()> {
+        Err(anyhow!("libdnf backend not yet wired"))
+    }
+
+    fn update(&self) -> Result<()> {
+        Err(anyhow!("libdnf backend not yet wired"))
     }
 }
 
@@ -109,5 +149,57 @@ mod tests {
         let mgr = DnfShell::new(true);
         mgr.install(&["vim".to_string()]).unwrap();
         mgr.update().unwrap();
+    }
+}
+
+#[cfg(all(test, feature = "libdnf"))]
+mod libdnf_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct MockBackend {
+        installs: Arc<Mutex<Vec<Vec<String>>>>,
+        updates: Arc<Mutex<u32>>,
+    }
+
+    impl LibDnfBackend for MockBackend {
+        fn install(&self, pkgs: &[String]) -> Result<()> {
+            self.installs.lock().unwrap().push(pkgs.to_vec());
+            Ok(())
+        }
+
+        fn update(&self) -> Result<()> {
+            let mut count = self.updates.lock().unwrap();
+            *count += 1;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn libdnf_manager_calls_backend() {
+        let backend = MockBackend::default();
+        let manager = LibDnfPackageManager::new(backend.clone());
+
+        manager
+            .install(&["vim".to_string(), "git".to_string()])
+            .unwrap();
+        manager.update().unwrap();
+
+        let installs = backend.installs.lock().unwrap();
+        assert_eq!(installs.len(), 1);
+        assert_eq!(installs[0], vec!["vim".to_string(), "git".to_string()]);
+        assert_eq!(*backend.updates.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn libdnf_manager_skips_empty_install() {
+        let backend = MockBackend::default();
+        let manager = LibDnfPackageManager::new(backend.clone());
+
+        manager.install(&[]).unwrap();
+
+        let installs = backend.installs.lock().unwrap();
+        assert!(installs.is_empty());
     }
 }

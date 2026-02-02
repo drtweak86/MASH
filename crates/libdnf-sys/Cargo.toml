@@ -1,5 +1,5 @@
 [package]
-name = "libdnf-sys-poc"
+name = "libdnf-sys"
 version = "0.1.0"
 edition = "2021"
 publish = false
