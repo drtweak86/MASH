@@ -157,6 +157,9 @@ pub fn run() -> anyhow::Result<()> {
             format_btrfs,
             package,
             kernel_fix,
+            kernel_fix_root,
+            mountinfo_path,
+            by_uuid_path,
             reboots,
         }) => {
             let mounts = mount
@@ -174,6 +177,9 @@ pub fn run() -> anyhow::Result<()> {
                 format_btrfs: format_btrfs.clone(),
                 packages: package.clone(),
                 kernel_fix: *kernel_fix,
+                kernel_fix_root: kernel_fix_root.clone(),
+                mountinfo_path: mountinfo_path.clone(),
+                by_uuid_path: by_uuid_path.clone(),
                 reboot_count: *reboots,
             };
 

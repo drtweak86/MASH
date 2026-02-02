@@ -10,6 +10,7 @@ pub struct StageDefinition<'a> {
 pub struct StageRunner {
     state_path: PathBuf,
     dry_run: bool,
+    persist: bool,
 }
 
 impl StageRunner {
@@ -17,6 +18,15 @@ impl StageRunner {
         Self {
             state_path,
             dry_run,
+            persist: true,
+        }
+    }
+
+    pub fn new_with_persist(state_path: PathBuf, dry_run: bool, persist: bool) -> Self {
+        Self {
+            state_path,
+            dry_run,
+            persist,
         }
     }
 
@@ -29,12 +39,16 @@ impl StageRunner {
                 continue;
             }
             state.set_current(stage.name);
-            save_state_atomic(&self.state_path, &state)?;
+            if self.persist {
+                save_state_atomic(&self.state_path, &state)?;
+            }
 
             (stage.run)(self.dry_run)?;
 
             state.mark_completed(stage.name);
-            save_state_atomic(&self.state_path, &state)?;
+            if self.persist {
+                save_state_atomic(&self.state_path, &state)?;
+            }
         }
 
         Ok(state)

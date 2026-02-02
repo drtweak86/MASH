@@ -1,4 +1,6 @@
 use crate::stage_runner::{StageDefinition, StageRunner};
+use crate::system_config::packages::PackageManager;
+use crate::{boot_config, disk_ops, system_config};
 use anyhow::Result;
 use std::fmt;
 use std::path::PathBuf;
@@ -15,6 +17,9 @@ pub struct InstallConfig {
     pub format_btrfs: Vec<String>,
     pub packages: Vec<String>,
     pub kernel_fix: bool,
+    pub kernel_fix_root: Option<PathBuf>,
+    pub mountinfo_path: Option<PathBuf>,
+    pub by_uuid_path: Option<PathBuf>,
     pub reboot_count: u32,
 }
 
@@ -84,7 +89,7 @@ pub fn build_plan(cfg: &InstallConfig) -> InstallPlan {
         StagePlan {
             name: "Kernel fix check",
             description: if cfg.kernel_fix {
-                "USB-root alignment enabled".to_string()
+                "USB-root alignment enabled (paths required)".to_string()
             } else {
                 "Skipped".to_string()
             },
@@ -99,6 +104,9 @@ pub fn build_plan(cfg: &InstallConfig) -> InstallPlan {
 
 pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
     let plan = build_plan(cfg);
+    if cfg.execute && !cfg.confirmed {
+        anyhow::bail!("Execution requires explicit confirmation");
+    }
     let stage_defs = plan
         .stages
         .clone()
@@ -119,8 +127,58 @@ pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
         })
         .collect::<Vec<_>>();
 
-    let runner = StageRunner::new(cfg.state_path.clone(), cfg.dry_run);
+    let runner = if cfg.execute {
+        StageRunner::new(cfg.state_path.clone(), cfg.dry_run)
+    } else {
+        StageRunner::new_with_persist(cfg.state_path.clone(), cfg.dry_run, false)
+    };
     let _ = runner.run(&stage_defs)?;
+
+    if !cfg.execute {
+        return Ok(plan);
+    }
+
+    if cfg.dry_run {
+        return Ok(plan);
+    }
+
+    let format_opts = disk_ops::format::FormatOptions::new(cfg.dry_run, cfg.confirmed);
+    for device in &cfg.format_ext4 {
+        disk_ops::format::format_ext4(PathBuf::from(device).as_path(), &format_opts)?;
+    }
+    for device in &cfg.format_btrfs {
+        disk_ops::format::format_btrfs(PathBuf::from(device).as_path(), &format_opts)?;
+    }
+
+    for spec in &cfg.mounts {
+        let target = PathBuf::from(&spec.target);
+        std::fs::create_dir_all(&target)?;
+        disk_ops::mounts::mount_device(
+            PathBuf::from(&spec.device).as_path(),
+            &target,
+            spec.fstype.as_deref(),
+            nix::mount::MsFlags::empty(),
+            cfg.dry_run,
+        )?;
+    }
+
+    let pkg_mgr = system_config::packages::DnfShell::new(cfg.dry_run);
+    pkg_mgr.update()?;
+    pkg_mgr.install(&cfg.packages)?;
+
+    if cfg.kernel_fix {
+        if let (Some(root), Some(mountinfo), Some(by_uuid)) = (
+            cfg.kernel_fix_root.as_ref(),
+            cfg.mountinfo_path.as_ref(),
+            cfg.by_uuid_path.as_ref(),
+        ) {
+            let mountinfo_content = std::fs::read_to_string(mountinfo)?;
+            boot_config::usb_root_fix::apply_usb_root_fix(root, &mountinfo_content, by_uuid)?;
+        } else {
+            log::warn!("Kernel fix enabled but required paths are missing.");
+        }
+    }
+
     Ok(plan)
 }
 
@@ -150,6 +208,9 @@ mod tests {
             format_btrfs: Vec::new(),
             packages: Vec::new(),
             kernel_fix: false,
+            kernel_fix_root: None,
+            mountinfo_path: None,
+            by_uuid_path: None,
             reboot_count: 1,
         };
         let plan = build_plan(&cfg);

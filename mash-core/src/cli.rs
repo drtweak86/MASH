@@ -180,6 +180,18 @@ pub enum Command {
         #[arg(long)]
         kernel_fix: bool,
 
+        /// Root path for kernel USB-root fix
+        #[arg(long)]
+        kernel_fix_root: Option<PathBuf>,
+
+        /// Path to mountinfo for kernel USB-root fix
+        #[arg(long)]
+        mountinfo_path: Option<PathBuf>,
+
+        /// Path to /dev/disk/by-uuid for kernel USB-root fix
+        #[arg(long)]
+        by_uuid_path: Option<PathBuf>,
+
         /// Expected reboot count
         #[arg(long, default_value_t = 1)]
         reboots: u32,
