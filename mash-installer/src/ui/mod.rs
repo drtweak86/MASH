@@ -4,6 +4,7 @@ use std::io::IsTerminal;
 
 pub mod confirm;
 pub mod style;
+pub mod validation;
 
 pub fn ensure_interactive_terminal() -> anyhow::Result<()> {
     if std::io::stdout().is_terminal() {

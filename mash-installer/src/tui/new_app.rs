@@ -5,6 +5,7 @@
 use crate::cli::PartitionScheme;
 use crate::locale::{LocaleConfig, LOCALES};
 use crate::tui::flash_config::{FlashConfig, ImageSource};
+use crate::ui::validation;
 use clap::ValueEnum;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers}; // New import for KeyEvent
 use std::path::PathBuf;
@@ -856,6 +857,10 @@ impl App {
             }
             KeyCode::Enter => {
                 if self.confirmation_input == "FLASH" {
+                    if let Err(message) = self.validate_flash_inputs() {
+                        self.error_message = Some(message);
+                        return InputResult::Continue;
+                    }
                     match validate_partition_plan(&self.build_partition_plan()) {
                         Ok(()) => {
                             self.error_message = None;
@@ -1324,6 +1329,39 @@ impl App {
             .unwrap_or_default()
     }
 
+    fn validate_flash_inputs(&self) -> std::result::Result<(), String> {
+        let disk = self
+            .disks
+            .get(self.disk_index)
+            .map(|disk| disk.path.as_str())
+            .unwrap_or("/dev/sda");
+        validation::validate_disk_path(disk)?;
+
+        if !self.requires_fedora_download() {
+            let image_path = self
+                .downloaded_image_path
+                .clone()
+                .or_else(|| {
+                    self.images
+                        .get(self.image_index)
+                        .map(|image| image.path.clone())
+                })
+                .unwrap_or_else(|| PathBuf::from(self.image_source_path.clone()));
+            validation::validate_image_path(&image_path)?;
+        }
+
+        if !self.requires_uefi_download() {
+            let uefi_path = self
+                .downloaded_uefi_dir
+                .clone()
+                .or_else(|| self.uefi_dirs.get(self.uefi_index).cloned())
+                .unwrap_or_else(|| PathBuf::from(self.uefi_source_path.clone()));
+            validation::validate_uefi_dir(&uefi_path)?;
+        }
+
+        Ok(())
+    }
+
     /// Build flash configuration from current app state
     pub fn build_flash_config(&self) -> Option<FlashConfig> {
         // These values will eventually come from user selections in the TUI.
@@ -1533,6 +1571,8 @@ fn parse_size_mib(raw: &str) -> Result<u64, String> {
 mod tests {
     use super::*;
     use crossterm::event::{KeyEventKind, KeyEventState, KeyModifiers};
+    use std::fs;
+    use tempfile::tempdir;
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent {
@@ -1620,7 +1660,32 @@ mod tests {
 
     #[test]
     fn confirmation_requires_flash() {
+        let temp = tempdir().expect("tempdir");
+        let image_path = temp.path().join("fedora.raw");
+        fs::write(&image_path, b"").expect("write image file");
+        let uefi_dir = temp.path().join("uefi");
+        fs::create_dir_all(&uefi_dir).expect("create uefi dir");
+        fs::write(uefi_dir.join("RPI_EFI.fd"), b"").expect("write uefi file");
+
         let mut app = App::new();
+        app.disks = vec![DiskOption {
+            label: "Test Disk".to_string(),
+            path: "/dev/null".to_string(),
+            size: "1 GB".to_string(),
+            model: None,
+            removable: true,
+            is_boot: false,
+        }];
+        app.disk_index = 0;
+        app.images = vec![ImageOption {
+            label: "Test Image".to_string(),
+            version: "test".to_string(),
+            edition: "test".to_string(),
+            path: image_path,
+        }];
+        app.image_index = 0;
+        app.uefi_dirs = vec![uefi_dir];
+        app.uefi_index = 0;
         app.current_step_type = InstallStepType::Confirmation;
         for ch in "FLAS".chars() {
             app.handle_input(key(KeyCode::Char(ch)));
