@@ -126,4 +126,74 @@ pub enum Command {
         #[arg(long, default_value = "KDE")]
         image_edition: String,
     },
+
+    /// 🧭 Stage starship.toml into the assets directory
+    StageStarshipToml {
+        /// Path to staging directory
+        #[arg(long)]
+        stage_dir: PathBuf,
+
+        /// Path to starship.toml
+        #[arg(long)]
+        starship_toml: PathBuf,
+    },
+
+    /// 🧪 Run unified installer pipeline (dry-run by default)
+    Install {
+        /// Persisted state file path
+        #[arg(long, default_value = "/var/lib/mash/state.json")]
+        state: PathBuf,
+
+        /// Enable dry-run mode (no changes)
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Execute plan (requires --confirm)
+        #[arg(long)]
+        execute: bool,
+
+        /// Confirm destructive actions
+        #[arg(long)]
+        confirm: bool,
+
+        /// Target disk device (for planning)
+        #[arg(long)]
+        disk: Option<String>,
+
+        /// Mount spec: device:mountpoint[:fstype]
+        #[arg(long)]
+        mount: Vec<String>,
+
+        /// ext4 format target device
+        #[arg(long)]
+        format_ext4: Vec<String>,
+
+        /// btrfs format target device
+        #[arg(long)]
+        format_btrfs: Vec<String>,
+
+        /// Packages to install
+        #[arg(long)]
+        package: Vec<String>,
+
+        /// Include kernel USB-root fix in plan
+        #[arg(long)]
+        kernel_fix: bool,
+
+        /// Root path for kernel USB-root fix
+        #[arg(long)]
+        kernel_fix_root: Option<PathBuf>,
+
+        /// Path to mountinfo for kernel USB-root fix
+        #[arg(long)]
+        mountinfo_path: Option<PathBuf>,
+
+        /// Path to /dev/disk/by-uuid for kernel USB-root fix
+        #[arg(long)]
+        by_uuid_path: Option<PathBuf>,
+
+        /// Expected reboot count
+        #[arg(long, default_value_t = 1)]
+        reboots: u32,
+    },
 }

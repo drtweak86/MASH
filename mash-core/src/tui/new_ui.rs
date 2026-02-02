@@ -317,6 +317,17 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
                 .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
             push_options(&mut items, &app.first_boot_options, app.first_boot_index);
         }
+        InstallStepType::PlanReview => {
+            items.push("🧾 Execution plan:".to_string());
+            items.push("Review exactly what will happen next.".to_string());
+            for line in build_plan_lines(app) {
+                items.push(line);
+            }
+            if app.dry_run {
+                items.push("Mode: DRY-RUN (no disk writes)".to_string());
+            }
+            items.push("Press Enter to proceed to confirmation • Esc to go back.".to_string());
+        }
         InstallStepType::Confirmation => {
             items.push("✅ Review configuration summary:".to_string());
             items.push("Type FLASH to begin execution.".to_string());
@@ -540,6 +551,21 @@ fn push_options(items: &mut Vec<String>, options: &[String], selected: usize) {
     }
 }
 
+fn build_plan_lines(app: &crate::tui::new_app::App) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(disk) = app.disks.get(app.disk_index) {
+        lines.push(format!("Disk: {} ({})", disk.path, disk.size));
+    } else {
+        lines.push("Disk: <not selected>".to_string());
+    }
+    lines.push("Mounts: /boot/efi, /boot, / (root), /data".to_string());
+    lines.push("Formats: EFI=fat32, BOOT=ext4, ROOT=btrfs, DATA=btrfs".to_string());
+    lines.push("Packages: (not selected)".to_string());
+    lines.push("Kernel fix: USB-root alignment check".to_string());
+    lines.push("Reboots: 1".to_string());
+    lines
+}
+
 fn expected_actions(step: InstallStepType) -> String {
     match step {
         InstallStepType::BackupConfirmation => "Up/Down, Y/N, Enter, Esc, q".to_string(),
@@ -556,6 +582,7 @@ fn expected_actions(step: InstallStepType) -> String {
         InstallStepType::PartitionCustomize => {
             "Up/Down/Tab, Type, Backspace, R, Enter, Esc, q".to_string()
         }
+        InstallStepType::PlanReview => "Enter, Esc, q".to_string(),
         InstallStepType::Confirmation => "Type FLASH, Enter, Esc, q".to_string(),
         InstallStepType::DiskSelection
         | InstallStepType::ImageSelection
@@ -582,6 +609,20 @@ fn format_disk_entry(disk: &crate::tui::new_app::DiskOption) -> String {
         format!(" - {}", tags.join(", "))
     };
     format!("{} - {} - {}{}", disk.path, disk.size, model, tag_str)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plan_review_renders_summary() {
+        let mut app = crate::tui::new_app::App::new_with_flags(true);
+        app.current_step_type = crate::tui::new_app::InstallStepType::PlanReview;
+        let dump = dump_step(&app);
+        assert!(dump.contains("Execution plan"));
+        assert!(dump.contains("Reboots"));
+    }
 }
 
 fn status_message(app: &App, progress_state: &ProgressState) -> String {
