@@ -35,6 +35,20 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    if cli.dry_run && cli.command.is_none() {
+        log::info!("DRY RUN: Executing disk operations sequence.");
+        let disks = disk_ops::probe_disks(true)?;
+        if let Some(disk) = disks.first() {
+            let plan = disk_ops::plan_partitioning(disk, true)?;
+            disk_ops::format_partitions(&plan, true)?;
+            disk_ops::mount_partitions(&plan, true)?;
+            disk_ops::verify_disk_operations(&plan, true)?;
+        } else {
+            log::info!("DRY RUN: No disks found to plan.");
+        }
+        return Ok(());
+    }
+
     match &cli.command {
         // No subcommand = launch TUI wizard (default)
         None => {

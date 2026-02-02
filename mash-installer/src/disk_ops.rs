@@ -1,4 +1,4 @@
-use std::error::Error;
+use anyhow::Result;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiskInfo {
@@ -38,7 +38,7 @@ pub enum FileSystemType {
     Xfs,
 }
 
-pub fn probe_disks(dry_run: bool) -> Result<Vec<DiskInfo>, Box<dyn Error>> {
+pub fn probe_disks(dry_run: bool) -> Result<Vec<DiskInfo>> {
     if dry_run {
         log::info!("DRY RUN: Simulating disk probing.");
         return Ok(vec![
@@ -58,7 +58,7 @@ pub fn probe_disks(dry_run: bool) -> Result<Vec<DiskInfo>, Box<dyn Error>> {
     unimplemented!("Real disk probing is not implemented yet");
 }
 
-pub fn plan_partitioning(disk: &DiskInfo, dry_run: bool) -> Result<PartitionPlan, Box<dyn Error>> {
+pub fn plan_partitioning(disk: &DiskInfo, dry_run: bool) -> Result<PartitionPlan> {
     if dry_run {
         log::info!("DRY RUN: Proposing partition scheme for {}.", disk.id);
         let partitions = vec![
@@ -92,7 +92,7 @@ pub fn plan_partitioning(disk: &DiskInfo, dry_run: bool) -> Result<PartitionPlan
     unimplemented!("Real partition planning is not implemented yet");
 }
 
-pub fn format_partitions(plan: &PartitionPlan, dry_run: bool) -> Result<(), Box<dyn Error>> {
+pub fn format_partitions(plan: &PartitionPlan, dry_run: bool) -> Result<()> {
     if dry_run {
         for partition in &plan.partitions {
             log::info!(
@@ -106,7 +106,7 @@ pub fn format_partitions(plan: &PartitionPlan, dry_run: bool) -> Result<(), Box<
     unimplemented!("Real partition formatting is not implemented yet");
 }
 
-pub fn mount_partitions(plan: &PartitionPlan, dry_run: bool) -> Result<(), Box<dyn Error>> {
+pub fn mount_partitions(plan: &PartitionPlan, dry_run: bool) -> Result<()> {
     if dry_run {
         for partition in &plan.partitions {
             if let Some(mount_point) = partition.mount_point.as_ref() {
@@ -123,7 +123,7 @@ pub fn mount_partitions(plan: &PartitionPlan, dry_run: bool) -> Result<(), Box<d
     unimplemented!("Real partition mounting is not implemented yet");
 }
 
-pub fn verify_disk_operations(plan: &PartitionPlan, dry_run: bool) -> Result<(), Box<dyn Error>> {
+pub fn verify_disk_operations(plan: &PartitionPlan, dry_run: bool) -> Result<()> {
     if dry_run {
         log::info!("DRY RUN: Verifying disk operations for {:?}.", plan.disk_id);
         return Ok(());
