@@ -88,3 +88,56 @@ fn format_partitions_non_dry_run_panics() {
 
     let _ = disk_ops::format_partitions(&plan, false);
 }
+
+#[test]
+fn mount_partitions_dry_run_succeeds() {
+    let plan = disk_ops::PartitionPlan {
+        disk_id: "/dev/sdz".to_string(),
+        partitions: vec![
+            disk_ops::PartitionSpec {
+                size_bytes: 512 * 1024 * 1024,
+                filesystem: disk_ops::FileSystemType::Fat32,
+                mount_point: Some("/boot/efi".to_string()),
+            },
+            disk_ops::PartitionSpec {
+                size_bytes: 0,
+                filesystem: disk_ops::FileSystemType::Ext4,
+                mount_point: None,
+            },
+        ],
+    };
+
+    disk_ops::mount_partitions(&plan, true).expect("dry run mount should succeed");
+}
+
+#[test]
+#[should_panic(expected = "Real partition mounting is not implemented yet")]
+fn mount_partitions_non_dry_run_panics() {
+    let plan = disk_ops::PartitionPlan {
+        disk_id: "/dev/sdz".to_string(),
+        partitions: vec![],
+    };
+
+    let _ = disk_ops::mount_partitions(&plan, false);
+}
+
+#[test]
+fn verify_disk_operations_dry_run_succeeds() {
+    let plan = disk_ops::PartitionPlan {
+        disk_id: "/dev/sdz".to_string(),
+        partitions: vec![],
+    };
+
+    disk_ops::verify_disk_operations(&plan, true).expect("dry run verification should succeed");
+}
+
+#[test]
+#[should_panic(expected = "Real disk verification is not implemented yet")]
+fn verify_disk_operations_non_dry_run_panics() {
+    let plan = disk_ops::PartitionPlan {
+        disk_id: "/dev/sdz".to_string(),
+        partitions: vec![],
+    };
+
+    let _ = disk_ops::verify_disk_operations(&plan, false);
+}

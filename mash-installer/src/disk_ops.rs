@@ -105,3 +105,29 @@ pub fn format_partitions(plan: &PartitionPlan, dry_run: bool) -> Result<(), Box<
 
     unimplemented!("Real partition formatting is not implemented yet");
 }
+
+pub fn mount_partitions(plan: &PartitionPlan, dry_run: bool) -> Result<(), Box<dyn Error>> {
+    if dry_run {
+        for partition in &plan.partitions {
+            if let Some(mount_point) = partition.mount_point.as_ref() {
+                log::info!(
+                    "DRY RUN: Mounting {:?} to {:?}.",
+                    partition.filesystem,
+                    mount_point
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    unimplemented!("Real partition mounting is not implemented yet");
+}
+
+pub fn verify_disk_operations(plan: &PartitionPlan, dry_run: bool) -> Result<(), Box<dyn Error>> {
+    if dry_run {
+        log::info!("DRY RUN: Verifying disk operations for {:?}.", plan.disk_id);
+        return Ok(());
+    }
+
+    unimplemented!("Real disk verification is not implemented yet");
+}
