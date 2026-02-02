@@ -16,7 +16,9 @@ mod flash;
 mod locale;
 mod logging;
 mod preflight;
+pub mod stage_runner;
 mod stages;
+pub mod state_manager;
 pub mod system_config;
 mod tui;
 
