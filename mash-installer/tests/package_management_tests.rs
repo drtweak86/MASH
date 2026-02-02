@@ -1,6 +1,7 @@
 use mash_installer::stages::package_management::install_packages;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::sync::{Mutex, OnceLock};
 use tempfile::TempDir;
 
 const DNF_BIN_ENV: &str = "MASH_DNF_BIN";
@@ -35,8 +36,14 @@ fn write_executable(path: &std::path::Path, content: &str) {
     fs::set_permissions(path, perms).expect("set perms");
 }
 
+fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 #[test]
 fn install_packages_passes_expected_args() {
+    let _lock = env_lock().lock().expect("env lock");
     let temp_dir = TempDir::new().expect("temp dir");
     let log_path = temp_dir.path().join("args.log");
     let script_path = temp_dir.path().join("dnf-mock");
@@ -69,6 +76,7 @@ fn install_packages_passes_expected_args() {
 
 #[test]
 fn install_packages_ignores_nonzero_status() {
+    let _lock = env_lock().lock().expect("env lock");
     let temp_dir = TempDir::new().expect("temp dir");
     let script_path = temp_dir.path().join("dnf-fail");
 

@@ -11,6 +11,7 @@ pub mod stage_05_fonts_essential;
 pub mod stage_13_packages_core;
 pub mod stage_14_packages_dev;
 pub mod stage_15_packages_desktop;
+pub mod stage_21_zsh_starship;
 
 pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
     match stage {
@@ -26,6 +27,7 @@ pub fn run_stage(stage: &str, args: &[String]) -> Result<()> {
         "13_packages_core" | "13-packages-core" => stage_13_packages_core::run(args),
         "14_packages_dev" | "14-packages-dev" => stage_14_packages_dev::run(args),
         "15_packages_desktop" | "15-packages-desktop" => stage_15_packages_desktop::run(args),
+        "21_zsh_starship" | "21-zsh-starship" => stage_21_zsh_starship::run(args),
         _ => Err(anyhow!("unknown stage: {stage}")),
     }
 }
