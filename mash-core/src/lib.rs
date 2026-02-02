@@ -17,6 +17,7 @@ mod locale;
 mod logging;
 mod preflight;
 mod stages;
+pub mod system_config;
 mod tui;
 
 pub fn run() -> anyhow::Result<()> {
