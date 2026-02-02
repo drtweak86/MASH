@@ -1,9 +1,11 @@
+use crate::preflight::{PreflightChecks, PreflightConfig};
 use crate::stage_runner::{StageDefinition, StageRunner};
 use crate::system_config::packages::PackageManager;
 use crate::{boot_config, disk_ops, system_config};
 use anyhow::Result;
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct InstallConfig {
@@ -107,12 +109,16 @@ pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
     if cfg.execute && !cfg.confirmed {
         anyhow::bail!("Execution requires explicit confirmation");
     }
+    let preflight_cfg = build_preflight_config(cfg);
+    let preflight_checks = Arc::new(PreflightChecks::default());
     let stage_defs = plan
         .stages
         .clone()
         .into_iter()
         .map(|stage| {
             let name = stage.name;
+            let preflight_cfg = preflight_cfg.clone();
+            let preflight_checks = Arc::clone(&preflight_checks);
             StageDefinition {
                 name,
                 run: Box::new(move |dry_run| {
@@ -120,6 +126,9 @@ pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
                         log::info!("DRY RUN: {}", name);
                     } else {
                         log::info!("Stage: {}", name);
+                    }
+                    if name == "Preflight" {
+                        return crate::preflight::run_with(&preflight_cfg, &preflight_checks);
                     }
                     Ok(())
                 }),
@@ -180,6 +189,29 @@ pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
     }
 
     Ok(plan)
+}
+
+fn build_preflight_config(cfg: &InstallConfig) -> PreflightConfig {
+    PreflightConfig {
+        disk: cfg.disk.as_ref().map(PathBuf::from),
+        require_network: !cfg.packages.is_empty(),
+        required_binaries: required_binaries(cfg),
+        ..Default::default()
+    }
+}
+
+fn required_binaries(cfg: &InstallConfig) -> Vec<String> {
+    let mut bins = Vec::new();
+    if !cfg.packages.is_empty() {
+        bins.push("dnf".to_string());
+    }
+    if !cfg.format_ext4.is_empty() {
+        bins.push("mkfs.ext4".to_string());
+    }
+    if !cfg.format_btrfs.is_empty() {
+        bins.push("mkfs.btrfs".to_string());
+    }
+    bins
 }
 
 impl fmt::Display for InstallPlan {

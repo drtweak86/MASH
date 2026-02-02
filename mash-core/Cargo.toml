@@ -21,9 +21,10 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 zip = "0.6"
 url = "2.5"
 zbus = { version = "4.4", features = ["blocking"] }
+libdnf-sys = { path = "../crates/libdnf-sys", optional = true }
 
 [features]
-libdnf = []
+libdnf = ["libdnf-sys"]
 
 [dev-dependencies]
 tempfile = "3"

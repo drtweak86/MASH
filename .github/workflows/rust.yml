@@ -40,3 +40,41 @@ jobs:
       - name: Test
         working-directory: mash-installer
         run: cargo test
+
+  libdnf_feature:
+    runs-on: ubuntu-latest
+    container: fedora:40
+
+    steps:
+      - name: Install system dependencies
+        run: |
+          dnf install -y \
+            clang \
+            clang-devel \
+            git \
+            libdnf-devel \
+            llvm-devel \
+            pkgconf-pkg-config
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+
+      - name: Build libdnf sys crate (x86_64)
+        run: cargo check -p libdnf-sys --target x86_64-unknown-linux-gnu
+
+      - name: Build libdnf sys crate (aarch64)
+        run: cargo check -p libdnf-sys --target aarch64-unknown-linux-gnu
+
+      - name: Build mash-core with libdnf feature
+        run: cargo test -p mash-core --features libdnf --all-targets
