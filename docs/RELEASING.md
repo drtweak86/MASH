@@ -7,6 +7,7 @@ This project uses Rust tooling for release automation. The authoritative workflo
 - A clean working tree (unless `--allow-dirty` is explicitly used).
 - Cargo.toml version values must be strict SemVer (`X.Y.Z`).
 - Tags must be `vX.Y.Z` with no extra text.
+- Follow [DOJO.md](DOJO.md) for commit messaging, branching, and safety rules.
 
 ## Standard Release Flow
 

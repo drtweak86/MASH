@@ -60,6 +60,7 @@ This installer **DESTROYS THE TARGET DISK**.
 - There is no undo
 
 You will be asked to confirm before any destructive action. **Double-check the device name every time.**
+In the TUI you must type confirmation phrases (e.g., `DESTROY`, then `FLASH`). In CLI mode you must pass `--yes-i-know`.
 
 ---
 
@@ -169,9 +170,3 @@ See [LICENSE](LICENSE) for details.
 ---
 
 > *Anyone can cook. This one just boots cleanly.* 🐀
-# codex test
-# codex test
-# codex test
-# codex test
-# codex test
-# codex test
