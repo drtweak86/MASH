@@ -81,8 +81,9 @@ The TUI guides you through:
 2. Choosing image source (download or local)
 3. Selecting partition scheme (MBR recommended)
 4. Confirming you have backed up your data (required)
-5. Creating your first-boot user (no autologin)
-6. Final confirmation before flashing
+5. Typing explicit confirmation phrases (e.g., `DESTROY`, then `FLASH`)
+6. Creating your first-boot user (no autologin)
+7. Final confirmation before flashing
 
 Defaults: MBR scheme, EFI 1 GiB, BOOT 2 GiB, ROOT end 1800 GiB, DATA remainder.
 
@@ -105,6 +106,8 @@ This will:
 2. Download latest UEFI firmware
 3. Partition and format `/dev/sda`
 4. Install Fedora with UEFI boot
+
+CLI mode always requires `--yes-i-know` to proceed with destructive actions.
 
 ---
 

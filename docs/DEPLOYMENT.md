@@ -21,6 +21,12 @@ This keeps releases small, auditable, and reproducible.
 
 ---
 
+## 🥋 Development Principles
+
+Follow [DOJO.md](DOJO.md) for code guidelines, Git workflow, and destructive-action safeguards.
+
+---
+
 ## 🔧 Build Prerequisites
 
 ### Rust Toolchain
