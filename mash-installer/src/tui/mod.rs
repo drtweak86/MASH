@@ -18,6 +18,7 @@ pub use flash_config::{FlashConfig, ImageSource}; // Update the pub use statemen
 
 use crate::download;
 use crate::tui::progress::{Phase, ProgressUpdate};
+use crate::ui::style;
 use crate::{cli::Cli, errors::Result, flash};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -100,7 +101,8 @@ pub fn run_new_ui(
                             continue;
                         }
                         app.is_running = true;
-                        app.status_message = "⬇️ Starting downloads...".to_string();
+                        app.status_message =
+                            style::with(style::emoji::DOWNLOAD, "Starting downloads...");
                         let (tx, rx) = mpsc::channel();
                         flash_result_rx = Some(rx);
                         let cancel_flag = app.cancel_requested.clone();
@@ -132,7 +134,7 @@ pub fn run_new_ui(
                 .unwrap_or(false);
             if is_complete {
                 app.current_step_type = new_app::InstallStepType::Complete;
-                app.status_message = "🎉 Dry-run complete.".to_string();
+                app.status_message = style::with(style::emoji::PARTY, "Dry-run complete.");
             }
         }
 
@@ -145,11 +147,13 @@ pub fn run_new_ui(
                                 state.apply_update(ProgressUpdate::Error("Cancelled".to_string()));
                             }
                             app.error_message = Some("Download cancelled.".to_string());
-                            app.status_message = "🛑 Download cancelled.".to_string();
+                            app.status_message =
+                                style::with(style::emoji::CANCEL, "Download cancelled.");
                         } else {
                             app.downloaded_image_path = outcome.image_path;
                             app.downloaded_uefi_dir = outcome.uefi_dir;
-                            app.status_message = "✅ Downloads complete.".to_string();
+                            app.status_message =
+                                style::with(style::emoji::SUCCESS, "Downloads complete.");
                         }
                     }
                     Err(err) => {
@@ -159,13 +163,15 @@ pub fn run_new_ui(
                                 state.apply_update(ProgressUpdate::Error("Cancelled".to_string()));
                             }
                             app.error_message = Some("Execution cancelled.".to_string());
-                            app.status_message = "🛑 Execution cancelled.".to_string();
+                            app.status_message =
+                                style::with(style::emoji::CANCEL, "Execution cancelled.");
                         } else {
                             if let Ok(mut state) = app.progress_state.lock() {
                                 state.apply_update(ProgressUpdate::Error(msg.clone()));
                             }
                             app.error_message = Some(format!("Execution failed: {}", msg));
-                            app.status_message = "❌ Execution failed.".to_string();
+                            app.status_message =
+                                style::with(style::emoji::ERROR, "Execution failed.");
                         }
                     }
                 }
@@ -199,9 +205,10 @@ fn run_execution_pipeline(
 
     if config.image_source_selection == ImageSource::DownloadFedora {
         send(ProgressUpdate::PhaseStarted(Phase::DownloadImage));
-        send(ProgressUpdate::Status(
-            "⬇️ Downloading Fedora image...".to_string(),
-        ));
+        send(ProgressUpdate::Status(style::with(
+            style::emoji::DOWNLOAD,
+            "Downloading Fedora image...",
+        )));
         let images_dir = download_root.join("images");
         let mut stage = |msg: &str| {
             send(ProgressUpdate::Status(msg.to_string()));
@@ -232,7 +239,10 @@ fn run_execution_pipeline(
                 send(ProgressUpdate::PhaseCompleted(Phase::DownloadImage));
             }
             Err(err) => {
-                send(ProgressUpdate::Status("🧹 Cleaning up...".to_string()));
+                send(ProgressUpdate::Status(style::with(
+                    style::emoji::CLEANUP,
+                    "Cleaning up...",
+                )));
                 cleanup_fedora_artifacts(&images_dir, &config.image_version, &config.image_edition);
                 if err.to_string().to_lowercase().contains("cancel") {
                     send(ProgressUpdate::Error("Cancelled".to_string()));
@@ -252,9 +262,10 @@ fn run_execution_pipeline(
 
     if config.download_uefi_firmware {
         send(ProgressUpdate::PhaseStarted(Phase::DownloadUefi));
-        send(ProgressUpdate::Status(
-            "⬇️ Downloading UEFI bundle...".to_string(),
-        ));
+        send(ProgressUpdate::Status(style::with(
+            style::emoji::DOWNLOAD,
+            "Downloading UEFI bundle...",
+        )));
         let uefi_dir = download_root.join("uefi");
         let mut stage = |msg: &str| {
             send(ProgressUpdate::Status(msg.to_string()));
@@ -283,7 +294,10 @@ fn run_execution_pipeline(
                 send(ProgressUpdate::PhaseCompleted(Phase::DownloadUefi));
             }
             Err(err) => {
-                send(ProgressUpdate::Status("🧹 Cleaning up...".to_string()));
+                send(ProgressUpdate::Status(style::with(
+                    style::emoji::CLEANUP,
+                    "Cleaning up...",
+                )));
                 cleanup_uefi_artifacts(&uefi_dir);
                 if err.to_string().to_lowercase().contains("cancel") {
                     send(ProgressUpdate::Error("Cancelled".to_string()));
@@ -302,7 +316,10 @@ fn run_execution_pipeline(
     }
 
     if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
-        send(ProgressUpdate::Status("🧹 Cleaning up...".to_string()));
+        send(ProgressUpdate::Status(style::with(
+            style::emoji::CLEANUP,
+            "Cleaning up...",
+        )));
         if let Some(ref path) = downloaded_image {
             let _ = std::fs::remove_file(path);
         }

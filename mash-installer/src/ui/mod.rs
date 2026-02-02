@@ -2,6 +2,8 @@
 
 use std::io::IsTerminal;
 
+pub mod style;
+
 pub fn ensure_interactive_terminal() -> anyhow::Result<()> {
     if std::io::stdout().is_terminal() {
         return Ok(());
