@@ -17,6 +17,27 @@ impl DiskInfo {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartitionPlan {
+    pub disk_id: String,
+    pub partitions: Vec<PartitionSpec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartitionSpec {
+    pub size_bytes: u64,
+    pub filesystem: FileSystemType,
+    pub mount_point: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileSystemType {
+    Fat32,
+    Ext4,
+    Btrfs,
+    Xfs,
+}
+
 pub fn probe_disks(dry_run: bool) -> Result<Vec<DiskInfo>, Box<dyn Error>> {
     if dry_run {
         log::info!("DRY RUN: Simulating disk probing.");
@@ -35,4 +56,52 @@ pub fn probe_disks(dry_run: bool) -> Result<Vec<DiskInfo>, Box<dyn Error>> {
     }
 
     unimplemented!("Real disk probing is not implemented yet");
+}
+
+pub fn plan_partitioning(disk: &DiskInfo, dry_run: bool) -> Result<PartitionPlan, Box<dyn Error>> {
+    if dry_run {
+        log::info!("DRY RUN: Proposing partition scheme for {}.", disk.id);
+        let partitions = vec![
+            PartitionSpec {
+                size_bytes: 512 * 1024 * 1024,
+                filesystem: FileSystemType::Fat32,
+                mount_point: Some("/boot/efi".to_string()),
+            },
+            PartitionSpec {
+                size_bytes: 1024 * 1024 * 1024,
+                filesystem: FileSystemType::Ext4,
+                mount_point: Some("/boot".to_string()),
+            },
+            PartitionSpec {
+                size_bytes: 20 * 1024 * 1024 * 1024,
+                filesystem: FileSystemType::Ext4,
+                mount_point: Some("/".to_string()),
+            },
+            PartitionSpec {
+                size_bytes: 0,
+                filesystem: FileSystemType::Ext4,
+                mount_point: Some("/data".to_string()),
+            },
+        ];
+        return Ok(PartitionPlan {
+            disk_id: disk.id.clone(),
+            partitions,
+        });
+    }
+
+    unimplemented!("Real partition planning is not implemented yet");
+}
+
+pub fn format_partitions(plan: &PartitionPlan, dry_run: bool) -> Result<(), Box<dyn Error>> {
+    if dry_run {
+        for partition in &plan.partitions {
+            log::info!(
+                "DRY RUN: Formatting partition with {:?} filesystem.",
+                partition.filesystem
+            );
+        }
+        return Ok(());
+    }
+
+    unimplemented!("Real partition formatting is not implemented yet");
 }
