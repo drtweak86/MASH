@@ -31,7 +31,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     if let Some(stage) = cli.stage.as_deref() {
-        log::info!("🧩 Running stage: {}", stage);
+        log::info!("{} Running stage: {}", ui::style::emoji::ACTION, stage);
         stages::run_stage(stage, &cli.stage_arg)?;
         return Ok(());
     }
@@ -53,12 +53,12 @@ fn main() -> anyhow::Result<()> {
     match &cli.command {
         // No subcommand = launch TUI wizard (default)
         None => {
-            log::info!("🎉 Launching MASH TUI wizard...");
+            log::info!("{} Launching MASH TUI wizard...", ui::style::emoji::PARTY);
             tui::run(&cli, cli.watch, cli.dry_run)?;
         }
         // Preflight checks
         Some(cli::Command::Preflight) => {
-            log::info!("🔍 Running preflight checks...");
+            log::info!("{} Running preflight checks...", ui::style::emoji::SEARCH);
             preflight::run(cli.dry_run)?;
             return Ok(()); // Exit after preflight
         }
@@ -80,7 +80,7 @@ fn main() -> anyhow::Result<()> {
             image_version,
             image_edition,
         }) => {
-            log::info!("💾 Running flash in CLI mode...");
+            log::info!("{} Running flash in CLI mode...", ui::style::emoji::DISK);
 
             let mut final_image_path = image.clone();
             let mut final_uefi_dir = uefi_dir.clone();
@@ -88,14 +88,17 @@ fn main() -> anyhow::Result<()> {
             let downloads_dir = cli.mash_root.join("downloads");
 
             if *download_uefi {
-                log::info!("⬇️ Downloading UEFI firmware...");
+                log::info!(
+                    "{} Downloading UEFI firmware...",
+                    ui::style::emoji::DOWNLOAD
+                );
                 let uefi_dest_dir = downloads_dir.join("uefi");
                 download::download_uefi_firmware(&uefi_dest_dir)?;
                 final_uefi_dir = Some(uefi_dest_dir);
             }
 
             if *download_image {
-                log::info!("⬇️ Downloading Fedora image...");
+                log::info!("{} Downloading Fedora image...", ui::style::emoji::DOWNLOAD);
                 let image_dest_dir = downloads_dir.join("images");
                 final_image_path = Some(download::download_fedora_image(
                     &image_dest_dir,
