@@ -224,7 +224,14 @@ pub fn run_with_progress(
     yes_i_know: bool, // Still required separately for explicit confirmation
 ) -> Result<()> {
     info!("🍠 MASH Full-Loop Installer: Fedora KDE + UEFI Boot for RPi4");
-    info!("📋 GPT layout with 4 partitions (EFI, BOOT, ROOT/btrfs, DATA)");
+    let scheme_label = match config.scheme {
+        PartitionScheme::Mbr => "MBR (msdos)",
+        PartitionScheme::Gpt => "GPT",
+    };
+    info!(
+        "📋 {} layout with 4 partitions (EFI, BOOT, ROOT/btrfs, DATA)",
+        scheme_label
+    );
 
     let disk = normalize_disk(&config.disk);
     info!("💾 Target disk: {}", disk);
