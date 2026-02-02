@@ -1,9 +1,10 @@
 use crate::stage_runner::{StageDefinition, StageRunner};
 use crate::system_config::packages::PackageManager;
-use crate::{boot_config, disk_ops, system_config};
+use crate::{boot_config, disk_ops, preflight, system_config};
 use anyhow::Result;
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct InstallConfig {
@@ -107,22 +108,33 @@ pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
     if cfg.execute && !cfg.confirmed {
         anyhow::bail!("Execution requires explicit confirmation");
     }
+    let preflight_cfg = Arc::new(preflight::PreflightConfig::for_install(
+        cfg.disk.as_ref().map(PathBuf::from),
+    ));
     let stage_defs = plan
         .stages
-        .clone()
-        .into_iter()
-        .map(|stage| {
-            let name = stage.name;
-            StageDefinition {
-                name,
-                run: Box::new(move |dry_run| {
-                    if dry_run {
-                        log::info!("DRY RUN: {}", name);
-                    } else {
-                        log::info!("Stage: {}", name);
-                    }
-                    Ok(())
-                }),
+        .iter()
+        .map(|stage| match stage.name {
+            "Preflight" => {
+                let cfg = Arc::clone(&preflight_cfg);
+                StageDefinition {
+                    name: stage.name,
+                    run: Box::new(move |_dry_run| preflight::run(&cfg)),
+                }
+            }
+            name => {
+                let description = stage.description.clone();
+                StageDefinition {
+                    name,
+                    run: Box::new(move |dry_run| {
+                        if dry_run {
+                            log::info!("DRY RUN: {} — {}", name, description);
+                        } else {
+                            log::info!("Stage: {} — {}", name, description);
+                        }
+                        Ok(())
+                    }),
+                }
             }
         })
         .collect::<Vec<_>>();

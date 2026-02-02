@@ -49,7 +49,7 @@ pub fn run() -> anyhow::Result<()> {
         // Preflight checks
         Some(cli::Command::Preflight) => {
             log::info!("🔍 Running preflight checks...");
-            preflight::run(cli.dry_run)?;
+            preflight::run(&preflight::PreflightConfig::default())?;
             return Ok(()); // Exit after preflight
         }
         // CLI flash mode (for scripting)

@@ -1,3 +1,4 @@
+#![allow(clippy::items_after_test_module)]
 //! New UI module for the single-screen TUI
 
 use crate::tui::new_app::{App, InstallStepType};
