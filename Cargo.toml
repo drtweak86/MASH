@@ -4,6 +4,7 @@ members = [
     "mash-installer",
     "tools/mash-release",
     "tools/mash-tools",
+    "tools/os-link-checker",
 ]
 
 [workspace.package]

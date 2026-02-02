@@ -1,0 +1,21 @@
+# OS Download Link Health Checklist for GitHub Actions
+# Each entry is verified via HEAD requests; failures fail the workflow.
+[[links]]
+name = "Fedora Workstation"
+url = "https://getfedora.org/en/workstation/download/"
+description = "Official Fedora Workstation download page for the latest release."
+
+[[links]]
+name = "Ubuntu Desktop"
+url = "https://www.ubuntu.com/download/desktop"
+description = "Ubuntu Desktop download center covering current LTS and interim releases."
+
+[[links]]
+name = "Manjaro"
+url = "https://manjaro.org/download/"
+description = "Manjaro download page for the official editions (XFCE, KDE, GNOME)."
+
+[[links]]
+name = "Raspberry Pi OS (64-bit)"
+url = "https://www.raspberrypi.com/software/operating-systems/"
+description = "Raspberry Pi OS download matrix with 64-bit and legacy images."
