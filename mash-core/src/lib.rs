@@ -11,6 +11,7 @@ use clap::Parser;
 
 pub mod boot_config;
 mod cli;
+pub mod disk_ops;
 mod download;
 mod errors;
 mod flash;
