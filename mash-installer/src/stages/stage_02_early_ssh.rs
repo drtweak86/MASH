@@ -3,22 +3,48 @@ use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::Path;
 
-const EARLY_SSH_SCRIPT: &str = r#"#!/usr/bin/env bash
+fn find_executable(root: &Path, name: &str) -> Option<String> {
+    let paths = ["usr/bin", "usr/sbin", "bin", "sbin"];
+    for dir in paths {
+        let candidate = root.join(dir).join(name);
+        if candidate.is_file() {
+            return Some(format!("/{}/{}", dir, name));
+        }
+    }
+    None
+}
+
+fn build_early_ssh_script(root: &Path) -> String {
+    let mut script = String::from(
+        r#"#!/usr/bin/env bash
 set -euo pipefail
 echo "[mash-early-ssh] 🚚 Bringing SSH online (LAN-safe)…"
 systemctl enable --now sshd || true
 systemctl enable --now firewalld || true
-if command -v firewall-cmd >/dev/null 2>&1; then
-  firewall-cmd --permanent --add-service=ssh || true
-  firewall-cmd --permanent --add-service=mosh || true
-  firewall-cmd --permanent --add-service=mdns || true
-  firewall-cmd --reload || true
-fi
-if systemctl list-unit-files | grep -q '^avahi-daemon\.service'; then
+"#,
+    );
+
+    if let Some(firewall_cmd) = find_executable(root, "firewall-cmd") {
+        script.push_str(&format!(
+            r#"{cmd} --permanent --add-service=ssh || true
+{cmd} --permanent --add-service=mosh || true
+{cmd} --permanent --add-service=mdns || true
+{cmd} --reload || true
+"#,
+            cmd = firewall_cmd
+        ));
+    }
+
+    script.push_str(
+        r#"if systemctl list-unit-files | grep -q '^avahi-daemon\.service'; then
   systemctl enable --now avahi-daemon || true
 fi
 echo "[mash-early-ssh] ✅ SSH should now be reachable. Try: ssh <user>@mash.local 🚚💨"
-"#;
+"#,
+    );
+
+    script
+}
 
 const EARLY_SSH_SERVICE: &str = r#"[Unit]
 Description=MASH early SSH bring-up (one-shot)
@@ -56,7 +82,7 @@ pub fn run(args: &[String]) -> Result<()> {
     fs::create_dir_all(&lib_dir)?;
 
     let script_path = lib_dir.join("early-ssh.sh");
-    fs::write(&script_path, EARLY_SSH_SCRIPT)?;
+    fs::write(&script_path, build_early_ssh_script(root_path))?;
     fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755))?;
 
     let service_path = unit_dir.join("mash-early-ssh.service");
