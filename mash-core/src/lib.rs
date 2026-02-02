@@ -130,6 +130,17 @@ pub fn run() -> anyhow::Result<()> {
             flash::run_with_progress(&cli_flash_config, *yes_i_know)?;
             return Ok(()); // Exit after CLI flash
         }
+        Some(cli::Command::StageStarshipToml {
+            stage_dir,
+            starship_toml,
+        }) => {
+            log::info!(
+                "🧭 Staging starship.toml -> {}",
+                stage_dir.join("assets").display()
+            );
+            stages::stage_03_stage_starship_toml::copy_starship_toml(stage_dir, starship_toml)?;
+            return Ok(());
+        }
     }
 
     Ok(())

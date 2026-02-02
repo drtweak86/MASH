@@ -126,4 +126,15 @@ pub enum Command {
         #[arg(long, default_value = "KDE")]
         image_edition: String,
     },
+
+    /// 🧭 Stage starship.toml into the assets directory
+    StageStarshipToml {
+        /// Path to staging directory
+        #[arg(long)]
+        stage_dir: PathBuf,
+
+        /// Path to starship.toml
+        #[arg(long)]
+        starship_toml: PathBuf,
+    },
 }
