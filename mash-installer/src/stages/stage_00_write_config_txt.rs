@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::error::Error;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -23,7 +24,12 @@ pub fn run(args: &[String]) -> Result<()> {
         "[*] Writing safe Pi4 UEFI config.txt -> {}",
         cfg_path.display()
     );
-    fs::write(&cfg_path, CONFIG_TXT)?;
+    write_config_txt(&cfg_path).map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    Ok(())
+}
+
+pub fn write_config_txt(config_path: &Path) -> Result<(), Box<dyn Error>> {
+    fs::write(config_path, CONFIG_TXT)?;
     let _ = Command::new("sync").status();
     Ok(())
 }
