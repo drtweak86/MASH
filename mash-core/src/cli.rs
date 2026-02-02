@@ -195,5 +195,29 @@ pub enum Command {
         /// Expected reboot count
         #[arg(long, default_value_t = 1)]
         reboots: u32,
+
+        /// Mirror override for Fedora downloads
+        #[arg(long)]
+        download_mirror: Option<String>,
+
+        /// Inline checksum (SHA256) for the download override
+        #[arg(long)]
+        download_checksum: Option<String>,
+
+        /// URL to fetch the checksum from
+        #[arg(long)]
+        download_checksum_url: Option<String>,
+
+        /// Timeout for download HTTP operations (seconds)
+        #[arg(long, default_value_t = 120)]
+        download_timeout_secs: u64,
+
+        /// Number of retries for download attempts
+        #[arg(long, default_value_t = 3)]
+        download_retries: usize,
+
+        /// Directory (relative to mash root) for downloaded assets
+        #[arg(long, default_value = "downloads/images")]
+        download_dir: PathBuf,
     },
 }

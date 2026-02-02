@@ -2,9 +2,11 @@ use crate::state_manager::{load_state, save_state_atomic, InstallState};
 use anyhow::Result;
 use std::path::PathBuf;
 
+pub type StageFn<'a> = Box<dyn Fn(&mut InstallState, bool) -> Result<()> + 'a>;
+
 pub struct StageDefinition<'a> {
     pub name: &'a str,
-    pub run: Box<dyn Fn(bool) -> Result<()> + 'a>,
+    pub run: StageFn<'a>,
 }
 
 pub struct StageRunner {
@@ -43,7 +45,7 @@ impl StageRunner {
                 save_state_atomic(&self.state_path, &state)?;
             }
 
-            (stage.run)(self.dry_run)?;
+            (stage.run)(&mut state, self.dry_run)?;
 
             state.mark_completed(stage.name);
             if self.persist {
@@ -76,14 +78,22 @@ mod tests {
         let stages = vec![
             StageDefinition {
                 name: "stage-1",
-                run: Box::new(move |_dry_run| {
+                run: Box::new(move |_state, _dry_run| {
                     calls_stage_1.lock().unwrap().push("stage-1".to_string());
+                    // TODO(larry): Re-enable when DownloadRecord is implemented
+                    // state.record_download(crate::state_manager::DownloadRecord {
+                    //     name: "dummy1".to_string(),
+                    //     path: "/tmp/dummy1".to_string(),
+                    //     size: 1,
+                    //     checksum: "c1".to_string(),
+                    //     resumed: false,
+                    // });
                     Ok(())
                 }),
             },
             StageDefinition {
                 name: "stage-2",
-                run: Box::new(move |_dry_run| {
+                run: Box::new(move |_state, _dry_run| {
                     calls_stage_2.lock().unwrap().push("stage-2".to_string());
                     Ok(())
                 }),

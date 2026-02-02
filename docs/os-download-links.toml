@@ -1,0 +1,10 @@
+# Fedora Image Download Index
+# Maintained by MASH team
+# Schema: [[images]] with version, edition, arch, checksum_sha256, mirrors[]
+
+[[images]]
+version = "43"
+edition = "KDE"
+arch = "aarch64"
+checksum_sha256 = ""
+mirrors = []

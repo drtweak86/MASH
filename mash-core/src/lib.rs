@@ -13,6 +13,7 @@ pub mod boot_config;
 mod cli;
 pub mod disk_ops;
 mod download;
+pub mod downloader;
 mod errors;
 mod flash;
 pub mod installer;
@@ -161,11 +162,18 @@ pub fn run() -> anyhow::Result<()> {
             mountinfo_path,
             by_uuid_path,
             reboots,
+            download_mirror,
+            download_checksum,
+            download_checksum_url,
+            download_timeout_secs,
+            download_retries,
+            download_dir,
         }) => {
             let mounts = mount
                 .iter()
                 .filter_map(|spec| parse_mount_spec(spec))
                 .collect::<Vec<_>>();
+            let download_dir = cli.mash_root.join(download_dir);
             let cfg = installer::pipeline::InstallConfig {
                 dry_run: *dry_run,
                 execute: *execute,
@@ -181,6 +189,17 @@ pub fn run() -> anyhow::Result<()> {
                 mountinfo_path: mountinfo_path.clone(),
                 by_uuid_path: by_uuid_path.clone(),
                 reboot_count: *reboots,
+                mash_root: cli.mash_root.clone(),
+                download_image: false,
+                download_uefi: false,
+                image_version: "43".to_string(),
+                image_edition: "KDE".to_string(),
+                download_mirror: download_mirror.clone(),
+                download_checksum: download_checksum.clone(),
+                download_checksum_url: download_checksum_url.clone(),
+                download_timeout_secs: *download_timeout_secs,
+                download_retries: *download_retries,
+                download_dir,
             };
 
             let plan = installer::pipeline::run_pipeline(&cfg)?;
