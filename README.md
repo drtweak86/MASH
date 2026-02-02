@@ -113,6 +113,7 @@ The binary is output to `mash-installer/target/release/mash`.
 - [Deployment](docs/DEPLOYMENT.md) — Packaging and distribution
 - [Releasing](docs/RELEASING.md) — Release workflow and tooling
 - [Development Principles](docs/DOJO.md) — Code philosophy and rules
+- [v1.3.1 Release Notes](docs/v1.3.1-release-notes.md) — Ferrari polish summary
 
 ---
 
