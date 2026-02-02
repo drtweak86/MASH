@@ -1335,7 +1335,7 @@ fn stage_firstboot_dojo(ctx: &FlashContext, target_root: &Path) -> Result<()> {
 
     let service_content = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/firstboot/dojo/mash-dojo.service"
+        "/../mash-installer/firstboot/dojo/mash-dojo.service"
     ));
     let service_dir = target_root.join("etc/systemd/system");
     fs::create_dir_all(&service_dir)?;
