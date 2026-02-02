@@ -113,6 +113,7 @@ The binary is output to `mash-installer/target/release/mash`.
 - [Deployment](docs/DEPLOYMENT.md) — Packaging and distribution
 - [Releasing](docs/RELEASING.md) — Release workflow and tooling
 - [Development Principles](docs/DOJO.md) — Code philosophy and rules
+- [Optional OS image links](docs/OS_IMAGE_LINKS.md) — Verified Ubuntu, Manjaro, and Raspberry Pi OS downloads
 
 ---
 
