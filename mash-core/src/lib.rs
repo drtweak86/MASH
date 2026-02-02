@@ -9,6 +9,7 @@
 use anyhow::Context;
 use clap::Parser;
 
+pub mod boot_config;
 mod cli;
 mod download;
 mod errors;
