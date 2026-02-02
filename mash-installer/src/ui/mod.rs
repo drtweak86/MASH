@@ -2,6 +2,7 @@
 
 use std::io::IsTerminal;
 
+pub mod confirm;
 pub mod style;
 
 pub fn ensure_interactive_terminal() -> anyhow::Result<()> {

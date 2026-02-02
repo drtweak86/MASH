@@ -145,7 +145,21 @@ fn main() -> anyhow::Result<()> {
                 image_edition: image_edition.clone(),
             };
 
-            flash::run_with_progress(&cli_flash_config, *yes_i_know)?;
+            let mut confirmed = *yes_i_know;
+            if !confirmed && !cli.dry_run {
+                let prompt = format!(
+                    "WARNING: This will erase ALL data on {}. There is no undo. Continue?",
+                    disk
+                );
+                let result = ui::confirm::confirm_and_run(&prompt, || Ok(()))?;
+                if !result {
+                    log::info!("{} Installation aborted by user.", ui::style::emoji::CANCEL);
+                    return Ok(());
+                }
+                confirmed = true;
+            }
+
+            flash::run_with_progress(&cli_flash_config, confirmed)?;
             return Ok(()); // Exit after CLI flash
         }
     }
