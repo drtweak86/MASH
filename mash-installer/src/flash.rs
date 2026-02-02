@@ -10,9 +10,10 @@
 //!   p4: DATA (ext4) - for mash-staging
 
 use anyhow::{bail, Context, Result};
+use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, info};
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, IsTerminal};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -116,6 +117,7 @@ pub struct FlashContext {
     pub image_source_selection: crate::tui::ImageSource, // Add this
     pub image_version: String,                           // Add this
     pub image_edition: String,                           // Add this
+    pub progress: Option<ProgressBar>,
 }
 
 impl FlashContext {
@@ -135,17 +137,33 @@ impl FlashContext {
 
     fn start_phase(&self, phase: Phase) {
         info!("📍 Starting phase: {}", phase.name());
+        self.update_progress(&format!("Starting {}", phase.name()));
         self.send_progress(ProgressUpdate::PhaseStarted(phase));
     }
 
     fn complete_phase(&self, phase: Phase) {
         info!("✅ Completed phase: {}", phase.name());
+        self.update_progress(&format!("Completed {}", phase.name()));
         self.send_progress(ProgressUpdate::PhaseCompleted(phase));
     }
 
     fn status(&self, msg: &str) {
         info!("{}", msg);
+        self.update_progress(msg);
         self.send_progress(ProgressUpdate::Status(msg.to_string()));
+    }
+
+    fn update_progress(&self, msg: &str) {
+        if let Some(progress) = self.progress.as_ref() {
+            progress.set_message(msg.to_string());
+            progress.tick();
+        }
+    }
+
+    fn finish_progress(&self) {
+        if let Some(progress) = self.progress.as_ref() {
+            progress.finish_and_clear();
+        }
     }
 
     /// Get partition device path (handles nvme/mmcblk naming)
@@ -265,6 +283,17 @@ pub fn run_with_progress(
         image_source_selection: config.image_source_selection,
         image_version: config.image_version.clone(),
         image_edition: config.image_edition.clone(),
+        progress: if config.progress_tx.is_none() && std::io::stderr().is_terminal() {
+            let progress = ProgressBar::new_spinner();
+            progress.set_style(
+                ProgressStyle::with_template("{spinner} {msg}")
+                    .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+            );
+            progress.enable_steady_tick(std::time::Duration::from_millis(120));
+            Some(progress)
+        } else {
+            None
+        },
     };
 
     // If the image is an .xz file, decompress it
@@ -275,6 +304,7 @@ pub fn run_with_progress(
 
     let result = run_installation(&mut ctx);
     cleanup(&ctx);
+    ctx.finish_progress();
     let _ = fs::remove_dir_all(&work_dir);
     result
 }
@@ -1547,6 +1577,7 @@ mod tests {
             image_source_selection: crate::tui::ImageSource::LocalFile,
             image_version: String::new(),
             image_edition: String::new(),
+            progress: None,
         };
         assert_eq!(ctx.partition_path(1), "/dev/sda1");
         assert_eq!(ctx.partition_path(4), "/dev/sda4");
