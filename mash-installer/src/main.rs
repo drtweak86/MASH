@@ -10,6 +10,7 @@ use anyhow::Context;
 use clap::Parser;
 
 mod cli;
+mod disk_ops;
 mod download;
 mod errors;
 mod flash;
