@@ -90,3 +90,4 @@ mash-installer/*.bak.*
 .claude/
 .docker/
 .github/skills/
+.codex/
