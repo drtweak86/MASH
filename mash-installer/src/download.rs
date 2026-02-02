@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use log::{debug, info};
 use serde::Deserialize;
+use std::env;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -143,6 +144,39 @@ pub struct DownloadProgress {
     pub speed_bytes_per_sec: u64,
 }
 
+fn github_release_api_url() -> String {
+    env::var("MASH_GITHUB_API_URL")
+        .unwrap_or_else(|_| "https://api.github.com/repos/pftf/RPi4/releases/latest".into())
+}
+
+fn fedora_download_url_patterns(version: &str, arch: &str, filename: &str) -> Vec<String> {
+    if let Ok(overrides) = env::var("MASH_FEDORA_DOWNLOAD_URLS") {
+        overrides
+            .split(';')
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| entry.to_string())
+            .collect()
+    } else {
+        vec![
+            format!(
+                "https://download.fedoraproject.org/pub/fedora/linux/releases/{}/Spins/{}/images/{}",
+                version, arch, filename
+            ),
+            format!(
+                "https://mirrors.fedoraproject.org/mirrorlist?repo=fedora-{}&arch={}",
+                version, arch
+            ),
+        ]
+    }
+}
+
+fn unxz_command(path: &Path) -> Command {
+    let executable = env::var("MASH_UNXZ_COMMAND").unwrap_or_else(|_| "unxz".into());
+    let mut cmd = Command::new(executable);
+    cmd.args(["-T0", "-fkv", path.to_str().unwrap_or_default()]);
+    cmd
+}
+
 fn download_with_progress_cb(
     client: &reqwest::blocking::Client,
     url: &str,
@@ -208,7 +242,7 @@ pub fn download_uefi_firmware(destination_dir: &Path) -> Result<()> {
     })?;
 
     // Step 1: Get latest release info from GitHub API
-    let github_api_url = "https://api.github.com/repos/pftf/RPi4/releases/latest";
+    let github_api_url = github_release_api_url();
     info!(
         "Fetching latest UEFI firmware release info from: {}",
         github_api_url
@@ -300,7 +334,7 @@ pub fn download_uefi_firmware_with_progress(
         )
     })?;
 
-    let github_api_url = "https://api.github.com/repos/pftf/RPi4/releases/latest";
+    let github_api_url = github_release_api_url();
     let client = reqwest::blocking::Client::builder()
         .user_agent("mash-installer")
         .build()?;
@@ -385,18 +419,7 @@ pub fn download_fedora_image(
     let filename = format!("Fedora-{}-{}-{}.raw.xz", edition, version, arch);
 
     // Try multiple URL patterns (Fedora changes these occasionally)
-    let url_patterns = [
-        // Standard releases path
-        format!(
-            "https://download.fedoraproject.org/pub/fedora/linux/releases/{}/Spins/{}/images/{}",
-            version, arch, filename
-        ),
-        // Alternative: direct mirror
-        format!(
-            "https://mirrors.fedoraproject.org/mirrorlist?repo=fedora-{}&arch={}",
-            version, arch
-        ),
-    ];
+    let url_patterns = fedora_download_url_patterns(version, arch, &filename);
 
     let dest_path = destination_dir.join(&filename);
 
@@ -462,8 +485,7 @@ pub fn download_fedora_image(
     eprintln!("\n📦 Decompressing image (this may take a few minutes)...");
     info!("Decompressing image (unxz)...");
 
-    let status = Command::new("unxz")
-        .args(["-T0", "-fkv", dest_path.to_str().unwrap()])
+    let status = unxz_command(&dest_path)
         .status()
         .context("Failed to run unxz (install xz-utils if missing)")?;
 
@@ -553,8 +575,7 @@ pub fn download_fedora_image_with_progress(
     }
 
     stage("Extracting Fedora image...");
-    let mut child = Command::new("unxz")
-        .args(["-T0", "-fkv", dest_path.to_str().unwrap()])
+    let mut child = unxz_command(&dest_path)
         .spawn()
         .context("Failed to run unxz (install xz-utils if missing)")?;
 
@@ -576,4 +597,259 @@ pub fn download_fedora_image_with_progress(
     }
 
     Ok(raw_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::collections::HashMap;
+    use std::env;
+    use std::io::{Cursor, ErrorKind, Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    };
+    use std::thread;
+    use std::time::Duration;
+    use tempfile::tempdir;
+    use zip::write::{FileOptions, ZipWriter};
+    use zip::CompressionMethod;
+
+    type RouteList = Vec<(String, Vec<u8>)>;
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = env::var(key).ok();
+            env::set_var(key, value);
+            EnvGuard { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = env::var(key).ok();
+            env::remove_var(key);
+            EnvGuard { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.previous.take() {
+                env::set_var(self.key, value);
+            } else {
+                env::remove_var(self.key);
+            }
+        }
+    }
+
+    fn build_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut buffer = Vec::new();
+        {
+            let mut writer = ZipWriter::new(Cursor::new(&mut buffer));
+            let options = FileOptions::default().compression_method(CompressionMethod::Stored);
+            for (name, contents) in entries {
+                writer.start_file(*name, options).unwrap();
+                writer.write_all(contents).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        buffer
+    }
+
+    struct SimpleMockServer {
+        address: std::net::SocketAddr,
+        hits: Arc<Mutex<HashMap<String, usize>>>,
+        shutdown: Arc<AtomicBool>,
+        handle: Option<thread::JoinHandle<()>>,
+        routes: Arc<Mutex<RouteList>>,
+    }
+
+    impl SimpleMockServer {
+        fn start(routes: Vec<(&str, Vec<u8>)>) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let address = listener.local_addr().unwrap();
+            let routes = Arc::new(Mutex::new(
+                routes
+                    .into_iter()
+                    .map(|(p, b)| (p.to_string(), b))
+                    .collect::<RouteList>(),
+            ));
+            let hits = Arc::new(Mutex::new(HashMap::new()));
+            let shutdown = Arc::new(AtomicBool::new(false));
+            let cloned_routes = routes.clone();
+            let cloned_hits = hits.clone();
+            let cloned_shutdown = shutdown.clone();
+            let handle = thread::spawn(move || {
+                while !cloned_shutdown.load(Ordering::Relaxed) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            let mut buffer = [0u8; 2048];
+                            let bytes = stream.read(&mut buffer).unwrap_or(0);
+                            if bytes == 0 {
+                                continue;
+                            }
+                            let request = String::from_utf8_lossy(&buffer[..bytes]);
+                            let path = request
+                                .lines()
+                                .next()
+                                .and_then(|line| line.split_whitespace().nth(1))
+                                .unwrap_or("/");
+                            let (body, found): (Vec<u8>, bool) = {
+                                let routes = cloned_routes.lock().unwrap();
+                                if let Some((_, body)) =
+                                    routes.iter().find(|(route_path, _)| route_path == path)
+                                {
+                                    (body.clone(), true)
+                                } else {
+                                    (b"Not Found".to_vec(), false)
+                                }
+                            };
+                            cloned_hits
+                                .lock()
+                                .unwrap()
+                                .entry(path.to_string())
+                                .and_modify(|c| *c += 1)
+                                .or_insert(1);
+                            let status_line = if found {
+                                "HTTP/1.1 200 OK\r\n"
+                            } else {
+                                "HTTP/1.1 404 Not Found\r\n"
+                            };
+                            let response =
+                                format!("{}content-length: {}\r\n\r\n", status_line, body.len());
+                            stream.write_all(response.as_bytes()).unwrap();
+                            stream.write_all(&body).unwrap();
+                            stream.flush().unwrap();
+                        }
+                        Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+            SimpleMockServer {
+                address,
+                hits,
+                shutdown,
+                handle: Some(handle),
+                routes,
+            }
+        }
+
+        fn url(&self, path: &str) -> String {
+            format!("http://{}{}", self.address, path)
+        }
+
+        fn hits(&self, path: &str) -> usize {
+            *self.hits.lock().unwrap().get(path).unwrap_or(&0)
+        }
+
+        fn add_route(&self, path: &str, body: Vec<u8>) {
+            self.routes.lock().unwrap().push((path.to_string(), body));
+        }
+    }
+
+    impl Drop for SimpleMockServer {
+        fn drop(&mut self) {
+            self.shutdown.store(true, Ordering::Relaxed);
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    #[test]
+    fn download_with_progress_streams_data() {
+        let server = SimpleMockServer::start(vec![("/file", b"payload".to_vec())]);
+        let client = reqwest::blocking::Client::builder().build().unwrap();
+        let mut dest = tempfile::tempfile().unwrap();
+        let url = server.url("/file");
+        let downloaded = download_with_progress(&client, &url, &mut dest, "test").unwrap();
+        assert_eq!(downloaded, 7);
+        assert_eq!(server.hits("/file"), 1);
+    }
+
+    #[test]
+    fn download_with_progress_cb_cancelled() {
+        let server = SimpleMockServer::start(vec![("/stream", b"chunk".to_vec())]);
+        let client = reqwest::blocking::Client::builder().build().unwrap();
+        let mut dest = tempfile::tempfile().unwrap();
+        let url = server.url("/stream");
+        let mut first = true;
+        let err = download_with_progress_cb(
+            &client,
+            &url,
+            &mut dest,
+            &mut |_: DownloadProgress| {
+                if first {
+                    first = false;
+                    false
+                } else {
+                    true
+                }
+            },
+            None,
+        )
+        .expect_err("expected cancellation");
+        assert!(err.to_string().contains("cancelled"));
+        assert_eq!(server.hits("/stream"), 1);
+    }
+
+    #[test]
+    fn download_uefi_firmware_extracts_asset() {
+        let zip_bytes = build_zip(&[("boot/README.txt", b"mash")]);
+        let server = SimpleMockServer::start(vec![("/firmware.zip", zip_bytes.clone())]);
+        let firmware_url = server.url("/firmware.zip");
+        let payload = json!({
+            "assets": [{
+                "name": "RPi4_UEFI_Firmware_v1.0.zip",
+                "browser_download_url": firmware_url
+            }]
+        })
+        .to_string();
+        server.add_route("/latest", payload.into_bytes());
+        let api_url = server.url("/latest");
+        let _guard = EnvGuard::set("MASH_GITHUB_API_URL", &api_url);
+        let dir = tempdir().unwrap();
+        download_uefi_firmware(dir.path()).unwrap();
+        assert!(dir.path().join("boot/README.txt").exists());
+        assert!(server.hits("/latest") >= 1);
+    }
+
+    #[test]
+    fn download_fedora_image_skips_if_artifacts_exist() {
+        let dir = tempdir().unwrap();
+        let version = "43";
+        let edition = "KDE";
+        let arch = "aarch64";
+        let dest_name = format!("Fedora-{}-{}-{}.raw.xz", edition, version, arch);
+        let raw_name = format!("Fedora-{}-{}-{}.raw", edition, version, arch);
+        let dest_path = dir.path().join(&dest_name);
+        let raw_path = dir.path().join(&raw_name);
+        File::create(&dest_path).unwrap();
+        File::create(&raw_path).unwrap();
+        let result = download_fedora_image(dir.path(), version, edition).unwrap();
+        assert_eq!(result, raw_path);
+    }
+
+    #[test]
+    fn download_fedora_image_remote_download_and_unxz_failure() {
+        let server = SimpleMockServer::start(vec![("/fedora.raw.xz", b"data".to_vec())]);
+        let _env = EnvGuard::set("MASH_FEDORA_DOWNLOAD_URLS", &server.url("/fedora.raw.xz"));
+        let _unxz = EnvGuard::set("MASH_UNXZ_COMMAND", "/bin/false");
+        let dir = tempdir().unwrap();
+        let version = "43";
+        let edition = "KDE";
+        let err = download_fedora_image(dir.path(), version, edition).unwrap_err();
+        assert!(err.to_string().contains("unxz failed"));
+        assert!(server.hits("/fedora.raw.xz") >= 1);
+    }
 }
