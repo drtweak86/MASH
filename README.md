@@ -4,6 +4,8 @@
 
 MASH is an opinionated installer that automates Fedora KDE installation on Raspberry Pi 4 with UEFI boot support. It is **destructive by design** — it will completely erase and repartition your target disk.
 
+[![OS download link health](https://github.com/drtweak86/MASH/actions/workflows/os-download-links.yml/badge.svg)](https://github.com/drtweak86/MASH/actions/workflows/os-download-links.yml)
+
 ---
 
 ## ✨ What MASH Does

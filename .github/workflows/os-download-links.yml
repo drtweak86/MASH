@@ -1,0 +1,19 @@
+name: OS download link health
+
+on:
+  schedule:
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+
+jobs:
+  check-links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-rust@v1
+        with:
+          toolchain: stable
+          profile: minimal
+      - name: Run OS link checker
+        working-directory: .
+        run: cargo run -p os-link-checker -- --config docs/os-download-links.toml
