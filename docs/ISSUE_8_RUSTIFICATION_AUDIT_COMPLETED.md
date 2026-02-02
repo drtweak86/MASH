@@ -32,12 +32,12 @@ What was removed
 
 What was kept (and why)
 - install.sh (marked “No” for safe removal in Issue #8; requires Rust replacement)
-- helpers/*.sh (marked “No” for safe removal; needs Rust subcommands)
+- helpers/16_mount_data.sh (marked “No” for safe removal; needs Rust subcommand replacement)
 - Makefile (fit for purpose per Issue #8)
 
 Scripts needing amendment (identified, not executed)
 - install.sh (high-risk; should be replaced by Rust installer)
-- helpers/*.sh (should be migrated to Rust subcommands)
+- helpers/16_mount_data.sh (should be migrated to a Rust subcommand)
 
 Recommended refactors (identified, not executed unless explicit)
 - Consolidate installer logic into Rust binary (high risk)
