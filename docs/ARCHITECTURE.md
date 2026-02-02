@@ -18,6 +18,7 @@ The installer operates by:
 3. Partitioning and formatting the target disk
 4. Copying filesystems via `rsync`
 5. Configuring UEFI boot
+6. Running Rust-native post-install stages
 
 ---
 
@@ -121,12 +122,14 @@ sudo mash preflight
 src/
 ├── main.rs           # Entry point, mode dispatch
 ├── cli.rs            # CLI argument definitions
+├── disk_ops.rs       # Rust-native disk ops (dry-run safe)
 ├── flash.rs          # Installation pipeline
 ├── download.rs       # Image and UEFI downloads
 ├── locale.rs         # Locale configuration
 ├── preflight.rs      # System checks
 ├── errors.rs         # Error types
 ├── logging.rs        # Log setup
+├── stages/           # Rust-native post-install stages
 └── tui/
     ├── mod.rs        # Terminal setup, main loop
     ├── new_app.rs    # App state, InstallStep, ProgressEvent
@@ -185,6 +188,14 @@ The core installation logic lives in `flash.rs`. Here's the high-level flow:
 - Unmount all partitions (target then source)
 - Detach loop device
 - Remove work directory
+
+After the flash pipeline completes, optional post-install stages can be invoked via the `--stage` flag. See `docs/INSTALL_STAGES_MODULE.md` for the full catalog and usage.
+
+---
+
+## Rust-Native Disk Operations
+
+`mash_installer::disk_ops` provides Rust-native, dry-run-safe scaffolding for disk probing, partition planning, formatting, mounting, and verification. Real disk mutations are intentionally gated until the implementation is fully ported. See `docs/DISK_OPS_MODULE.md` for details on API behavior and dry-run semantics.
 
 ---
 
