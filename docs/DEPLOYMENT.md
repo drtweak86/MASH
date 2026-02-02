@@ -59,6 +59,10 @@ The built binary requires these tools at runtime:
 - `mkfs.btrfs` (btrfs-progs)
 - `losetup` (util-linux)
 
+## 🔗 OS image verification
+
+Fedora Workstation remains the primary image for MASH; grab it from https://getfedora.org/en/workstation/download/. Optional OS downloads are documented in `docs/OS_IMAGE_LINKS.md`, and `.github/workflows/os-download-links.yml` pings those URLs daily via HTTP HEAD to keep them accurate. Update the `docs/os-download-links.toml` list and rerun the workflow if any link changes.
+
 ---
 
 ## 🏗️ Building
