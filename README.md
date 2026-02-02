@@ -115,6 +115,8 @@ The binary is output to `mash-installer/target/release/mash`.
 
 - [Quick Start Guide](docs/QUICKSTART.md) — Get running in minutes
 - [Architecture](docs/ARCHITECTURE.md) — Technical design and module structure
+- [Disk Ops Module](docs/DISK_OPS_MODULE.md) — Dry-run-safe disk operations scaffolding
+- [Install Stages Module](docs/INSTALL_STAGES_MODULE.md) — Rust-native post-install stages
 - [Deployment](docs/DEPLOYMENT.md) — Packaging and distribution
 - [Releasing](docs/RELEASING.md) — Release workflow and tooling
 - [Development Principles](docs/DOJO.md) — Code philosophy and rules
