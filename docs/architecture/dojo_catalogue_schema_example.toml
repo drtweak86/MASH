@@ -1,0 +1,70 @@
+[[category]]
+id = "web-browser"
+label = "Web Browser"
+description = "Essential for browsing guides, releases, and Dojo documentation."
+
+[[category.programs]]
+id = "firefox"
+label = "Firefox ESR"
+description = "Stable, supported, and privacy-minded."
+default = true
+reason_why = "Ships with ESR updates on all supported distros, so we minimize regressions."
+[category.programs.package_names]
+dnf = ["firefox"]
+apt = ["firefox-esr"]
+pacman = ["firefox-esr"]
+
+[[category.programs]]
+id = "chromium"
+label = "Chromium"
+description = "Sandboxed and fast, but occasionally lags on ARM builds."
+default = false
+reason_why = "A good alternative for users migrating from Chrome; builds are available via pacman and apt."
+[category.programs.package_names]
+dnf = ["chromium"]
+apt = ["chromium"]
+pacman = ["chromium"]
+
+[[category.programs]]
+id = "ungoogled-chromium"
+label = "Ungoogled Chromium"
+description = "Privacy-hardened fork, requires expert mode due to manual patches."
+default = false
+reason_why = "Avoids telemetry but needs extra maintenance."
+[category.programs.package_names]
+dnf = ["ungoogled-chromium"]
+apt = ["ungoogled-chromium"]
+pacman = ["ungoogled-chromium"]
+[category.programs.gating]
+requires_expert_mode = true
+gated_message = "Expert mode only: user must understand how to handle manual updates."
+
+[[category]]
+id = "text-editor"
+label = "Text Editor"
+description = "Choice of editor for terminal-first workflows."
+
+[[category.programs]]
+id = "nano"
+label = "GNU nano"
+description = "Simple, default-friendly editor with minimal keystrokes."
+default = true
+reason_why = "Every distro ships nano; perfect for quick edits without learning vim."
+[category.programs.package_names]
+dnf = ["nano"]
+apt = ["nano"]
+pacman = ["nano"]
+
+[[category.programs]]
+id = "neovim"
+label = "Neovim"
+description = "Modern vim fork with Lua support; recommended for power users."
+default = false
+reason_why = "Offers plugin support, but new users should be comfortable with modal editing."
+[category.programs.package_names]
+dnf = ["neovim"]
+apt = ["neovim"]
+pacman = ["neovim"]
+[category.programs.gating]
+requires_expert_mode = true
+gated_message = "Expert mode only: Neovim configuration will not be auto-generated."
