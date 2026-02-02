@@ -193,6 +193,7 @@ pub enum InstallStepType {
     LocaleSelection,
     Options,
     FirstBootUser,
+    PlanReview,
     Confirmation,
     DownloadingFedora,
     DownloadingUefi,
@@ -216,6 +217,7 @@ impl InstallStepType {
             InstallStepType::LocaleSelection,
             InstallStepType::Options,
             InstallStepType::FirstBootUser,
+            InstallStepType::PlanReview,
             InstallStepType::Confirmation,
             InstallStepType::DownloadingFedora,
             InstallStepType::DownloadingUefi,
@@ -239,6 +241,7 @@ impl InstallStepType {
             InstallStepType::LocaleSelection => "Locale & Keymap",
             InstallStepType::Options => "Installation Options",
             InstallStepType::FirstBootUser => "First-Boot User",
+            InstallStepType::PlanReview => "Execution Plan",
             InstallStepType::Confirmation => "Final Confirmation",
             InstallStepType::DownloadingFedora => "Downloading Fedora Image",
             InstallStepType::DownloadingUefi => "Downloading UEFI Firmware",
@@ -261,8 +264,9 @@ impl InstallStepType {
             InstallStepType::ImageSelection => Some(InstallStepType::UefiDirectory),
             InstallStepType::UefiDirectory => Some(InstallStepType::LocaleSelection),
             InstallStepType::LocaleSelection => Some(InstallStepType::Options),
-            InstallStepType::Options => Some(InstallStepType::Confirmation),
-            InstallStepType::FirstBootUser => Some(InstallStepType::Confirmation),
+            InstallStepType::Options => Some(InstallStepType::PlanReview),
+            InstallStepType::FirstBootUser => Some(InstallStepType::PlanReview),
+            InstallStepType::PlanReview => Some(InstallStepType::Confirmation),
             InstallStepType::Confirmation => None,
             InstallStepType::DownloadingFedora => None, // Execution steps do not have 'next' in this flow
             InstallStepType::DownloadingUefi => None, // Execution steps do not have 'next' in this flow
@@ -287,7 +291,8 @@ impl InstallStepType {
             InstallStepType::LocaleSelection => Some(InstallStepType::UefiDirectory),
             InstallStepType::Options => Some(InstallStepType::LocaleSelection),
             InstallStepType::FirstBootUser => Some(InstallStepType::Options),
-            InstallStepType::Confirmation => Some(InstallStepType::Options),
+            InstallStepType::PlanReview => Some(InstallStepType::Options),
+            InstallStepType::Confirmation => Some(InstallStepType::PlanReview),
             _ => None, // Execution steps do not have 'prev' in this flow
         }
     }
@@ -309,6 +314,7 @@ impl InstallStepType {
                 | InstallStepType::LocaleSelection
                 | InstallStepType::Options
                 | InstallStepType::FirstBootUser
+                | InstallStepType::PlanReview
                 | InstallStepType::Confirmation
         )
     }
@@ -676,6 +682,7 @@ impl App {
                 let action = Self::list_action(key, len, &mut self.first_boot_index);
                 self.apply_list_action(action)
             }
+            InstallStepType::PlanReview => self.handle_plan_review_input(key),
             InstallStepType::Confirmation => self.handle_confirmation_input(key),
             InstallStepType::DownloadingFedora => self.handle_downloading_fedora_input(key),
             InstallStepType::DownloadingUefi => self.handle_downloading_uefi_input(key),
@@ -791,6 +798,25 @@ impl App {
             KeyCode::Char(' ') | KeyCode::Enter => {
                 if let Some(option) = self.options.get_mut(self.options_index) {
                     option.enabled = !option.enabled;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Esc => {
+                if let Some(prev) = self.current_step_type.prev() {
+                    self.current_step_type = prev;
+                }
+                InputResult::Continue
+            }
+            KeyCode::Char('q') => InputResult::Quit,
+            _ => InputResult::Continue,
+        }
+    }
+
+    fn handle_plan_review_input(&mut self, key: KeyEvent) -> InputResult {
+        match key.code {
+            KeyCode::Enter => {
+                if let Some(next) = self.current_step_type.next() {
+                    self.current_step_type = next;
                 }
                 InputResult::Continue
             }
