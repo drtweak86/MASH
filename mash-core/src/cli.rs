@@ -137,4 +137,51 @@ pub enum Command {
         #[arg(long)]
         starship_toml: PathBuf,
     },
+
+    /// 🧪 Run unified installer pipeline (dry-run by default)
+    Install {
+        /// Persisted state file path
+        #[arg(long, default_value = "/var/lib/mash/state.json")]
+        state: PathBuf,
+
+        /// Enable dry-run mode (no changes)
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Execute plan (requires --confirm)
+        #[arg(long)]
+        execute: bool,
+
+        /// Confirm destructive actions
+        #[arg(long)]
+        confirm: bool,
+
+        /// Target disk device (for planning)
+        #[arg(long)]
+        disk: Option<String>,
+
+        /// Mount spec: device:mountpoint[:fstype]
+        #[arg(long)]
+        mount: Vec<String>,
+
+        /// ext4 format target device
+        #[arg(long)]
+        format_ext4: Vec<String>,
+
+        /// btrfs format target device
+        #[arg(long)]
+        format_btrfs: Vec<String>,
+
+        /// Packages to install
+        #[arg(long)]
+        package: Vec<String>,
+
+        /// Include kernel USB-root fix in plan
+        #[arg(long)]
+        kernel_fix: bool,
+
+        /// Expected reboot count
+        #[arg(long, default_value_t = 1)]
+        reboots: u32,
+    },
 }

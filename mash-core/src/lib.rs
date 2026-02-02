@@ -15,6 +15,7 @@ pub mod disk_ops;
 mod download;
 mod errors;
 mod flash;
+pub mod installer;
 mod locale;
 mod logging;
 mod preflight;
@@ -145,7 +146,54 @@ pub fn run() -> anyhow::Result<()> {
             stages::stage_03_stage_starship_toml::copy_starship_toml(stage_dir, starship_toml)?;
             return Ok(());
         }
+        Some(cli::Command::Install {
+            state,
+            dry_run,
+            execute,
+            confirm,
+            disk,
+            mount,
+            format_ext4,
+            format_btrfs,
+            package,
+            kernel_fix,
+            reboots,
+        }) => {
+            let mounts = mount
+                .iter()
+                .filter_map(|spec| parse_mount_spec(spec))
+                .collect::<Vec<_>>();
+            let cfg = installer::pipeline::InstallConfig {
+                dry_run: *dry_run,
+                execute: *execute,
+                confirmed: *confirm,
+                state_path: state.clone(),
+                disk: disk.clone(),
+                mounts,
+                format_ext4: format_ext4.clone(),
+                format_btrfs: format_btrfs.clone(),
+                packages: package.clone(),
+                kernel_fix: *kernel_fix,
+                reboot_count: *reboots,
+            };
+
+            let plan = installer::pipeline::run_pipeline(&cfg)?;
+            println!("{}", plan);
+            return Ok(());
+        }
     }
 
     Ok(())
+}
+
+fn parse_mount_spec(spec: &str) -> Option<installer::pipeline::MountSpec> {
+    let mut parts = spec.split(':');
+    let device = parts.next()?.to_string();
+    let target = parts.next()?.to_string();
+    let fstype = parts.next().map(|s| s.to_string());
+    Some(installer::pipeline::MountSpec {
+        device,
+        target,
+        fstype,
+    })
 }
