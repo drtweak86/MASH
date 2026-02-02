@@ -24,3 +24,11 @@ The tool updates `mash-installer/Cargo.toml`, runs workspace checks, and enforce
 ## Notes
 
 - Do not manually insert non-SemVer version strings into `mash-installer/Cargo.toml`.
+
+## Branch management policy
+
+- `main` is the single permanent canonical branch that matches the released state.
+- Temporary branches should follow `issue/<N>-<short-slug>` and be deleted once the work merges.
+- Snapshot or emergency backups use `backup/...` or `abb/...` prefixes; they must be pruned when no longer needed to keep the branch list manageable.
+- Avoid creating long-lived feature branches with feedback loops. If someone needs to pause work, create a short-lived issue or rescope.
+- Local agent or tooling directories (e.g., `.git/info/exclude`, `.claude`, `.docker`) should not be committed; they are already covered by `.gitignore`.

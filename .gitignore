@@ -80,13 +80,3 @@ target/
 # --- /MASH Merge Toolkit ---
 .aider*
 mash-installer/*.bak.*
-
-# local agent junk
-.claude/
-.docker/
-.github/skills/
-
-# local agent junk
-.claude/
-.docker/
-.github/skills/
