@@ -7,5 +7,11 @@ description = "Terminal UI for MASH installer (scaffold)"
 license = "MIT"
 
 [dependencies]
-anyhow = "1.0"
+crossterm = "0.28"
+mash-core = { path = "../../mash-core" }
 mash-workflow = { path = "../mash-workflow" }
+mash-hal = { path = "../mash-hal" }
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+log = "0.4"
+ratatui = "0.28"

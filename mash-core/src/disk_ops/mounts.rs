@@ -1,12 +1,10 @@
 use anyhow::{Context, Result};
+use mash_hal::procfs::mountinfo as proc_mountinfo;
 use nix::mount::{mount as nix_mount, umount2, MntFlags, MsFlags};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MountInfo {
-    pub mount_point: PathBuf,
-}
+pub use proc_mountinfo::MountInfo;
 
 pub fn is_mounted(path: &Path) -> Result<bool> {
     let content = fs::read_to_string("/proc/self/mountinfo")
@@ -47,49 +45,17 @@ pub fn unmount(target: &Path, dry_run: bool) -> Result<()> {
 }
 
 pub fn parse_mountinfo(content: &str) -> Vec<MountInfo> {
-    content
-        .lines()
-        .filter_map(|line| {
-            let mut parts = line.split(" - ");
-            let pre = parts.next()?;
-            let pre_fields: Vec<&str> = pre.split_whitespace().collect();
-            if pre_fields.len() < 5 {
-                return None;
-            }
-            let mount_point = unescape_mount_path(pre_fields[4]);
-            Some(MountInfo {
-                mount_point: PathBuf::from(mount_point),
-            })
-        })
-        .collect()
+    proc_mountinfo::parse_mountinfo(content)
 }
 
 pub fn is_mounted_from_info(path: &Path, entries: &[MountInfo]) -> bool {
-    let target = normalize_path(path);
-    entries
-        .iter()
-        .any(|entry| normalize_path(&entry.mount_point) == target)
-}
-
-fn normalize_path(path: &Path) -> String {
-    let s = path.to_string_lossy();
-    if s.len() > 1 && s.ends_with('/') {
-        s.trim_end_matches('/').to_string()
-    } else {
-        s.to_string()
-    }
-}
-
-fn unescape_mount_path(raw: &str) -> String {
-    raw.replace("\\040", " ")
-        .replace("\\011", "\t")
-        .replace("\\012", "\n")
-        .replace("\\134", "\\")
+    proc_mountinfo::is_mounted_from_info(path, entries)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn parse_mountinfo_extracts_mountpoints() {

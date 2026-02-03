@@ -8,4 +8,14 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1.0"
+log = "0.4"
+libc = "0.2"
+once_cell = "1.21"
+mash-core = { path = "../../mash-core" }
 mash-hal = { path = "../mash-hal" }
+
+[dev-dependencies]
+httpmock = "0.7"
+sha2 = "0.10"
+tempfile = "3"
+xz2 = "0.1"

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "bin/larry_cli",
     "crates/mash-hal",
     "crates/mash-workflow",
     "crates/mash-tui",
@@ -11,6 +12,7 @@ members = [
     "tools/mash-tools",
 ]
 default-members = [
+    "bin/larry_cli",
     "crates/mash-hal",
     "crates/mash-workflow",
     "crates/mash-tui",

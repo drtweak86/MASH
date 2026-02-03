@@ -1506,6 +1506,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "larry_cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "mash-installer",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1616,6 +1624,7 @@ dependencies = [
  "libc",
  "libdnf-sys",
  "log",
+ "mash-hal",
  "nix 0.27.1",
  "once_cell",
  "ratatui",
@@ -1637,6 +1646,10 @@ name = "mash-hal"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "log",
+ "nix 0.29.0",
+ "tempfile",
+ "xz2",
 ]
 
 [[package]]
@@ -1650,6 +1663,8 @@ dependencies = [
  "libc",
  "log",
  "mash-core",
+ "mash-tui",
+ "mash-workflow",
  "nix 0.27.1",
  "ratatui",
  "reqwest",
@@ -1687,7 +1702,13 @@ name = "mash-tui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
+ "crossterm",
+ "log",
+ "mash-core",
+ "mash-hal",
  "mash-workflow",
+ "ratatui",
 ]
 
 [[package]]
@@ -1695,7 +1716,15 @@ name = "mash-workflow"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "httpmock",
+ "libc",
+ "log",
+ "mash-core",
  "mash-hal",
+ "once_cell",
+ "sha2",
+ "tempfile",
+ "xz2",
 ]
 
 [[package]]

@@ -1,24 +1,24 @@
-//! Form input handling for the TUI
+//! Form input handling for the TUI.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-/// Input mode for text fields
+/// Input mode for text fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
     Normal,
     Editing,
 }
 
-/// A text input field with cursor support
+/// A text input field with cursor support.
 #[derive(Debug, Clone)]
 pub struct InputField {
-    /// Current input value
+    /// Current input value.
     value: String,
-    /// Cursor position (byte index)
+    /// Cursor position (byte index).
     cursor: usize,
-    /// Placeholder/label text
+    /// Placeholder/label text.
     pub placeholder: String,
-    /// Current input mode
+    /// Current input mode.
     pub mode: InputMode,
 }
 
@@ -46,37 +46,37 @@ impl InputField {
         self.value = value;
     }
 
-    /// Handle a key event, returns true if the event was consumed
+    /// Handle a key event, returns true if the event was consumed.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Char(c) => {
-                // Handle Ctrl+A (select all / move to start)
+                // Handle Ctrl+A (select all / move to start).
                 if key.modifiers.contains(KeyModifiers::CONTROL) && c == 'a' {
                     self.cursor = 0;
                     return true;
                 }
-                // Handle Ctrl+E (move to end)
+                // Handle Ctrl+E (move to end).
                 if key.modifiers.contains(KeyModifiers::CONTROL) && c == 'e' {
                     self.cursor = self.value.len();
                     return true;
                 }
-                // Handle Ctrl+U (clear line)
+                // Handle Ctrl+U (clear line).
                 if key.modifiers.contains(KeyModifiers::CONTROL) && c == 'u' {
                     self.value.clear();
                     self.cursor = 0;
                     return true;
                 }
-                // Handle Ctrl+K (kill to end of line)
+                // Handle Ctrl+K (kill to end of line).
                 if key.modifiers.contains(KeyModifiers::CONTROL) && c == 'k' {
                     self.value.truncate(self.cursor);
                     return true;
                 }
-                // Handle Ctrl+W (delete word backward)
+                // Handle Ctrl+W (delete word backward).
                 if key.modifiers.contains(KeyModifiers::CONTROL) && c == 'w' {
                     self.delete_word_backward();
                     return true;
                 }
-                // Normal character input
+                // Normal character input.
                 self.insert_char(c);
                 true
             }
@@ -123,7 +123,7 @@ impl InputField {
 
     fn delete_char_backward(&mut self) {
         if self.cursor > 0 {
-            // Find the previous character boundary
+            // Find the previous character boundary.
             let prev = self.value[..self.cursor]
                 .char_indices()
                 .last()
@@ -161,15 +161,15 @@ impl InputField {
     }
 
     fn move_word_backward(&mut self) {
-        // Skip whitespace, then skip word characters
+        // Skip whitespace, then skip word characters.
         let chars: Vec<_> = self.value[..self.cursor].char_indices().collect();
 
-        // Skip trailing whitespace
+        // Skip trailing whitespace.
         let mut i = chars.len();
         while i > 0 && chars[i - 1].1.is_whitespace() {
             i -= 1;
         }
-        // Skip word characters
+        // Skip word characters.
         while i > 0 && !chars[i - 1].1.is_whitespace() {
             i -= 1;
         }
@@ -188,11 +188,11 @@ impl InputField {
         }
 
         let mut i = 0;
-        // Skip word characters
+        // Skip word characters.
         while i < chars.len() && !chars[i].1.is_whitespace() {
             i += 1;
         }
-        // Skip whitespace
+        // Skip whitespace.
         while i < chars.len() && chars[i].1.is_whitespace() {
             i += 1;
         }
@@ -244,6 +244,6 @@ mod tests {
 
         field.cursor = 0;
         field.move_cursor_left();
-        assert_eq!(field.cursor(), 0); // Should stay at 0
+        assert_eq!(field.cursor(), 0); // Should stay at 0.
     }
 }

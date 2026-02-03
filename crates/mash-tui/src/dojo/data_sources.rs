@@ -5,7 +5,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::tui::flash_config::{ImageEditionOption, ImageVersionOption};
+use super::flash_config::{ImageEditionOption, ImageVersionOption};
 
 #[derive(Debug, Clone, Copy)]
 pub struct DataFlags {
@@ -114,7 +114,6 @@ pub struct ImageMeta {
     pub version: String,
     pub edition: String,
     pub path: PathBuf,
-    pub is_remote: bool,
 }
 
 pub fn data_flags() -> DataFlags {
@@ -343,7 +342,6 @@ pub fn collect_local_images(search_paths: &[PathBuf]) -> Vec<ImageMeta> {
                 version,
                 edition,
                 path,
-                is_remote: false,
             });
         }
     }
@@ -382,7 +380,6 @@ pub fn collect_remote_images() -> Vec<ImageMeta> {
                 version: version.version_str().to_string(),
                 edition: edition.edition_str().to_string(),
                 path: PathBuf::from("/tmp").join(filename),
-                is_remote: true,
             });
         }
     }

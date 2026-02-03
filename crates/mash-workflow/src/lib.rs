@@ -1,31 +1,13 @@
 //! MASH workflow orchestration.
 //!
-//! Phase 1 scaffold for WO-020 (Grand Refactor).
-//! This crate intentionally provides only minimal public interfaces.
+//! This crate holds deterministic workflow execution primitives (stage runner,
+//! resumable state progression, etc.). Higher-level crates provide the concrete
+//! state type and persistence backend.
 
-use anyhow::Result;
-use mash_hal::Hal;
+pub mod install_runner;
+pub mod installer;
+pub mod preflight;
+pub mod stage_runner;
 
-/// A minimal workflow runner interface.
-pub trait Workflow: Send + Sync {
-    fn run(&self) -> Result<()>;
-}
-
-/// A no-op workflow used for compile-time wiring.
-#[derive(Debug)]
-pub struct NoopWorkflow<H: Hal> {
-    hal: H,
-}
-
-impl<H: Hal> NoopWorkflow<H> {
-    pub fn new(hal: H) -> Self {
-        Self { hal }
-    }
-}
-
-impl<H: Hal> Workflow for NoopWorkflow<H> {
-    fn run(&self) -> Result<()> {
-        self.hal.ensure_root()?;
-        Ok(())
-    }
-}
+#[cfg(test)]
+pub mod test_env;

@@ -7,23 +7,22 @@
 mod data_sources;
 mod dojo_app;
 mod dojo_ui;
-mod input;
-pub mod progress;
-
-mod widgets;
 
 pub mod flash_config; // Declare the new module
 pub use flash_config::{ImageSource, TuiFlashConfig}; // Update the pub use statement
 
-use crate::download::DownloadProgress;
-use crate::download_manager;
-use crate::tui::progress::{Phase, ProgressUpdate};
-use crate::{cli::Cli, errors::Result, flash};
+use crate::progress::{Phase, ProgressUpdate};
+use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use mash_core::cli::Cli;
+use mash_core::download::DownloadProgress;
+use mash_core::download_manager;
+use mash_core::flash;
+use mash_workflow::installer;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::path::PathBuf;
@@ -346,12 +345,12 @@ fn run_execution_pipeline(
         let os_kind = config.os_distro.as_os_kind();
         let image_source = match config.image_source_selection {
             ImageSource::LocalFile => {
-                crate::installer::os_install::ImageSource::Local(config.image.clone())
+                installer::os_install::ImageSource::Local(config.image.clone())
             }
-            ImageSource::DownloadCatalogue => crate::installer::os_install::ImageSource::Download,
+            ImageSource::DownloadCatalogue => installer::os_install::ImageSource::Download,
         };
 
-        let install_cfg = crate::installer::os_install::OsInstallConfig {
+        let install_cfg = installer::os_install::OsInstallConfig {
             mash_root: config.mash_root.clone(),
             state_path: config.state_path.clone(),
             os: os_kind,
@@ -364,8 +363,9 @@ fn run_execution_pipeline(
             progress_tx: config.progress_tx.clone(),
         };
 
+        let hal = mash_hal::LinuxHal::new();
         let result =
-            crate::installer::os_install::run(&install_cfg, yes_i_know, Some(cancel_flag.as_ref()));
+            installer::os_install::run(&hal, &install_cfg, yes_i_know, Some(cancel_flag.as_ref()));
         flash::clear_cancel_flag();
 
         match result {

@@ -1,0 +1,12 @@
+[package]
+name = "larry_cli"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+description = "Larry CLI entrypoint for the MASH installer"
+
+[dependencies]
+anyhow = "1.0"
+mash-installer = { path = "../../mash-installer" }
+

@@ -8,7 +8,7 @@ use std::sync::atomic::AtomicBool;
 /// - centralizes cleanup on error/cancel
 ///
 /// This module intentionally has no dependency on the TUI.
-pub(crate) fn fetch_fedora_image(
+pub fn fetch_fedora_image(
     download_root: &Path,
     version: &str,
     edition: &str,
@@ -33,7 +33,7 @@ pub(crate) fn fetch_fedora_image(
     }
 }
 
-pub(crate) fn fetch_uefi_bundle(
+pub fn fetch_uefi_bundle(
     download_root: &Path,
     progress: &mut dyn FnMut(download::DownloadProgress) -> bool,
     stage: &mut dyn FnMut(&str),

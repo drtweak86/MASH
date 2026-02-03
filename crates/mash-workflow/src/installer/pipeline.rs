@@ -1,8 +1,9 @@
-use crate::downloader;
-use crate::stage_runner::{StageDefinition, StageRunner};
-use crate::state_manager::{self, DownloadArtifact};
-use crate::{boot_config, disk_ops, preflight, system_config};
+use crate::install_runner::{StageDefinition, StageRunner};
+use crate::preflight;
 use anyhow::{Context, Result};
+use mash_core::downloader;
+use mash_core::state_manager::{self, DownloadArtifact};
+use mash_core::{boot_config, system_config};
 use std::env;
 use std::fmt;
 use std::path::PathBuf;
@@ -274,7 +275,8 @@ fn run_download_stage(
     Ok(())
 }
 
-fn run_disk_stage(
+fn run_disk_stage<H: mash_hal::FormatOps>(
+    hal: &H,
     state: &mut state_manager::InstallState,
     cfg: &DiskStageConfig,
     dry_run: bool,
@@ -283,25 +285,18 @@ fn run_disk_stage(
         log::info!("Disk stage skipped; no format targets configured");
         return Ok(());
     }
-    let format_opts = disk_ops::format::FormatOptions::new(dry_run, cfg.confirmed);
-    if dry_run {
-        for device in &cfg.format_ext4 {
-            let spec = disk_ops::format::ext4_command_spec(device, &format_opts);
-            log::info!("DRY RUN: {} {}", spec.program, spec.args.join(" "));
-        }
-        for device in &cfg.format_btrfs {
-            let spec = disk_ops::format::btrfs_command_spec(device, &format_opts);
-            log::info!("DRY RUN: {} {}", spec.program, spec.args.join(" "));
-        }
-        return Ok(());
-    }
+    let format_opts = mash_hal::FormatOptions::new(dry_run, cfg.confirmed);
     for device in &cfg.format_ext4 {
-        disk_ops::format::format_ext4(device, &format_opts)?;
-        state.record_formatted_device(device);
+        hal.format_ext4(device, &format_opts)?;
+        if !dry_run {
+            state.record_formatted_device(device);
+        }
     }
     for device in &cfg.format_btrfs {
-        disk_ops::format::format_btrfs(device, &format_opts)?;
-        state.record_formatted_device(device);
+        hal.format_btrfs(device, &format_opts)?;
+        if !dry_run {
+            state.record_formatted_device(device);
+        }
     }
     Ok(())
 }
@@ -342,7 +337,8 @@ fn run_boot_stage(
     Ok(())
 }
 
-fn run_mount_stage(
+fn run_mount_stage<H: mash_hal::MountOps>(
+    hal: &H,
     _state: &mut state_manager::InstallState,
     cfg: &MountStageConfig,
     dry_run: bool,
@@ -354,20 +350,18 @@ fn run_mount_stage(
 
     for spec in &cfg.mounts {
         let target = PathBuf::from(&spec.target);
-        if disk_ops::mounts::is_mounted(&target).unwrap_or(false) {
+        if hal.is_mounted(&target).unwrap_or(false) {
             log::info!("Mount already present: {}", target.display());
             continue;
         }
-        if dry_run {
-            log::info!("DRY RUN: mount {} -> {}", spec.device, target.display());
-            continue;
+        if !dry_run {
+            std::fs::create_dir_all(&target)?;
         }
-        std::fs::create_dir_all(&target)?;
-        disk_ops::mounts::mount_device(
+        hal.mount_device(
             PathBuf::from(&spec.device).as_path(),
             &target,
             spec.fstype.as_deref(),
-            nix::mount::MsFlags::empty(),
+            mash_hal::MountOptions::new(),
             dry_run,
         )?;
     }
@@ -439,6 +433,9 @@ pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
         }
         bins
     };
+    // Create HAL for system operations
+    let hal = Arc::new(mash_hal::LinuxHal::new());
+
     let preflight_cfg = Arc::new(preflight::PreflightConfig::for_install(
         cfg.disk.as_ref().map(PathBuf::from),
         requires_network,
@@ -469,16 +466,22 @@ pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
             }
             "Mount plan" => {
                 let cfg = Arc::clone(&mount_cfg);
+                let hal = Arc::clone(&hal);
                 StageDefinition {
                     name: stage.name,
-                    run: Box::new(move |state, dry_run| run_mount_stage(state, &cfg, dry_run)),
+                    run: Box::new(move |state, dry_run| {
+                        run_mount_stage(hal.as_ref(), state, &cfg, dry_run)
+                    }),
                 }
             }
             "Format plan" => {
                 let disk_cfg = DiskStageConfig::from_install_config(cfg);
+                let hal = Arc::clone(&hal);
                 StageDefinition {
                     name: stage.name,
-                    run: Box::new(move |state, dry_run| run_disk_stage(state, &disk_cfg, dry_run)),
+                    run: Box::new(move |state, dry_run| {
+                        run_disk_stage(hal.as_ref(), state, &disk_cfg, dry_run)
+                    }),
                 }
             }
             "Package plan" => {
@@ -537,9 +540,9 @@ impl fmt::Display for InstallPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state_manager::{self, DownloadArtifact};
     use httpmock::Method::GET;
     use httpmock::MockServer;
+    use mash_core::state_manager::{self, DownloadArtifact};
     use sha2::{Digest, Sha256};
     use std::env;
     use std::ffi::OsString;
@@ -1091,9 +1094,10 @@ mod tests {
             true,
         );
         let disk_cfg = DiskStageConfig::from_install_config(&cfg);
+        let hal = mash_hal::LinuxHal::new();
         let stage = StageDefinition {
             name: "Format plan",
-            run: Box::new(move |state, dry_run| run_disk_stage(state, &disk_cfg, dry_run)),
+            run: Box::new(move |state, dry_run| run_disk_stage(&hal, state, &disk_cfg, dry_run)),
         };
 
         let state = StageRunner::new(state_path.clone(), false)
@@ -1124,9 +1128,10 @@ mod tests {
             false,
         );
         let disk_cfg = DiskStageConfig::from_install_config(&cfg);
+        let hal = mash_hal::LinuxHal::new();
         let stage = StageDefinition {
             name: "Format plan",
-            run: Box::new(move |state, dry_run| run_disk_stage(state, &disk_cfg, dry_run)),
+            run: Box::new(move |state, dry_run| run_disk_stage(&hal, state, &disk_cfg, dry_run)),
         };
 
         let state = StageRunner::new(state_path.clone(), true)

@@ -1,8 +1,8 @@
-//! Progress tracking for the installation process
+//! Progress tracking for the installation process.
 
 use std::time::{Duration, Instant};
 
-/// Installation phases
+/// Installation phases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     DownloadImage,
@@ -20,7 +20,7 @@ pub enum Phase {
 }
 
 impl Phase {
-    /// Get the jovial emoji-enhanced phase name
+    /// Get the jovial emoji-enhanced phase name.
     pub fn name(&self) -> &'static str {
         match self {
             Phase::DownloadImage => "⬇️ Downloading Fedora image",
@@ -76,98 +76,98 @@ impl Phase {
         ]
     }
 
-    /// Get the spinner frames for this phase type
+    /// Get the spinner frames for this phase type.
     pub fn spinners(&self) -> &'static [&'static str] {
         match self {
             Phase::DownloadImage | Phase::DownloadUefi => &["⬇️", "📥", "📦", "✅"],
-            // Disk operations
+            // Disk operations.
             Phase::Partition | Phase::Format => &["💿", "📀", "💾", "🖴"],
-            // Copy operations
+            // Copy operations.
             Phase::CopyRoot | Phase::CopyBoot | Phase::CopyEfi => &["📦", "📤", "📥", "🗃️"],
-            // Config operations
+            // Config operations.
             Phase::UefiConfig | Phase::LocaleConfig | Phase::Fstab => &["🔧", "⚙️", "🛠️", "🔩"],
-            // Dojo stage
+            // Dojo stage.
             Phase::StageDojo => &["🥋", "🥷", "⚔️", "🏯"],
-            // Cleanup
+            // Cleanup.
             Phase::Cleanup => &["🧹", "🧼", "✨", "🪄"],
         }
     }
 
-    /// Get the current spinner frame for this phase
+    /// Get the current spinner frame for this phase.
     pub fn spinner_frame(&self, tick: u64) -> &'static str {
         let spinners = self.spinners();
-        let index = (tick / 3) as usize % spinners.len(); // Change every 3 ticks (~300ms)
+        let index = (tick / 3) as usize % spinners.len(); // Change every 3 ticks (~300ms).
         spinners[index]
     }
 }
 
-/// Progress update message
+/// Progress update message.
 #[derive(Debug, Clone)]
 pub enum ProgressUpdate {
-    /// Started a new phase
+    /// Started a new phase.
     PhaseStarted(Phase),
-    /// Completed a phase
+    /// Completed a phase.
     PhaseCompleted(Phase),
-    /// Skipped a phase
+    /// Skipped a phase.
     PhaseSkipped(Phase),
-    /// Rsync progress update (percent, bytes_per_sec, files_done, files_total)
+    /// Rsync progress update (percent, bytes_per_sec, files_done, files_total).
     RsyncProgress {
         percent: f64,
         speed_mbps: f64,
         files_done: u64,
         files_total: u64,
     },
-    /// Disk I/O rate update
+    /// Disk I/O rate update.
     DiskIo { mbps: f64 },
-    /// Status message
+    /// Status message.
     Status(String),
-    /// Installation completed successfully
+    /// Installation completed successfully.
     Complete,
-    /// Installation failed with error
+    /// Installation failed with error.
     Error(String),
 }
 
-/// State of installation progress
+/// State of installation progress.
 #[derive(Debug, Clone)]
 pub struct ProgressState {
-    /// Current phase
+    /// Current phase.
     pub current_phase: Option<Phase>,
-    /// Completed phases
+    /// Completed phases.
     pub completed_phases: Vec<Phase>,
-    /// Skipped phases
+    /// Skipped phases.
     pub skipped_phases: Vec<Phase>,
-    /// Overall progress percentage (0-100)
+    /// Overall progress percentage (0-100).
     pub overall_percent: f64,
-    /// Current phase progress percentage (0-100)
+    /// Current phase progress percentage (0-100).
     pub phase_percent: f64,
-    /// Current rsync speed in MB/s
+    /// Current rsync speed in MB/s.
     pub rsync_speed: f64,
-    /// Peak rsync speed in MB/s
+    /// Peak rsync speed in MB/s.
     pub peak_speed: f64,
-    /// Running average speed in MB/s
+    /// Running average speed in MB/s.
     pub average_speed: f64,
-    /// Speed samples for averaging
+    /// Speed samples for averaging.
     speed_samples: Vec<f64>,
-    /// Disk I/O speed in MB/s
+    /// Disk I/O speed in MB/s.
     pub disk_io_speed: f64,
-    /// Bytes transferred
+    /// Bytes transferred.
     pub bytes_done: u64,
-    /// Total bytes to transfer
+    /// Total bytes to transfer.
     pub bytes_total: u64,
-    /// Files copied / total
+    /// Files copied / total.
     pub files_done: u64,
     pub files_total: u64,
-    /// Current file being processed
+    /// Current file being processed.
     pub current_file: Option<String>,
-    /// Status message
+    /// Status message.
     pub status: String,
-    /// Start time
+    /// Start time.
     pub start_time: Option<Instant>,
-    /// Phase start time
+    /// Phase start time.
     pub phase_start_time: Option<Instant>,
     /// Is installation complete?
     pub is_complete: bool,
-    /// Error message if failed
+    /// Error message if failed.
     pub error: Option<String>,
 }
 
@@ -199,7 +199,7 @@ impl Default for ProgressState {
 }
 
 impl ProgressState {
-    /// Apply a progress update
+    /// Apply a progress update.
     pub fn apply_update(&mut self, update: ProgressUpdate) {
         match update {
             ProgressUpdate::PhaseStarted(phase) => {
@@ -210,7 +210,7 @@ impl ProgressState {
                 if self.start_time.is_none() {
                     self.start_time = Some(Instant::now());
                 }
-                // Update overall progress based on phase
+                // Update overall progress based on phase.
                 self.update_overall_progress();
             }
             ProgressUpdate::PhaseCompleted(phase) => {
@@ -237,12 +237,12 @@ impl ProgressState {
                 self.files_done = files_done;
                 self.files_total = files_total;
 
-                // Track peak speed
+                // Track peak speed.
                 if speed_mbps > self.peak_speed {
                     self.peak_speed = speed_mbps;
                 }
 
-                // Update running average
+                // Update running average.
                 self.speed_samples.push(speed_mbps);
                 if self.speed_samples.len() > 100 {
                     self.speed_samples.remove(0);
@@ -261,7 +261,7 @@ impl ProgressState {
             ProgressUpdate::Complete => {
                 self.is_complete = true;
                 self.overall_percent = 100.0;
-                self.status = "🎉 Installation complete!".to_string();
+                self.status = "✅ Installation complete!".to_string();
             }
             ProgressUpdate::Error(msg) => {
                 self.is_complete = true;
@@ -286,7 +286,7 @@ impl ProgressState {
         self.overall_percent = ((completed + current_contribution) / total) * 100.0;
     }
 
-    /// Get estimated time remaining
+    /// Get estimated time remaining.
     pub fn eta(&self) -> Option<Duration> {
         let start = self.start_time?;
         let elapsed = start.elapsed();
@@ -305,17 +305,17 @@ impl ProgressState {
         }
     }
 
-    /// Get elapsed time
+    /// Get elapsed time.
     pub fn elapsed(&self) -> Option<Duration> {
         self.start_time.map(|t| t.elapsed())
     }
 
-    /// Get phase elapsed time
+    /// Get phase elapsed time.
     pub fn phase_elapsed(&self) -> Option<Duration> {
         self.phase_start_time.map(|t| t.elapsed())
     }
 
-    /// Format duration as string
+    /// Format duration as string.
     pub fn format_duration(d: Duration) -> String {
         let secs = d.as_secs();
         if secs < 60 {
@@ -327,7 +327,7 @@ impl ProgressState {
         }
     }
 
-    /// Format ETA as string
+    /// Format ETA as string.
     pub fn eta_string(&self) -> String {
         match self.eta() {
             Some(d) => Self::format_duration(d),
@@ -335,7 +335,7 @@ impl ProgressState {
         }
     }
 
-    /// Format elapsed time as string
+    /// Format elapsed time as string.
     pub fn elapsed_string(&self) -> String {
         match self.elapsed() {
             Some(d) => Self::format_duration(d),
@@ -343,7 +343,7 @@ impl ProgressState {
         }
     }
 
-    /// Format phase elapsed time as string
+    /// Format phase elapsed time as string.
     pub fn phase_elapsed_string(&self) -> String {
         match self.phase_elapsed() {
             Some(d) => Self::format_duration(d),
@@ -351,20 +351,20 @@ impl ProgressState {
         }
     }
 
-    /// Get phase status symbol
+    /// Get phase status symbol.
     pub fn phase_symbol(&self, phase: Phase) -> &'static str {
         if self.completed_phases.contains(&phase) {
-            "✅" // Completed
+            "✅" // Completed.
         } else if self.skipped_phases.contains(&phase) {
-            "⏭️" // Skipped
+            "⏭️" // Skipped.
         } else if self.current_phase == Some(phase) {
-            "⏳" // In progress
+            "⏳" // In progress.
         } else {
-            "⏸️" // Pending
+            "⏸️" // Pending.
         }
     }
 
-    /// Format bytes as human-readable string
+    /// Format bytes as human-readable string.
     pub fn format_bytes(bytes: u64) -> String {
         const KB: u64 = 1024;
         const MB: u64 = 1024 * KB;
@@ -410,7 +410,7 @@ mod tests {
         let copy_phase = Phase::CopyRoot;
         let config_phase = Phase::UefiConfig;
 
-        // Each phase type should have its own spinners
+        // Each phase type should have its own spinners.
         assert_eq!(disk_phase.spinners()[0], "💿");
         assert_eq!(copy_phase.spinners()[0], "📦");
         assert_eq!(config_phase.spinners()[0], "🔧");

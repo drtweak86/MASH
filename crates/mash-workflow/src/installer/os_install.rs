@@ -1,8 +1,8 @@
-use crate::downloader::{self, DownloadOptions, ImageKey, OsKind};
-use crate::stage_runner::{StageDefinition, StageRunner};
-use crate::state_manager::{save_state_atomic, InstallState};
-use crate::tui::progress::ProgressUpdate;
+use crate::install_runner::{StageDefinition, StageRunner};
 use anyhow::{Context, Result};
+use mash_core::downloader::{self, DownloadOptions, ImageKey, OsKind};
+use mash_core::progress::ProgressUpdate;
+use mash_core::state_manager::{save_state_atomic, DownloadArtifact, InstallState};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
@@ -40,11 +40,15 @@ impl OsInstallConfig {
     }
 }
 
-pub fn run(
+pub fn run<H>(
+    hal: &H,
     cfg: &OsInstallConfig,
     destructive_confirmed: bool,
     cancel: Option<&AtomicBool>,
-) -> Result<InstallState> {
+) -> Result<InstallState>
+where
+    H: mash_hal::FlashOps + Send + Sync + Clone + 'static,
+{
     if !cfg.dry_run && !destructive_confirmed {
         anyhow::bail!("refusing to run destructive install without confirmation");
     }
@@ -108,7 +112,7 @@ pub fn run(
                 ..Default::default()
             };
             let artifact = downloader::download(&opts)?;
-            state.record_download(crate::state_manager::DownloadArtifact::new(
+            state.record_download(DownloadArtifact::new(
                 artifact.name.clone(),
                 &artifact.path,
                 artifact.size,
@@ -124,6 +128,7 @@ pub fn run(
     // Flash stage.
     let cfg_flash = cfg.clone();
     let cancel_flash = cancel;
+    let hal_flash = hal.clone();
     stages.push(StageDefinition {
         name: "Flash OS image",
         run: Box::new(move |state, dry_run| {
@@ -148,7 +153,7 @@ pub fn run(
             }
 
             let image_path = resolve_image_path(&cfg_flash, state)?;
-            crate::flash::flash_raw_image_to_disk(&image_path, &cfg_flash.target_disk)?;
+            hal_flash.flash_raw_image(&image_path, &cfg_flash.target_disk)?;
 
             if !state
                 .flashed_devices
@@ -257,7 +262,8 @@ mod tests {
             progress_tx: None,
         };
 
-        let state = run(&cfg, true, None).unwrap();
+        let hal = mash_hal::LinuxHal::new();
+        let state = run(&hal, &cfg, true, None).unwrap();
         assert!(state
             .flashed_devices
             .iter()
@@ -293,7 +299,8 @@ mod tests {
             progress_tx: None,
         };
 
-        let state = run(&cfg, true, None).unwrap();
+        let hal = mash_hal::LinuxHal::new();
+        let state = run(&hal, &cfg, true, None).unwrap();
         assert!(!state.post_boot_partition_expansion_required);
         let written = std::fs::read(&disk_path).unwrap();
         assert_eq!(written, content);
@@ -324,7 +331,8 @@ mod tests {
             progress_tx: None,
         };
 
-        let state = run(&cfg, true, None).unwrap();
+        let hal = mash_hal::LinuxHal::new();
+        let state = run(&hal, &cfg, true, None).unwrap();
         assert!(state.post_boot_partition_expansion_required);
         let written = std::fs::read(&disk_path).unwrap();
         assert_eq!(written, content);
