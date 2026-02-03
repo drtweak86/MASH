@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 const CONFIG_TXT: &str = r#"arm_64bit=1
 enable_uart=1
@@ -24,6 +25,7 @@ pub fn run(args: &[String]) -> Result<()> {
         cfg_path.display()
     );
     fs::write(&cfg_path, CONFIG_TXT)?;
-    let _ = Command::new("sync").status();
+    let mut cmd = Command::new("sync");
+    let _ = crate::process_timeout::status_with_timeout("sync", &mut cmd, Duration::from_secs(60));
     Ok(())
 }

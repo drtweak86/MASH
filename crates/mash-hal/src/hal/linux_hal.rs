@@ -10,6 +10,9 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+use wait_timeout::ChildExt;
 
 /// Real HAL implementation for Linux systems.
 #[derive(Debug, Clone, Default)]
@@ -20,6 +23,16 @@ impl LinuxHal {
         Self
     }
 }
+
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+const SYNC_TIMEOUT: Duration = Duration::from_secs(60);
+const FORMAT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const WIPEFS_TIMEOUT: Duration = Duration::from_secs(60);
+const PARTED_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const LOSETUP_TIMEOUT: Duration = Duration::from_secs(30);
+const BTRFS_TIMEOUT: Duration = Duration::from_secs(60);
+const RSYNC_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+const RSYNC_MAX_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 
 fn map_command_err(program: &str, err: std::io::Error) -> HalError {
     if err.kind() == std::io::ErrorKind::NotFound {
@@ -34,6 +47,60 @@ fn output_failed(program: &str, output: &Output) -> HalError {
         code: output.status.code(),
         stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
     }
+}
+
+fn output_with_timeout(program: &str, cmd: &mut Command, timeout: Duration) -> HalResult<Output> {
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| map_command_err(program, e))?;
+
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+
+    // Drain pipes concurrently to avoid deadlocks on large output.
+    let stdout_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut out) = stdout.take() {
+            let _ = out.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let stderr_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut err) = stderr.take() {
+            let _ = err.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    let status = match child.wait_timeout(timeout).map_err(HalError::Io)? {
+        Some(status) => status,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_handle.join();
+            let _ = stderr_handle.join();
+            return Err(HalError::CommandTimeout {
+                program: program.to_string(),
+                timeout_secs: timeout.as_secs(),
+            });
+        }
+    };
+
+    let stdout = stdout_handle.join().unwrap_or_default();
+    let stderr = stderr_handle.join().unwrap_or_default();
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn status_with_timeout(program: &str, cmd: &mut Command, timeout: Duration) -> HalResult<()> {
+    let output = output_with_timeout(program, cmd, timeout)?;
+    if !output.status.success() {
+        return Err(output_failed(program, &output));
+    }
+    Ok(())
 }
 
 fn map_nix_err(err: nix::errno::Errno) -> HalError {
@@ -133,10 +200,9 @@ impl FormatOps for LinuxHal {
         let mut args = opts.extra_args.clone();
         args.push(device.display().to_string());
 
-        let output = Command::new("mkfs.ext4")
-            .args(&args)
-            .output()
-            .map_err(|e| map_command_err("mkfs.ext4", e))?;
+        let mut cmd = Command::new("mkfs.ext4");
+        cmd.args(&args);
+        let output = output_with_timeout("mkfs.ext4", &mut cmd, FORMAT_TIMEOUT)?;
 
         if !output.status.success() {
             return Err(output_failed("mkfs.ext4", &output));
@@ -158,10 +224,9 @@ impl FormatOps for LinuxHal {
         let mut args = opts.extra_args.clone();
         args.push(device.display().to_string());
 
-        let output = Command::new("mkfs.btrfs")
-            .args(&args)
-            .output()
-            .map_err(|e| map_command_err("mkfs.btrfs", e))?;
+        let mut cmd = Command::new("mkfs.btrfs");
+        cmd.args(&args);
+        let output = output_with_timeout("mkfs.btrfs", &mut cmd, FORMAT_TIMEOUT)?;
 
         if !output.status.success() {
             return Err(output_failed("mkfs.btrfs", &output));
@@ -186,10 +251,9 @@ impl FormatOps for LinuxHal {
         args.extend(opts.extra_args.iter().cloned());
         args.push(device.display().to_string());
 
-        let output = Command::new("mkfs.vfat")
-            .args(&args)
-            .output()
-            .map_err(|e| map_command_err("mkfs.vfat", e))?;
+        let mut cmd = Command::new("mkfs.vfat");
+        cmd.args(&args);
+        let output = output_with_timeout("mkfs.vfat", &mut cmd, FORMAT_TIMEOUT)?;
 
         if !output.status.success() {
             return Err(output_failed("mkfs.vfat", &output));
@@ -254,28 +318,22 @@ impl FlashOps for LinuxHal {
 impl SystemOps for LinuxHal {
     fn sync(&self) -> HalResult<()> {
         // Avoid linking libc directly; keep behavior aligned with existing shell usage.
-        let _ = Command::new("sync")
-            .status()
-            .map_err(|e| map_command_err("sync", e))?;
-        Ok(())
+        let mut cmd = Command::new("sync");
+        status_with_timeout("sync", &mut cmd, SYNC_TIMEOUT)
     }
 
     fn udev_settle(&self) -> HalResult<()> {
-        let _ = Command::new("udevadm")
-            .arg("settle")
-            .status()
-            .map_err(|e| map_command_err("udevadm", e))?;
-        Ok(())
+        let mut cmd = Command::new("udevadm");
+        cmd.arg("settle");
+        status_with_timeout("udevadm", &mut cmd, SYNC_TIMEOUT)
     }
 }
 
 impl ProbeOps for LinuxHal {
     fn lsblk_mountpoints(&self, disk: &Path) -> HalResult<Vec<std::path::PathBuf>> {
-        let output = Command::new("lsblk")
-            .args(["-lnpo", "MOUNTPOINT"])
-            .arg(disk)
-            .output()
-            .map_err(|e| map_command_err("lsblk", e))?;
+        let mut cmd = Command::new("lsblk");
+        cmd.args(["-lnpo", "MOUNTPOINT"]).arg(disk);
+        let output = output_with_timeout("lsblk", &mut cmd, PROBE_TIMEOUT)?;
 
         if !output.status.success() {
             return Err(output_failed("lsblk", &output));
@@ -290,11 +348,10 @@ impl ProbeOps for LinuxHal {
     }
 
     fn lsblk_table(&self, disk: &Path) -> HalResult<String> {
-        let output = Command::new("lsblk")
-            .args(["-o", "NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS,MODEL"])
-            .arg(disk)
-            .output()
-            .map_err(|e| map_command_err("lsblk", e))?;
+        let mut cmd = Command::new("lsblk");
+        cmd.args(["-o", "NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS,MODEL"])
+            .arg(disk);
+        let output = output_with_timeout("lsblk", &mut cmd, PROBE_TIMEOUT)?;
 
         if !output.status.success() {
             return Err(output_failed("lsblk", &output));
@@ -304,11 +361,9 @@ impl ProbeOps for LinuxHal {
     }
 
     fn blkid_uuid(&self, device: &Path) -> HalResult<String> {
-        let output = Command::new("blkid")
-            .args(["-s", "UUID", "-o", "value"])
-            .arg(device)
-            .output()
-            .map_err(|e| map_command_err("blkid", e))?;
+        let mut cmd = Command::new("blkid");
+        cmd.args(["-s", "UUID", "-o", "value"]).arg(device);
+        let output = output_with_timeout("blkid", &mut cmd, PROBE_TIMEOUT)?;
 
         if !output.status.success() {
             return Err(output_failed("blkid", &output));
@@ -328,11 +383,9 @@ impl PartitionOps for LinuxHal {
             return Err(HalError::SafetyLock);
         }
 
-        let output = Command::new("wipefs")
-            .args(["-a"])
-            .arg(disk)
-            .output()
-            .map_err(|e| map_command_err("wipefs", e))?;
+        let mut cmd = Command::new("wipefs");
+        cmd.args(["-a"]).arg(disk);
+        let output = output_with_timeout("wipefs", &mut cmd, WIPEFS_TIMEOUT)?;
         if !output.status.success() {
             return Err(output_failed("wipefs", &output));
         }
@@ -383,10 +436,9 @@ impl PartitionOps for LinuxHal {
             }
         }
 
-        let output = Command::new("parted")
-            .args(&args)
-            .output()
-            .map_err(|e| map_command_err("parted", e))?;
+        let mut cmd = Command::new("parted");
+        cmd.args(&args);
+        let output = output_with_timeout("parted", &mut cmd, PARTED_TIMEOUT)?;
         if !output.status.success() {
             return Err(output_failed("parted", &output));
         }
@@ -402,10 +454,9 @@ impl LoopOps for LinuxHal {
         }
         args.push(image.display().to_string());
 
-        let output = Command::new("losetup")
-            .args(&args)
-            .output()
-            .map_err(|e| map_command_err("losetup", e))?;
+        let mut cmd = Command::new("losetup");
+        cmd.args(&args);
+        let output = output_with_timeout("losetup", &mut cmd, LOSETUP_TIMEOUT)?;
 
         if !output.status.success() {
             return Err(output_failed("losetup", &output));
@@ -415,10 +466,9 @@ impl LoopOps for LinuxHal {
     }
 
     fn losetup_detach(&self, loop_device: &str) -> HalResult<()> {
-        let output = Command::new("losetup")
-            .args(["-d", loop_device])
-            .output()
-            .map_err(|e| map_command_err("losetup", e))?;
+        let mut cmd = Command::new("losetup");
+        cmd.args(["-d", loop_device]);
+        let output = output_with_timeout("losetup", &mut cmd, LOSETUP_TIMEOUT)?;
         if !output.status.success() {
             return Err(output_failed("losetup", &output));
         }
@@ -428,11 +478,9 @@ impl LoopOps for LinuxHal {
 
 impl BtrfsOps for LinuxHal {
     fn btrfs_subvolume_list(&self, mount_point: &Path) -> HalResult<String> {
-        let output = Command::new("btrfs")
-            .args(["subvolume", "list"])
-            .arg(mount_point)
-            .output()
-            .map_err(|e| map_command_err("btrfs", e))?;
+        let mut cmd = Command::new("btrfs");
+        cmd.args(["subvolume", "list"]).arg(mount_point);
+        let output = output_with_timeout("btrfs", &mut cmd, BTRFS_TIMEOUT)?;
         if !output.status.success() {
             return Err(output_failed("btrfs", &output));
         }
@@ -440,11 +488,9 @@ impl BtrfsOps for LinuxHal {
     }
 
     fn btrfs_subvolume_create(&self, path: &Path) -> HalResult<()> {
-        let output = Command::new("btrfs")
-            .args(["subvolume", "create"])
-            .arg(path)
-            .output()
-            .map_err(|e| map_command_err("btrfs", e))?;
+        let mut cmd = Command::new("btrfs");
+        cmd.args(["subvolume", "create"]).arg(path);
+        let output = output_with_timeout("btrfs", &mut cmd, BTRFS_TIMEOUT)?;
         if !output.status.success() {
             return Err(output_failed("btrfs", &output));
         }
@@ -499,21 +545,99 @@ impl RsyncOps for LinuxHal {
             })
         });
 
+        let (tx, rx) = mpsc::channel::<io::Result<String>>();
         if let Some(stdout) = child.stdout.take() {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                let line = line?;
-                if !on_stdout_line(&line) {
-                    let _ = child.kill();
-                    if let Some(h) = stderr_handle.take() {
-                        let _ = h.join();
+            std::thread::spawn(move || {
+                let reader = BufReader::new(stdout);
+                for line in reader.lines() {
+                    if tx.send(line).is_err() {
+                        break;
                     }
-                    return Err(HalError::Other("rsync cancelled".to_string()));
                 }
+            });
+        }
+
+        let start = Instant::now();
+        let mut last_output = Instant::now();
+        let watch_idle = opts.info.is_some();
+        loop {
+            // Hard upper bound.
+            if start.elapsed() > RSYNC_MAX_TIMEOUT {
+                let _ = child.kill();
+                let _ = child.wait();
+                if let Some(h) = stderr_handle.take() {
+                    let _ = h.join();
+                }
+                return Err(HalError::CommandTimeout {
+                    program: "rsync".to_string(),
+                    timeout_secs: RSYNC_MAX_TIMEOUT.as_secs(),
+                });
+            }
+
+            // Idle detection (no stdout lines observed) only when the caller asked for progress
+            // output; otherwise rsync may be intentionally quiet.
+            if watch_idle && last_output.elapsed() > RSYNC_IDLE_TIMEOUT {
+                let _ = child.kill();
+                let _ = child.wait();
+                if let Some(h) = stderr_handle.take() {
+                    let _ = h.join();
+                }
+                return Err(HalError::CommandTimeout {
+                    program: "rsync".to_string(),
+                    timeout_secs: RSYNC_IDLE_TIMEOUT.as_secs(),
+                });
+            }
+
+            match rx.recv_timeout(Duration::from_millis(250)) {
+                Ok(Ok(line)) => {
+                    last_output = Instant::now();
+                    if !on_stdout_line(&line) {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        if let Some(h) = stderr_handle.take() {
+                            let _ = h.join();
+                        }
+                        return Err(HalError::Other("rsync cancelled".to_string()));
+                    }
+                }
+                Ok(Err(err)) => return Err(HalError::Io(err)),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // Poll for process exit while waiting for output.
+                    if let Some(status) = child.try_wait()? {
+                        if !status.success() {
+                            let stderr_s = stderr_handle
+                                .take()
+                                .and_then(|h| h.join().ok())
+                                .unwrap_or_default();
+                            return Err(HalError::CommandFailed {
+                                program: "rsync".to_string(),
+                                code: status.code(),
+                                stderr: stderr_s.trim().to_string(),
+                            });
+                        }
+                        // Success.
+                        let _ = stderr_handle.take().and_then(|h| h.join().ok());
+                        return Ok(());
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
 
-        let status = child.wait()?;
+        let status = match child
+            .wait_timeout(Duration::from_secs(5))
+            .map_err(HalError::Io)?
+        {
+            Some(status) => status,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(HalError::CommandTimeout {
+                    program: "rsync".to_string(),
+                    timeout_secs: 5,
+                });
+            }
+        };
         if !status.success() {
             let stderr_s = stderr_handle
                 .take()

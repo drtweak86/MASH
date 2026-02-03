@@ -30,13 +30,17 @@ fn hostname() -> Option<String> {
 
 fn kernel_release() -> Option<String> {
     // Best effort: avoid adding dependencies; `uname -r` is stable on Linux.
-    std::process::Command::new("uname")
-        .arg("-r")
-        .output()
-        .ok()
-        .and_then(|out| String::from_utf8(out.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    let mut cmd = std::process::Command::new("uname");
+    cmd.arg("-r");
+    crate::process_timeout::output_with_timeout(
+        "uname",
+        &mut cmd,
+        std::time::Duration::from_secs(2),
+    )
+    .ok()
+    .and_then(|out| String::from_utf8(out.stdout).ok())
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty())
 }
 
 fn parse_cpu_model(cpuinfo: &str) -> Option<String> {

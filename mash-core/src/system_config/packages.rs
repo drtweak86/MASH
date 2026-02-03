@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::env;
 use std::process::Command;
+use std::time::Duration;
 
 pub trait PackageManager {
     fn install(&self, pkgs: &[String]) -> Result<()>;
@@ -82,7 +83,13 @@ pub fn update_command_spec() -> CommandSpec {
 }
 
 fn run_command(spec: &CommandSpec) -> Result<()> {
-    let status = Command::new(&spec.program).args(&spec.args).status()?;
+    let mut cmd = Command::new(&spec.program);
+    cmd.args(&spec.args);
+    let status = crate::process_timeout::status_with_timeout(
+        &spec.program,
+        &mut cmd,
+        Duration::from_secs(60 * 60),
+    )?;
     if !status.success() {
         return Err(anyhow!("Command failed: {}", spec.program));
     }

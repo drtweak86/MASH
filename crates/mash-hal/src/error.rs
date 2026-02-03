@@ -26,6 +26,9 @@ pub enum HalError {
         stderr: String,
     },
 
+    #[error("Command timed out: {program} after {timeout_secs}s")]
+    CommandTimeout { program: String, timeout_secs: u64 },
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
