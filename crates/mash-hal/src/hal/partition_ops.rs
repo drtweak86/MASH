@@ -1,6 +1,6 @@
 //! Partitioning operations (wipefs/parted).
 
-use anyhow::Result;
+use crate::HalResult;
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -50,8 +50,8 @@ pub enum PartedOp {
 }
 
 pub trait PartitionOps {
-    fn wipefs_all(&self, disk: &Path, opts: &WipeFsOptions) -> Result<()>;
+    fn wipefs_all(&self, disk: &Path, opts: &WipeFsOptions) -> HalResult<()>;
 
     /// Execute a single `parted` operation on the given disk.
-    fn parted(&self, disk: &Path, op: PartedOp, opts: &PartedOptions) -> Result<String>;
+    fn parted(&self, disk: &Path, op: PartedOp, opts: &PartedOptions) -> HalResult<String>;
 }

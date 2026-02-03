@@ -5,11 +5,11 @@ use super::{
     PartedOp, PartedOptions, PartitionOps, ProbeOps, RsyncOps, RsyncOptions, SystemOps,
     WipeFsOptions,
 };
-use anyhow::{anyhow, Context, Result};
+use crate::{HalError, HalResult};
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 
 /// Real HAL implementation for Linux systems.
 #[derive(Debug, Clone, Default)]
@@ -21,6 +21,30 @@ impl LinuxHal {
     }
 }
 
+fn map_command_err(program: &str, err: std::io::Error) -> HalError {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        return HalError::CommandNotFound(program.to_string());
+    }
+    HalError::Io(err)
+}
+
+fn output_failed(program: &str, output: &Output) -> HalError {
+    HalError::CommandFailed {
+        program: program.to_string(),
+        code: output.status.code(),
+        stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+    }
+}
+
+fn map_nix_err(err: nix::errno::Errno) -> HalError {
+    use nix::errno::Errno;
+    match err {
+        Errno::EBUSY => HalError::DiskBusy,
+        Errno::EACCES | Errno::EPERM => HalError::PermissionDenied,
+        other => HalError::Nix(other),
+    }
+}
+
 impl MountOps for LinuxHal {
     fn mount_device(
         &self,
@@ -29,7 +53,7 @@ impl MountOps for LinuxHal {
         fstype: Option<&str>,
         options: MountOptions,
         dry_run: bool,
-    ) -> Result<()> {
+    ) -> HalResult<()> {
         if dry_run {
             log::info!(
                 "DRY RUN: mount {} -> {}",
@@ -43,32 +67,30 @@ impl MountOps for LinuxHal {
         let flags = nix::mount::MsFlags::empty();
         let data = options.options.as_deref();
 
-        nix::mount::mount(Some(device), target, fstype, flags, data)
-            .context("Failed to mount device")?;
+        nix::mount::mount(Some(device), target, fstype, flags, data).map_err(map_nix_err)?;
 
         Ok(())
     }
 
-    fn unmount(&self, target: &Path, dry_run: bool) -> Result<()> {
+    fn unmount(&self, target: &Path, dry_run: bool) -> HalResult<()> {
         if dry_run {
             log::info!("DRY RUN: unmount {}", target.display());
             return Ok(());
         }
 
-        nix::mount::umount2(target, nix::mount::MntFlags::empty()).context("Failed to unmount")?;
+        nix::mount::umount2(target, nix::mount::MntFlags::empty()).map_err(map_nix_err)?;
 
         Ok(())
     }
 
-    fn unmount_recursive(&self, target: &Path, dry_run: bool) -> Result<()> {
+    fn unmount_recursive(&self, target: &Path, dry_run: bool) -> HalResult<()> {
         if dry_run {
             log::info!("DRY RUN: unmount -R {}", target.display());
             return Ok(());
         }
 
         // Read current mount table and unmount deepest-first for anything under `target`.
-        let content = fs::read_to_string("/proc/self/mountinfo")
-            .context("Failed to read /proc/self/mountinfo")?;
+        let content = fs::read_to_string("/proc/self/mountinfo")?;
         let entries = crate::procfs::mountinfo::parse_mountinfo(&content);
 
         let mut under: Vec<std::path::PathBuf> = entries
@@ -88,9 +110,8 @@ impl MountOps for LinuxHal {
         Ok(())
     }
 
-    fn is_mounted(&self, path: &Path) -> Result<bool> {
-        let content = fs::read_to_string("/proc/self/mountinfo")
-            .context("Failed to read /proc/self/mountinfo")?;
+    fn is_mounted(&self, path: &Path) -> HalResult<bool> {
+        let content = fs::read_to_string("/proc/self/mountinfo")?;
         let entries = crate::procfs::mountinfo::parse_mountinfo(&content);
         Ok(crate::procfs::mountinfo::is_mounted_from_info(
             path, &entries,
@@ -99,64 +120,64 @@ impl MountOps for LinuxHal {
 }
 
 impl FormatOps for LinuxHal {
-    fn format_ext4(&self, device: &Path, opts: &FormatOptions) -> Result<()> {
+    fn format_ext4(&self, device: &Path, opts: &FormatOptions) -> HalResult<()> {
         if opts.dry_run {
             log::info!("DRY RUN: mkfs.ext4 {}", device.display());
             return Ok(());
         }
 
         if !opts.confirmed {
-            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
+            return Err(HalError::SafetyLock);
         }
 
         let mut args = opts.extra_args.clone();
         args.push(device.display().to_string());
 
-        let status = Command::new("mkfs.ext4")
+        let output = Command::new("mkfs.ext4")
             .args(&args)
-            .status()
-            .context("Failed to execute mkfs.ext4")?;
+            .output()
+            .map_err(|e| map_command_err("mkfs.ext4", e))?;
 
-        if !status.success() {
-            return Err(anyhow!("mkfs.ext4 failed"));
+        if !output.status.success() {
+            return Err(output_failed("mkfs.ext4", &output));
         }
 
         Ok(())
     }
 
-    fn format_btrfs(&self, device: &Path, opts: &FormatOptions) -> Result<()> {
+    fn format_btrfs(&self, device: &Path, opts: &FormatOptions) -> HalResult<()> {
         if opts.dry_run {
             log::info!("DRY RUN: mkfs.btrfs {}", device.display());
             return Ok(());
         }
 
         if !opts.confirmed {
-            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
+            return Err(HalError::SafetyLock);
         }
 
         let mut args = opts.extra_args.clone();
         args.push(device.display().to_string());
 
-        let status = Command::new("mkfs.btrfs")
+        let output = Command::new("mkfs.btrfs")
             .args(&args)
-            .status()
-            .context("Failed to execute mkfs.btrfs")?;
+            .output()
+            .map_err(|e| map_command_err("mkfs.btrfs", e))?;
 
-        if !status.success() {
-            return Err(anyhow!("mkfs.btrfs failed"));
+        if !output.status.success() {
+            return Err(output_failed("mkfs.btrfs", &output));
         }
 
         Ok(())
     }
 
-    fn format_vfat(&self, device: &Path, label: &str, opts: &FormatOptions) -> Result<()> {
+    fn format_vfat(&self, device: &Path, label: &str, opts: &FormatOptions) -> HalResult<()> {
         if opts.dry_run {
             log::info!("DRY RUN: mkfs.vfat {} ({})", device.display(), label);
             return Ok(());
         }
 
         if !opts.confirmed {
-            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
+            return Err(HalError::SafetyLock);
         }
 
         let mut args: Vec<String> = vec!["-F".to_string(), "32".to_string()];
@@ -165,13 +186,13 @@ impl FormatOps for LinuxHal {
         args.extend(opts.extra_args.iter().cloned());
         args.push(device.display().to_string());
 
-        let status = Command::new("mkfs.vfat")
+        let output = Command::new("mkfs.vfat")
             .args(&args)
-            .status()
-            .context("Failed to execute mkfs.vfat")?;
+            .output()
+            .map_err(|e| map_command_err("mkfs.vfat", e))?;
 
-        if !status.success() {
-            return Err(anyhow!("mkfs.vfat failed"));
+        if !output.status.success() {
+            return Err(output_failed("mkfs.vfat", &output));
         }
 
         Ok(())
@@ -184,7 +205,7 @@ impl FlashOps for LinuxHal {
         image_path: &Path,
         target_disk: &Path,
         opts: &FlashOptions,
-    ) -> Result<()> {
+    ) -> HalResult<()> {
         if opts.dry_run {
             log::info!(
                 "DRY RUN: flash {} -> {}",
@@ -195,7 +216,7 @@ impl FlashOps for LinuxHal {
         }
 
         if !opts.confirmed {
-            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
+            return Err(HalError::SafetyLock);
         }
 
         log::info!(
@@ -204,8 +225,7 @@ impl FlashOps for LinuxHal {
             target_disk.display()
         );
 
-        let input = fs::File::open(image_path)
-            .with_context(|| format!("Failed to open image: {}", image_path.display()))?;
+        let input = fs::File::open(image_path)?;
 
         let mut reader: Box<dyn Read> = if image_path.extension().is_some_and(|e| e == "xz") {
             Box::new(xz2::read::XzDecoder::new(input))
@@ -217,13 +237,12 @@ impl FlashOps for LinuxHal {
             .write(true)
             .create(true)
             .truncate(false)
-            .open(target_disk)
-            .with_context(|| format!("Failed to open target disk: {}", target_disk.display()))?;
+            .open(target_disk)?;
 
         // For regular files (CI tests), truncate; for block devices, this may fail and is fine.
         let _ = out.set_len(0);
 
-        io::copy(&mut reader, &mut out).context("Failed to write image to target disk")?;
+        io::copy(&mut reader, &mut out)?;
 
         // Best-effort flush (block devices may ignore).
         out.sync_all().ok();
@@ -233,28 +252,33 @@ impl FlashOps for LinuxHal {
 }
 
 impl SystemOps for LinuxHal {
-    fn sync(&self) -> Result<()> {
+    fn sync(&self) -> HalResult<()> {
         // Avoid linking libc directly; keep behavior aligned with existing shell usage.
-        let _ = Command::new("sync").status();
+        let _ = Command::new("sync")
+            .status()
+            .map_err(|e| map_command_err("sync", e))?;
         Ok(())
     }
 
-    fn udev_settle(&self) -> Result<()> {
-        let _ = Command::new("udevadm").arg("settle").status();
+    fn udev_settle(&self) -> HalResult<()> {
+        let _ = Command::new("udevadm")
+            .arg("settle")
+            .status()
+            .map_err(|e| map_command_err("udevadm", e))?;
         Ok(())
     }
 }
 
 impl ProbeOps for LinuxHal {
-    fn lsblk_mountpoints(&self, disk: &Path) -> Result<Vec<std::path::PathBuf>> {
+    fn lsblk_mountpoints(&self, disk: &Path) -> HalResult<Vec<std::path::PathBuf>> {
         let output = Command::new("lsblk")
             .args(["-lnpo", "MOUNTPOINT"])
             .arg(disk)
             .output()
-            .context("Failed to run lsblk")?;
+            .map_err(|e| map_command_err("lsblk", e))?;
 
         if !output.status.success() {
-            return Err(anyhow!("lsblk failed"));
+            return Err(output_failed("lsblk", &output));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -265,29 +289,29 @@ impl ProbeOps for LinuxHal {
         Ok(mountpoints)
     }
 
-    fn lsblk_table(&self, disk: &Path) -> Result<String> {
+    fn lsblk_table(&self, disk: &Path) -> HalResult<String> {
         let output = Command::new("lsblk")
             .args(["-o", "NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS,MODEL"])
             .arg(disk)
             .output()
-            .context("Failed to run lsblk")?;
+            .map_err(|e| map_command_err("lsblk", e))?;
 
         if !output.status.success() {
-            return Err(anyhow!("lsblk failed"));
+            return Err(output_failed("lsblk", &output));
         }
 
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
-    fn blkid_uuid(&self, device: &Path) -> Result<String> {
+    fn blkid_uuid(&self, device: &Path) -> HalResult<String> {
         let output = Command::new("blkid")
             .args(["-s", "UUID", "-o", "value"])
             .arg(device)
             .output()
-            .context("Failed to execute blkid")?;
+            .map_err(|e| map_command_err("blkid", e))?;
 
         if !output.status.success() {
-            return Err(anyhow!("blkid failed"));
+            return Err(output_failed("blkid", &output));
         }
 
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -295,33 +319,33 @@ impl ProbeOps for LinuxHal {
 }
 
 impl PartitionOps for LinuxHal {
-    fn wipefs_all(&self, disk: &Path, opts: &WipeFsOptions) -> Result<()> {
+    fn wipefs_all(&self, disk: &Path, opts: &WipeFsOptions) -> HalResult<()> {
         if opts.dry_run {
             log::info!("DRY RUN: wipefs -a {}", disk.display());
             return Ok(());
         }
         if !opts.confirmed {
-            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
+            return Err(HalError::SafetyLock);
         }
 
-        let status = Command::new("wipefs")
+        let output = Command::new("wipefs")
             .args(["-a"])
             .arg(disk)
-            .status()
-            .context("Failed to execute wipefs")?;
-        if !status.success() {
-            return Err(anyhow!("wipefs failed"));
+            .output()
+            .map_err(|e| map_command_err("wipefs", e))?;
+        if !output.status.success() {
+            return Err(output_failed("wipefs", &output));
         }
         Ok(())
     }
 
-    fn parted(&self, disk: &Path, op: PartedOp, opts: &PartedOptions) -> Result<String> {
+    fn parted(&self, disk: &Path, op: PartedOp, opts: &PartedOptions) -> HalResult<String> {
         if opts.dry_run {
             log::info!("DRY RUN: parted -s {} {:?}", disk.display(), op);
             return Ok(String::new());
         }
         if !opts.confirmed {
-            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
+            return Err(HalError::SafetyLock);
         }
 
         let mut args: Vec<String> = vec!["-s".to_string(), disk.display().to_string()];
@@ -362,19 +386,16 @@ impl PartitionOps for LinuxHal {
         let output = Command::new("parted")
             .args(&args)
             .output()
-            .context("Failed to execute parted")?;
+            .map_err(|e| map_command_err("parted", e))?;
         if !output.status.success() {
-            return Err(anyhow!(
-                "parted failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
+            return Err(output_failed("parted", &output));
         }
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 }
 
 impl LoopOps for LinuxHal {
-    fn losetup_attach(&self, image: &Path, scan_partitions: bool) -> Result<String> {
+    fn losetup_attach(&self, image: &Path, scan_partitions: bool) -> HalResult<String> {
         let mut args = vec!["--show".to_string(), "-f".to_string()];
         if scan_partitions {
             args.push("-P".to_string());
@@ -384,51 +405,48 @@ impl LoopOps for LinuxHal {
         let output = Command::new("losetup")
             .args(&args)
             .output()
-            .context("Failed to execute losetup")?;
+            .map_err(|e| map_command_err("losetup", e))?;
 
         if !output.status.success() {
-            return Err(anyhow!(
-                "losetup failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
+            return Err(output_failed("losetup", &output));
         }
 
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
-    fn losetup_detach(&self, loop_device: &str) -> Result<()> {
-        let status = Command::new("losetup")
+    fn losetup_detach(&self, loop_device: &str) -> HalResult<()> {
+        let output = Command::new("losetup")
             .args(["-d", loop_device])
-            .status()
-            .context("Failed to execute losetup -d")?;
-        if !status.success() {
-            return Err(anyhow!("losetup -d failed"));
+            .output()
+            .map_err(|e| map_command_err("losetup", e))?;
+        if !output.status.success() {
+            return Err(output_failed("losetup", &output));
         }
         Ok(())
     }
 }
 
 impl BtrfsOps for LinuxHal {
-    fn btrfs_subvolume_list(&self, mount_point: &Path) -> Result<String> {
+    fn btrfs_subvolume_list(&self, mount_point: &Path) -> HalResult<String> {
         let output = Command::new("btrfs")
             .args(["subvolume", "list"])
             .arg(mount_point)
             .output()
-            .context("Failed to execute btrfs subvolume list")?;
+            .map_err(|e| map_command_err("btrfs", e))?;
         if !output.status.success() {
-            return Err(anyhow!("btrfs subvolume list failed"));
+            return Err(output_failed("btrfs", &output));
         }
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
-    fn btrfs_subvolume_create(&self, path: &Path) -> Result<()> {
-        let status = Command::new("btrfs")
+    fn btrfs_subvolume_create(&self, path: &Path) -> HalResult<()> {
+        let output = Command::new("btrfs")
             .args(["subvolume", "create"])
             .arg(path)
-            .status()
-            .context("Failed to execute btrfs subvolume create")?;
-        if !status.success() {
-            return Err(anyhow!("btrfs subvolume create failed"));
+            .output()
+            .map_err(|e| map_command_err("btrfs", e))?;
+        if !output.status.success() {
+            return Err(output_failed("btrfs", &output));
         }
         Ok(())
     }
@@ -441,7 +459,7 @@ impl RsyncOps for LinuxHal {
         dst: &Path,
         opts: &RsyncOptions,
         on_stdout_line: &mut dyn FnMut(&str) -> bool,
-    ) -> Result<()> {
+    ) -> HalResult<()> {
         let mut args: Vec<String> = Vec::new();
 
         if opts.archive && opts.extra_args.is_empty() {
@@ -469,7 +487,7 @@ impl RsyncOps for LinuxHal {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .context("Failed to spawn rsync")?;
+            .map_err(|e| map_command_err("rsync", e))?;
 
         // Drain stderr in the background to avoid deadlocks if rsync is chatty.
         let mut stderr_handle = child.stderr.take().map(|stderr| {
@@ -484,24 +502,28 @@ impl RsyncOps for LinuxHal {
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
             for line in reader.lines() {
-                let line = line.context("Failed to read rsync stdout")?;
+                let line = line?;
                 if !on_stdout_line(&line) {
                     let _ = child.kill();
                     if let Some(h) = stderr_handle.take() {
                         let _ = h.join();
                     }
-                    return Err(anyhow!("rsync cancelled"));
+                    return Err(HalError::Other("rsync cancelled".to_string()));
                 }
             }
         }
 
-        let status = child.wait().context("Failed to wait for rsync")?;
+        let status = child.wait()?;
         if !status.success() {
             let stderr_s = stderr_handle
                 .take()
                 .and_then(|h| h.join().ok())
                 .unwrap_or_default();
-            return Err(anyhow!("rsync failed: {}", stderr_s.trim()));
+            return Err(HalError::CommandFailed {
+                program: "rsync".to_string(),
+                code: status.code(),
+                stderr: stderr_s.trim().to_string(),
+            });
         }
         Ok(())
     }
@@ -517,7 +539,7 @@ mod tests {
         let hal = LinuxHal::new();
         let opts = FormatOptions::new(false, false);
         let err = hal.format_ext4(Path::new("/dev/null"), &opts).unwrap_err();
-        assert!(err.downcast_ref::<crate::HalError>().is_some());
+        assert!(matches!(err, crate::HalError::SafetyLock));
     }
 
     #[test]
@@ -525,7 +547,7 @@ mod tests {
         let hal = LinuxHal::new();
         let opts = FormatOptions::new(false, false);
         let err = hal.format_btrfs(Path::new("/dev/null"), &opts).unwrap_err();
-        assert!(err.downcast_ref::<crate::HalError>().is_some());
+        assert!(matches!(err, crate::HalError::SafetyLock));
     }
 
     #[test]

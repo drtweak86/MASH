@@ -48,6 +48,7 @@ pub fn flash_raw_image_to_disk(
     );
 
     hal.flash_raw_image(image_path, target_disk, opts)
+        .map_err(anyhow::Error::new)
         .context("Failed to flash raw image to target disk")
 }
 
@@ -910,7 +911,7 @@ fn setup_image_loop(ctx: &mut FlashContext) -> Result<()> {
     let loop_dev = ctx
         .hal
         .losetup_attach(&ctx.image, true)
-        .context("Failed to setup loop device")?;
+        .map_err(anyhow::Error::new)?;
     info!("🔄 Image mounted at loop device: {}", loop_dev);
     ctx.loop_device = Some(loop_dev);
 
@@ -1115,6 +1116,7 @@ fn rsync_with_progress(ctx: &FlashContext, src: &Path, dst: &Path, label: &str) 
 
     ctx.hal
         .rsync_stream_stdout(src, dst, &RsyncOptions::progress2_archive(), &mut on_line)
+        .map_err(anyhow::Error::new)
         .with_context(|| format!("rsync failed for {}", label))?;
     Ok(())
 }
@@ -1150,6 +1152,7 @@ fn rsync_vfat_safe(ctx: &FlashContext, src: &Path, dst: &Path) -> Result<()> {
     let mut on_line = |_line: &str| -> bool { true };
     ctx.hal
         .rsync_stream_stdout(src, dst, &RsyncOptions::vfat_safe(), &mut on_line)
+        .map_err(anyhow::Error::new)
 }
 
 struct RsyncProgress {
@@ -1514,6 +1517,7 @@ fn generate_fstab(ctx: &FlashContext, target_root: &Path, subvols: &BtrfsSubvols
 fn get_partition_uuid(ctx: &FlashContext, device: &Path) -> Result<String> {
     ctx.hal
         .blkid_uuid(device)
+        .map_err(anyhow::Error::new)
         .with_context(|| format!("Failed to get UUID for {}", device.display()))
 }
 

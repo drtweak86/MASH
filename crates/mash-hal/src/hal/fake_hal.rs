@@ -7,7 +7,7 @@ use super::{
     BtrfsOps, FlashOps, FormatOps, FormatOptions, LoopOps, MountOps, MountOptions, PartedOp,
     PartedOptions, PartitionOps, ProbeOps, RsyncOps, RsyncOptions, SystemOps, WipeFsOptions,
 };
-use anyhow::Result;
+use crate::{HalError, HalResult};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -145,7 +145,7 @@ impl MountOps for FakeHal {
         fstype: Option<&str>,
         _options: MountOptions,
         dry_run: bool,
-    ) -> Result<()> {
+    ) -> HalResult<()> {
         if dry_run {
             log::info!(
                 "FAKE HAL DRY RUN: mount {} -> {}",
@@ -172,7 +172,7 @@ impl MountOps for FakeHal {
         Ok(())
     }
 
-    fn unmount(&self, target: &Path, dry_run: bool) -> Result<()> {
+    fn unmount(&self, target: &Path, dry_run: bool) -> HalResult<()> {
         if dry_run {
             log::info!("FAKE HAL DRY RUN: unmount {}", target.display());
             return Ok(());
@@ -188,12 +188,12 @@ impl MountOps for FakeHal {
         Ok(())
     }
 
-    fn unmount_recursive(&self, target: &Path, dry_run: bool) -> Result<()> {
+    fn unmount_recursive(&self, target: &Path, dry_run: bool) -> HalResult<()> {
         // FakeHal does not model nested mount trees; treat as a normal unmount for recording.
         self.unmount(target, dry_run)
     }
 
-    fn is_mounted(&self, path: &Path) -> Result<bool> {
+    fn is_mounted(&self, path: &Path) -> HalResult<bool> {
         let is_mounted = self.state.lock().unwrap().mounted_paths.contains(path);
         log::info!("FAKE HAL: is_mounted({}) = {}", path.display(), is_mounted);
         Ok(is_mounted)
@@ -201,9 +201,9 @@ impl MountOps for FakeHal {
 }
 
 impl FormatOps for FakeHal {
-    fn format_ext4(&self, device: &Path, opts: &FormatOptions) -> Result<()> {
+    fn format_ext4(&self, device: &Path, opts: &FormatOptions) -> HalResult<()> {
         if !opts.dry_run && !opts.confirmed {
-            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
+            return Err(HalError::SafetyLock);
         }
 
         if opts.dry_run {
@@ -220,9 +220,9 @@ impl FormatOps for FakeHal {
         Ok(())
     }
 
-    fn format_btrfs(&self, device: &Path, opts: &FormatOptions) -> Result<()> {
+    fn format_btrfs(&self, device: &Path, opts: &FormatOptions) -> HalResult<()> {
         if !opts.dry_run && !opts.confirmed {
-            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
+            return Err(HalError::SafetyLock);
         }
 
         if opts.dry_run {
@@ -239,9 +239,9 @@ impl FormatOps for FakeHal {
         Ok(())
     }
 
-    fn format_vfat(&self, device: &Path, label: &str, opts: &FormatOptions) -> Result<()> {
+    fn format_vfat(&self, device: &Path, label: &str, opts: &FormatOptions) -> HalResult<()> {
         if !opts.dry_run && !opts.confirmed {
-            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
+            return Err(HalError::SafetyLock);
         }
 
         if opts.dry_run {
@@ -270,9 +270,9 @@ impl FlashOps for FakeHal {
         image_path: &Path,
         target_disk: &Path,
         opts: &crate::FlashOptions,
-    ) -> Result<()> {
+    ) -> HalResult<()> {
         if !opts.dry_run && !opts.confirmed {
-            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
+            return Err(HalError::SafetyLock);
         }
 
         if opts.dry_run {
@@ -300,33 +300,33 @@ impl FlashOps for FakeHal {
 }
 
 impl SystemOps for FakeHal {
-    fn sync(&self) -> Result<()> {
+    fn sync(&self) -> HalResult<()> {
         self.record_operation(Operation::Sync);
         Ok(())
     }
 
-    fn udev_settle(&self) -> Result<()> {
+    fn udev_settle(&self) -> HalResult<()> {
         self.record_operation(Operation::UdevSettle);
         Ok(())
     }
 }
 
 impl ProbeOps for FakeHal {
-    fn lsblk_mountpoints(&self, disk: &Path) -> Result<Vec<PathBuf>> {
+    fn lsblk_mountpoints(&self, disk: &Path) -> HalResult<Vec<PathBuf>> {
         self.record_operation(Operation::LsblkMountpoints {
             disk: disk.to_path_buf(),
         });
         Ok(Vec::new())
     }
 
-    fn lsblk_table(&self, disk: &Path) -> Result<String> {
+    fn lsblk_table(&self, disk: &Path) -> HalResult<String> {
         self.record_operation(Operation::LsblkTable {
             disk: disk.to_path_buf(),
         });
         Ok(String::new())
     }
 
-    fn blkid_uuid(&self, device: &Path) -> Result<String> {
+    fn blkid_uuid(&self, device: &Path) -> HalResult<String> {
         self.record_operation(Operation::BlkidUuid {
             device: device.to_path_buf(),
         });
@@ -335,9 +335,9 @@ impl ProbeOps for FakeHal {
 }
 
 impl PartitionOps for FakeHal {
-    fn wipefs_all(&self, disk: &Path, opts: &WipeFsOptions) -> Result<()> {
+    fn wipefs_all(&self, disk: &Path, opts: &WipeFsOptions) -> HalResult<()> {
         if !opts.dry_run && !opts.confirmed {
-            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
+            return Err(HalError::SafetyLock);
         }
         self.record_operation(Operation::WipeFsAll {
             disk: disk.to_path_buf(),
@@ -345,9 +345,9 @@ impl PartitionOps for FakeHal {
         Ok(())
     }
 
-    fn parted(&self, disk: &Path, op: PartedOp, opts: &PartedOptions) -> Result<String> {
+    fn parted(&self, disk: &Path, op: PartedOp, opts: &PartedOptions) -> HalResult<String> {
         if !opts.dry_run && !opts.confirmed {
-            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
+            return Err(HalError::SafetyLock);
         }
         self.record_operation(Operation::Parted {
             disk: disk.to_path_buf(),
@@ -358,7 +358,7 @@ impl PartitionOps for FakeHal {
 }
 
 impl LoopOps for FakeHal {
-    fn losetup_attach(&self, image: &Path, scan_partitions: bool) -> Result<String> {
+    fn losetup_attach(&self, image: &Path, scan_partitions: bool) -> HalResult<String> {
         let loop_device = "/dev/loop0".to_string();
         self.record_operation(Operation::LosetupAttach {
             image: image.to_path_buf(),
@@ -368,7 +368,7 @@ impl LoopOps for FakeHal {
         Ok(loop_device)
     }
 
-    fn losetup_detach(&self, loop_device: &str) -> Result<()> {
+    fn losetup_detach(&self, loop_device: &str) -> HalResult<()> {
         self.record_operation(Operation::LosetupDetach {
             loop_device: loop_device.to_string(),
         });
@@ -377,14 +377,14 @@ impl LoopOps for FakeHal {
 }
 
 impl BtrfsOps for FakeHal {
-    fn btrfs_subvolume_list(&self, mount_point: &Path) -> Result<String> {
+    fn btrfs_subvolume_list(&self, mount_point: &Path) -> HalResult<String> {
         self.record_operation(Operation::BtrfsSubvolumeList {
             mount_point: mount_point.to_path_buf(),
         });
         Ok(String::new())
     }
 
-    fn btrfs_subvolume_create(&self, path: &Path) -> Result<()> {
+    fn btrfs_subvolume_create(&self, path: &Path) -> HalResult<()> {
         self.record_operation(Operation::BtrfsSubvolumeCreate {
             path: path.to_path_buf(),
         });
@@ -399,7 +399,7 @@ impl RsyncOps for FakeHal {
         dst: &Path,
         _opts: &RsyncOptions,
         _on_stdout_line: &mut dyn FnMut(&str) -> bool,
-    ) -> Result<()> {
+    ) -> HalResult<()> {
         self.record_operation(Operation::Rsync {
             src: src.to_path_buf(),
             dst: dst.to_path_buf(),
@@ -492,10 +492,10 @@ mod tests {
         let opts = FormatOptions::new(false, false);
 
         let err = hal.format_ext4(Path::new("/dev/sda1"), &opts).unwrap_err();
-        assert!(err.downcast_ref::<crate::HalError>().is_some());
+        assert!(matches!(err, HalError::SafetyLock));
 
         let err = hal.format_btrfs(Path::new("/dev/sda2"), &opts).unwrap_err();
-        assert!(err.downcast_ref::<crate::HalError>().is_some());
+        assert!(matches!(err, HalError::SafetyLock));
 
         let flash_opts = crate::FlashOptions::new(false, false);
         let err = hal
@@ -505,7 +505,7 @@ mod tests {
                 &flash_opts,
             )
             .unwrap_err();
-        assert!(err.downcast_ref::<crate::HalError>().is_some());
+        assert!(matches!(err, HalError::SafetyLock));
     }
 
     #[test]

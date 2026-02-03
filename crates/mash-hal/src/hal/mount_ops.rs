@@ -1,6 +1,6 @@
 //! Mount operations trait.
 
-use anyhow::Result;
+use crate::HalResult;
 use std::path::Path;
 
 /// Trait for mounting and unmounting filesystems.
@@ -20,26 +20,26 @@ pub trait MountOps {
         fstype: Option<&str>,
         options: MountOptions,
         dry_run: bool,
-    ) -> Result<()>;
+    ) -> HalResult<()>;
 
     /// Unmount a filesystem.
     ///
     /// # Arguments
     /// * `target` - Mount point path to unmount
     /// * `dry_run` - If true, log the operation but don't execute it
-    fn unmount(&self, target: &Path, dry_run: bool) -> Result<()>;
+    fn unmount(&self, target: &Path, dry_run: bool) -> HalResult<()>;
 
     /// Unmount a path and any nested mounts beneath it.
     ///
     /// This is used for "auto-unmount" flows where a partition may have bind-mounts or nested
     /// mounts under the same tree.
-    fn unmount_recursive(&self, target: &Path, dry_run: bool) -> Result<()>;
+    fn unmount_recursive(&self, target: &Path, dry_run: bool) -> HalResult<()>;
 
     /// Check if a path is currently mounted.
     ///
     /// # Arguments
     /// * `path` - Path to check
-    fn is_mounted(&self, path: &Path) -> Result<bool>;
+    fn is_mounted(&self, path: &Path) -> HalResult<bool>;
 }
 
 /// Mount options and flags.

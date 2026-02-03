@@ -227,7 +227,7 @@ where
                 if let Some(ref report) = report_flash {
                     report.stage_error("Flash OS image", &err.to_string());
                 }
-                return Err(err);
+                return Err(err.into());
             }
 
             if !state

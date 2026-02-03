@@ -1,6 +1,6 @@
 //! High-level file copy operations.
 
-use anyhow::Result;
+use crate::HalResult;
 use std::path::Path;
 
 #[derive(Debug, Clone, Default)]
@@ -55,5 +55,5 @@ pub trait RsyncOps {
         dst: &Path,
         opts: &RsyncOptions,
         on_stdout_line: &mut dyn FnMut(&str) -> bool,
-    ) -> Result<()>;
+    ) -> HalResult<()>;
 }

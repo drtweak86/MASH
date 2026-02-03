@@ -1,6 +1,6 @@
 //! Loop device operations (losetup).
 
-use anyhow::Result;
+use crate::HalResult;
 use std::path::Path;
 
 pub trait LoopOps {
@@ -8,8 +8,8 @@ pub trait LoopOps {
     ///
     /// If `scan_partitions` is true, the loop device is created with partition scanning (equivalent
     /// to `losetup -P`).
-    fn losetup_attach(&self, image: &Path, scan_partitions: bool) -> Result<String>;
+    fn losetup_attach(&self, image: &Path, scan_partitions: bool) -> HalResult<String>;
 
     /// Detach a loop device.
-    fn losetup_detach(&self, loop_device: &str) -> Result<()>;
+    fn losetup_detach(&self, loop_device: &str) -> HalResult<()>;
 }

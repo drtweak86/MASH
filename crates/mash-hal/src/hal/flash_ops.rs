@@ -1,6 +1,6 @@
 //! Disk image flashing operations trait.
 
-use anyhow::Result;
+use crate::HalResult;
 use std::path::Path;
 
 /// Options for destructive flash operations.
@@ -31,5 +31,5 @@ pub trait FlashOps {
         image_path: &Path,
         target_disk: &Path,
         opts: &FlashOptions,
-    ) -> Result<()>;
+    ) -> HalResult<()>;
 }

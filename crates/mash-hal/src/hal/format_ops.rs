@@ -1,6 +1,6 @@
 //! Filesystem formatting operations trait.
 
-use anyhow::Result;
+use crate::HalResult;
 use std::path::Path;
 
 /// Trait for formatting block devices.
@@ -10,17 +10,17 @@ pub trait FormatOps {
     /// # Arguments
     /// * `device` - Block device path (e.g., `/dev/sda1`)
     /// * `opts` - Formatting options including dry-run and confirmation
-    fn format_ext4(&self, device: &Path, opts: &FormatOptions) -> Result<()>;
+    fn format_ext4(&self, device: &Path, opts: &FormatOptions) -> HalResult<()>;
 
     /// Format a device with btrfs filesystem.
     ///
     /// # Arguments
     /// * `device` - Block device path (e.g., `/dev/sda2`)
     /// * `opts` - Formatting options including dry-run and confirmation
-    fn format_btrfs(&self, device: &Path, opts: &FormatOptions) -> Result<()>;
+    fn format_btrfs(&self, device: &Path, opts: &FormatOptions) -> HalResult<()>;
 
     /// Format a device with VFAT (FAT32), typically used for EFI system partitions.
-    fn format_vfat(&self, device: &Path, label: &str, opts: &FormatOptions) -> Result<()>;
+    fn format_vfat(&self, device: &Path, label: &str, opts: &FormatOptions) -> HalResult<()>;
 }
 
 /// Options for formatting operations.
