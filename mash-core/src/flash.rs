@@ -182,10 +182,21 @@ impl FlashConfig {
             bail!("UEFI directory not found: {}", self.uefi_dir.display());
         }
 
-        // Check for required UEFI files
-        let rpi_efi = self.uefi_dir.join("RPI_EFI.fd");
-        if !rpi_efi.exists() {
-            bail!("Missing required UEFI file: {}", rpi_efi.display());
+        // Check for required UEFI file. Allow either:
+        // - a directory containing RPI_EFI.fd (bundle), or
+        // - a direct path to an EFI image file (will be staged into a temp dir at runtime)
+        if self.uefi_dir.is_dir() {
+            let rpi_efi = self.uefi_dir.join("RPI_EFI.fd");
+            if !rpi_efi.exists() {
+                bail!("Missing required UEFI file: {}", rpi_efi.display());
+            }
+        } else if self.uefi_dir.is_file() {
+            // File path is accepted here; it will be normalized in `run_with_progress`.
+        } else {
+            bail!(
+                "UEFI path is neither a file nor directory: {}",
+                self.uefi_dir.display()
+            );
         }
 
         let disk = normalize_disk(&self.disk);
@@ -266,11 +277,28 @@ pub fn run_with_progress(
     }
     fs::create_dir_all(&work_dir)?;
 
+    // Normalize UEFI input into a directory suitable for VFAT-safe rsync.
+    // If a file is provided, stage it into a temp dir as RPI_EFI.fd.
+    let effective_uefi_dir = if config.uefi_dir.is_file() {
+        let staged = work_dir.join("uefi");
+        fs::create_dir_all(&staged)?;
+        fs::copy(&config.uefi_dir, staged.join("RPI_EFI.fd")).with_context(|| {
+            format!(
+                "Failed to stage EFI image {} into {}",
+                config.uefi_dir.display(),
+                staged.display()
+            )
+        })?;
+        staged
+    } else {
+        config.uefi_dir.clone()
+    };
+
     let mut ctx = FlashContext {
         image: config.image.clone(),
         disk: disk.clone(),
         scheme: config.scheme,
-        uefi_dir: config.uefi_dir.clone(),
+        uefi_dir: effective_uefi_dir,
         dry_run: config.dry_run,
         auto_unmount: config.auto_unmount,
         locale: config.locale.clone(),

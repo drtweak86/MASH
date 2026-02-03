@@ -14,14 +14,55 @@ pub struct DataFlags {
     pub locales: bool,
 }
 
+/// Transport type hint for disk
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportType {
+    Usb,
+    Nvme,
+    Sata,
+    Mmc,
+    Scsi,
+    Unknown,
+}
+
+impl TransportType {
+    pub fn hint(&self) -> &'static str {
+        match self {
+            TransportType::Usb => "USB",
+            TransportType::Nvme => "NVMe",
+            TransportType::Sata => "SATA",
+            TransportType::Mmc => "MMC",
+            TransportType::Scsi => "SCSI",
+            TransportType::Unknown => "",
+        }
+    }
+}
+
+/// Boot detection confidence level
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootConfidence {
+    Confident,  // Boot device confidently identified
+    Unverified, // Could be boot device but uncertain
+    NotBoot,    // Definitely not boot device
+    Unknown,    // Boot detection failed entirely
+}
+
+impl BootConfidence {
+    pub fn is_boot(&self) -> bool {
+        matches!(self, BootConfidence::Confident | BootConfidence::Unverified)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DiskInfo {
-    pub name: String,
-    pub path: String,
+    pub name: String, // Human-readable disk identity (never "sda")
+    pub path: String, // /dev/sda
     pub size_bytes: u64,
+    pub vendor: Option<String>,
     pub model: Option<String>,
+    pub transport: TransportType,
     pub removable: bool,
-    pub is_boot: bool,
+    pub boot_confidence: BootConfidence,
 }
 
 #[derive(Debug, Clone)]
@@ -49,48 +90,108 @@ pub fn scan_disks() -> Vec<DiskInfo> {
         Err(_) => return disks,
     };
 
-    let boot_device = boot_device_path();
+    let (boot_device, boot_detection_succeeded) = boot_device_path_with_confidence();
 
     for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if should_skip_block_device(&name) {
+        let dev_name = entry.file_name().to_string_lossy().to_string();
+        if should_skip_block_device(&dev_name) {
             continue;
         }
-        let size_path = PathBuf::from("/sys/block").join(&name).join("size");
-        let size_sectors = read_u64(&size_path).unwrap_or(0);
+
+        let sysfs_base = PathBuf::from("/sys/block").join(&dev_name);
+
+        // Read size
+        let size_sectors = read_u64(&sysfs_base.join("size")).unwrap_or(0);
         if size_sectors == 0 {
             continue;
         }
         let size_bytes = size_sectors.saturating_mul(512);
-        let model = read_trimmed(&PathBuf::from("/sys/block").join(&name).join("device/model"));
-        let vendor = read_trimmed(
-            &PathBuf::from("/sys/block")
-                .join(&name)
-                .join("device/vendor"),
-        );
-        let label = match (vendor.as_ref(), model.as_ref()) {
-            (Some(vendor), Some(model)) => Some(format!("{} {}", vendor, model).trim().to_string()),
-            (Some(vendor), None) => Some(vendor.to_string()),
-            (None, Some(model)) => Some(model.to_string()),
-            _ => None,
-        };
-        let removable_path = PathBuf::from("/sys/block").join(&name).join("removable");
-        let removable = read_u64(&removable_path).unwrap_or(0) == 1;
 
-        let disk_path = format!("/dev/{}", name);
-        let is_boot = boot_device.as_deref() == Some(disk_path.as_str());
+        // Read vendor and model
+        let vendor = read_trimmed(&sysfs_base.join("device/vendor"));
+        let model = read_trimmed(&sysfs_base.join("device/model"));
+
+        // Build human-readable disk identity (never just "sda")
+        let identity = build_disk_identity(&dev_name, &vendor, &model, size_bytes);
+
+        // Detect transport type
+        let transport = detect_transport_type(&dev_name, &sysfs_base);
+
+        // Check if removable
+        let removable = read_u64(&sysfs_base.join("removable")).unwrap_or(0) == 1;
+
+        // Determine boot confidence
+        let disk_path = format!("/dev/{}", dev_name);
+        let boot_confidence = if !boot_detection_succeeded {
+            BootConfidence::Unknown
+        } else if boot_device.as_deref() == Some(disk_path.as_str()) {
+            BootConfidence::Confident
+        } else {
+            BootConfidence::NotBoot
+        };
 
         disks.push(DiskInfo {
-            name: label.unwrap_or_else(|| name.clone()),
+            name: identity,
             path: disk_path,
             size_bytes,
+            vendor,
             model,
+            transport,
             removable,
-            is_boot,
+            boot_confidence,
         });
     }
 
     disks
+}
+
+/// Build human-readable disk identity - never returns just device name
+fn build_disk_identity(
+    _dev_name: &str,
+    vendor: &Option<String>,
+    model: &Option<String>,
+    size_bytes: u64,
+) -> String {
+    let hw_identity = match (vendor.as_ref(), model.as_ref()) {
+        (Some(v), Some(m)) => format!("{} {}", v.trim(), m.trim()),
+        (Some(v), None) => v.trim().to_string(),
+        (None, Some(m)) => m.trim().to_string(),
+        (None, None) => {
+            // No vendor/model - use size + generic label
+            format!("{} Disk", human_size(size_bytes))
+        }
+    };
+
+    hw_identity
+}
+
+/// Detect transport type from device name and sysfs path
+fn detect_transport_type(dev_name: &str, sysfs_base: &Path) -> TransportType {
+    // Check device name patterns first
+    if dev_name.starts_with("nvme") {
+        return TransportType::Nvme;
+    }
+    if dev_name.starts_with("mmcblk") {
+        return TransportType::Mmc;
+    }
+
+    // For sd* devices, check sysfs path for transport hints
+    if dev_name.starts_with("sd") {
+        // Try to read the device path to check for USB
+        if let Ok(device_path) = fs::read_link(sysfs_base.join("device")) {
+            let path_str = device_path.to_string_lossy().to_lowercase();
+            if path_str.contains("usb") {
+                return TransportType::Usb;
+            }
+            if path_str.contains("ata") {
+                return TransportType::Sata;
+            }
+        }
+        // Default sd* to SCSI/SATA
+        return TransportType::Scsi;
+    }
+
+    TransportType::Unknown
 }
 
 fn resolve_uuid_to_device_path(uuid: &str) -> Option<String> {
@@ -122,22 +223,35 @@ fn get_boot_device_from_cmdline() -> Option<String> {
 }
 
 pub fn boot_device_path() -> Option<String> {
+    boot_device_path_with_confidence().0
+}
+
+/// Returns (boot_device_path, detection_succeeded)
+/// detection_succeeded is false if we couldn't confidently identify the boot device
+fn boot_device_path_with_confidence() -> (Option<String>, bool) {
     // Prioritize /proc/cmdline
     if let Some(cmdline_device) = get_boot_device_from_cmdline() {
-        return base_block_device(&cmdline_device);
+        if let Some(device) = base_block_device(&cmdline_device) {
+            return (Some(device), true);
+        }
     }
 
     // Fallback to /proc/self/mounts
-    let mounts = fs::read_to_string("/proc/self/mounts").ok()?;
-    for line in mounts.lines() {
-        let mut parts = line.split_whitespace();
-        let device = parts.next()?;
-        let mountpoint = parts.next()?;
-        if mountpoint == "/" {
-            return base_block_device(device);
+    if let Ok(mounts) = fs::read_to_string("/proc/self/mounts") {
+        for line in mounts.lines() {
+            let mut parts = line.split_whitespace();
+            if let (Some(device), Some(mountpoint)) = (parts.next(), parts.next()) {
+                if mountpoint == "/" {
+                    if let Some(device) = base_block_device(device) {
+                        return (Some(device), true);
+                    }
+                }
+            }
         }
     }
-    None
+
+    // Boot detection failed
+    (None, false)
 }
 
 fn base_block_device(device: &str) -> Option<String> {

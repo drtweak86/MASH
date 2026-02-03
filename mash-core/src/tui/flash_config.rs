@@ -21,23 +21,23 @@ impl ImageSource {
     }
 }
 
-/// Options for UEFI firmware source selection
+/// Options for EFI image source selection (for Pi UEFI boot).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UefiSource {
-    LocalDirectory,
-    Download,
+pub enum EfiSource {
+    DownloadEfiImage,
+    LocalEfiImage,
 }
 
-impl UefiSource {
+impl EfiSource {
     pub fn display(&self) -> &'static str {
         match self {
-            UefiSource::LocalDirectory => "Provide UEFI firmware directory",
-            UefiSource::Download => "Download UEFI firmware",
+            EfiSource::DownloadEfiImage => "Download EFI image",
+            EfiSource::LocalEfiImage => "Use local EFI image",
         }
     }
 
-    pub fn all() -> &'static [UefiSource] {
-        &[UefiSource::LocalDirectory, UefiSource::Download]
+    pub fn all() -> &'static [EfiSource] {
+        &[EfiSource::DownloadEfiImage, EfiSource::LocalEfiImage]
     }
 }
 

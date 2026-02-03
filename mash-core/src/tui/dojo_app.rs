@@ -6,7 +6,7 @@ use crate::cli::PartitionScheme;
 use crate::locale::{LocaleConfig, LOCALES};
 use crate::tui::flash_config::{ImageSource, TuiFlashConfig};
 use clap::ValueEnum;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers}; // New import for KeyEvent
+use crossterm::event::{KeyCode, KeyEvent}; // New import for KeyEvent
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -32,12 +32,14 @@ pub enum StepState {
 
 #[derive(Debug, Clone)]
 pub struct DiskOption {
-    pub label: String,
+    pub label: String, // Human-readable identity
     pub path: String,
     pub size: String,
+    pub vendor: Option<String>,
     pub model: Option<String>,
+    pub transport: crate::tui::data_sources::TransportType,
     pub removable: bool,
-    pub is_boot: bool,
+    pub boot_confidence: crate::tui::data_sources::BootConfidence,
 }
 
 #[derive(Debug, Clone)]
@@ -189,12 +191,13 @@ pub enum InstallStepType {
     PartitionCustomize,
     DownloadSourceSelection,
     ImageSelection,
-    UefiDirectory,
+    EfiImage,
     LocaleSelection,
     Options,
     FirstBootUser,
     PlanReview,
     Confirmation,
+    DisarmSafeMode,
     DownloadingFedora,
     DownloadingUefi,
     Flashing,
@@ -213,12 +216,13 @@ impl InstallStepType {
             InstallStepType::PartitionCustomize,
             InstallStepType::DownloadSourceSelection,
             InstallStepType::ImageSelection,
-            InstallStepType::UefiDirectory,
+            InstallStepType::EfiImage,
             InstallStepType::LocaleSelection,
             InstallStepType::Options,
             InstallStepType::FirstBootUser,
             InstallStepType::PlanReview,
             InstallStepType::Confirmation,
+            InstallStepType::DisarmSafeMode,
             InstallStepType::DownloadingFedora,
             InstallStepType::DownloadingUefi,
             InstallStepType::Flashing,
@@ -237,14 +241,15 @@ impl InstallStepType {
             InstallStepType::PartitionCustomize => "Customize Partitions",
             InstallStepType::DownloadSourceSelection => "Select Image Source",
             InstallStepType::ImageSelection => "Select Image File",
-            InstallStepType::UefiDirectory => "UEFI Configuration",
+            InstallStepType::EfiImage => "EFI Image",
             InstallStepType::LocaleSelection => "Locale & Keymap",
             InstallStepType::Options => "Installation Options",
             InstallStepType::FirstBootUser => "First-Boot User",
             InstallStepType::PlanReview => "Execution Plan",
             InstallStepType::Confirmation => "Final Confirmation",
+            InstallStepType::DisarmSafeMode => "Disarm Safe Mode",
             InstallStepType::DownloadingFedora => "Downloading Fedora Image",
-            InstallStepType::DownloadingUefi => "Downloading UEFI Firmware",
+            InstallStepType::DownloadingUefi => "Downloading EFI Image",
             InstallStepType::Flashing => "Installing...",
             InstallStepType::Complete => "Installation Complete!",
         }
@@ -261,13 +266,14 @@ impl InstallStepType {
             InstallStepType::PartitionLayout => Some(InstallStepType::PartitionCustomize),
             InstallStepType::PartitionCustomize => Some(InstallStepType::DownloadSourceSelection),
             InstallStepType::DownloadSourceSelection => Some(InstallStepType::ImageSelection),
-            InstallStepType::ImageSelection => Some(InstallStepType::UefiDirectory),
-            InstallStepType::UefiDirectory => Some(InstallStepType::LocaleSelection),
+            InstallStepType::ImageSelection => Some(InstallStepType::EfiImage),
+            InstallStepType::EfiImage => Some(InstallStepType::LocaleSelection),
             InstallStepType::LocaleSelection => Some(InstallStepType::Options),
             InstallStepType::Options => Some(InstallStepType::PlanReview),
             InstallStepType::FirstBootUser => Some(InstallStepType::PlanReview),
             InstallStepType::PlanReview => Some(InstallStepType::Confirmation),
             InstallStepType::Confirmation => None,
+            InstallStepType::DisarmSafeMode => None,
             InstallStepType::DownloadingFedora => None, // Execution steps do not have 'next' in this flow
             InstallStepType::DownloadingUefi => None, // Execution steps do not have 'next' in this flow
             InstallStepType::Flashing => Some(InstallStepType::Complete),
@@ -287,12 +293,13 @@ impl InstallStepType {
             InstallStepType::PartitionCustomize => Some(InstallStepType::PartitionLayout),
             InstallStepType::DownloadSourceSelection => Some(InstallStepType::PartitionCustomize),
             InstallStepType::ImageSelection => Some(InstallStepType::DownloadSourceSelection),
-            InstallStepType::UefiDirectory => Some(InstallStepType::ImageSelection),
-            InstallStepType::LocaleSelection => Some(InstallStepType::UefiDirectory),
+            InstallStepType::EfiImage => Some(InstallStepType::ImageSelection),
+            InstallStepType::LocaleSelection => Some(InstallStepType::EfiImage),
             InstallStepType::Options => Some(InstallStepType::LocaleSelection),
             InstallStepType::FirstBootUser => Some(InstallStepType::Options),
             InstallStepType::PlanReview => Some(InstallStepType::Options),
             InstallStepType::Confirmation => Some(InstallStepType::PlanReview),
+            InstallStepType::DisarmSafeMode => Some(InstallStepType::Confirmation),
             _ => None, // Execution steps do not have 'prev' in this flow
         }
     }
@@ -310,12 +317,13 @@ impl InstallStepType {
                 | InstallStepType::PartitionCustomize
                 | InstallStepType::DownloadSourceSelection
                 | InstallStepType::ImageSelection
-                | InstallStepType::UefiDirectory
+                | InstallStepType::EfiImage
                 | InstallStepType::LocaleSelection
                 | InstallStepType::Options
                 | InstallStepType::FirstBootUser
                 | InstallStepType::PlanReview
                 | InstallStepType::Confirmation
+                | InstallStepType::DisarmSafeMode
         )
     }
 }
@@ -363,23 +371,19 @@ pub struct App {
     pub image_source_index: usize,
     pub images: Vec<ImageOption>,
     pub image_index: usize,
-    pub uefi_sources: Vec<crate::tui::flash_config::UefiSource>,
+    pub uefi_sources: Vec<crate::tui::flash_config::EfiSource>,
     pub uefi_source_index: usize,
-    pub uefi_dirs: Vec<PathBuf>,
-    pub uefi_index: usize,
     pub locales: Vec<String>,
     pub locale_index: usize,
     pub options: Vec<OptionToggle>,
     pub options_index: usize,
     pub first_boot_options: Vec<String>,
     pub first_boot_index: usize,
-    pub confirmation_index: usize,
     pub downloading_fedora_index: usize,
     pub downloading_uefi_index: usize,
     pub downloaded_fedora: bool,
     pub downloaded_uefi: bool,
     pub destructive_armed: bool,
-    pub show_debug_overlay: bool,
     pub flash_start_time: Option<Instant>,
     pub is_running: bool,
     pub status_message: String,
@@ -388,11 +392,17 @@ pub struct App {
     pub uefi_source_path: String,
     pub downloaded_image_path: Option<PathBuf>,
     pub downloaded_uefi_dir: Option<PathBuf>,
-    pub confirmation_input: String,
+    pub safe_mode_disarm_input: String,
+    pending_destructive_action: Option<PendingDestructiveAction>,
     pub boot_disk_override_input: String,
     pub cancel_requested: Arc<std::sync::atomic::AtomicBool>,
     pub customize_error_field: Option<CustomizeField>,
     pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingDestructiveAction {
+    StartFlash,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -417,7 +427,7 @@ impl App {
             }
         });
         let flags = data_sources::data_flags();
-        let boot_device = data_sources::boot_device_path();
+        let _boot_device = data_sources::boot_device_path();
         let real_disks = if flags.disks {
             data_sources::scan_disks()
         } else {
@@ -426,36 +436,38 @@ impl App {
         let disks = if real_disks.is_empty() {
             vec![
                 DiskOption {
-                    label: "USB Disk 32GB".to_string(),
+                    label: "SanDisk Ultra".to_string(),
                     path: "/dev/sda".to_string(),
                     size: "32 GB".to_string(),
-                    model: Some("SanDisk Ultra".to_string()),
+                    vendor: Some("SanDisk".to_string()),
+                    model: Some("Ultra".to_string()),
+                    transport: data_sources::TransportType::Usb,
                     removable: true,
-                    is_boot: false,
+                    boot_confidence: data_sources::BootConfidence::NotBoot,
                 },
                 DiskOption {
-                    label: "NVMe Disk 512GB".to_string(),
+                    label: "Samsung 980".to_string(),
                     path: "/dev/nvme0n1".to_string(),
                     size: "512 GB".to_string(),
-                    model: Some("Samsung 980".to_string()),
+                    vendor: Some("Samsung".to_string()),
+                    model: Some("980".to_string()),
+                    transport: data_sources::TransportType::Nvme,
                     removable: false,
-                    is_boot: true,
+                    boot_confidence: data_sources::BootConfidence::Confident,
                 },
             ]
         } else {
             real_disks
                 .into_iter()
-                .map(|disk| {
-                    let path = disk.path;
-                    let is_boot = boot_device.as_deref() == Some(path.as_str());
-                    DiskOption {
-                        label: disk.name,
-                        path,
-                        size: data_sources::human_size(disk.size_bytes),
-                        model: disk.model,
-                        removable: disk.removable,
-                        is_boot,
-                    }
+                .map(|disk| DiskOption {
+                    label: disk.name,
+                    path: disk.path,
+                    size: data_sources::human_size(disk.size_bytes),
+                    vendor: disk.vendor,
+                    model: disk.model,
+                    transport: disk.transport,
+                    removable: disk.removable,
+                    boot_confidence: disk.boot_confidence,
                 })
                 .collect()
         };
@@ -463,8 +475,14 @@ impl App {
         // Auto-select first non-boot, removable disk for safety (prefer USB/SD cards)
         let default_disk_index = disks
             .iter()
-            .position(|disk| !disk.is_boot && disk.removable)
-            .or_else(|| disks.iter().position(|disk| !disk.is_boot))
+            .position(|disk| {
+                disk.boot_confidence == data_sources::BootConfidence::NotBoot && disk.removable
+            })
+            .or_else(|| {
+                disks
+                    .iter()
+                    .position(|disk| disk.boot_confidence == data_sources::BootConfidence::NotBoot)
+            })
             .unwrap_or(0);
 
         let partition_schemes = PartitionScheme::value_variants().to_vec();
@@ -569,23 +587,14 @@ impl App {
             image_source_index: 0,
             images,
             image_index: 0,
-            uefi_sources: crate::tui::flash_config::UefiSource::all().to_vec(),
-            uefi_source_index: 0, // Default to local directory
-            uefi_dirs: vec![
-                PathBuf::from("/tmp/uefi"),
-                PathBuf::from("/opt/uefi-firmware"),
-            ],
-            uefi_index: 0,
+            uefi_sources: crate::tui::flash_config::EfiSource::all().to_vec(),
+            uefi_source_index: 1, // Default to local EFI image
             locales,
             locale_index: 0,
             options: vec![
                 OptionToggle {
                     label: "Auto-unmount target disk".to_string(),
                     enabled: true,
-                },
-                OptionToggle {
-                    label: "Download UEFI firmware".to_string(),
-                    enabled: false,
                 },
                 OptionToggle {
                     label: "Download Fedora image".to_string(),
@@ -602,13 +611,11 @@ impl App {
                 "Skip first-boot prompt".to_string(),
             ],
             first_boot_index: 0,
-            confirmation_index: 0,
             downloading_fedora_index: 0,
             downloading_uefi_index: 0,
             downloaded_fedora: false,
             downloaded_uefi: false,
             destructive_armed: false,
-            show_debug_overlay: false,
             flash_start_time: None,
             is_running: false,
             status_message: "👋 Welcome to MASH!".to_string(),
@@ -617,7 +624,8 @@ impl App {
             uefi_source_path: "/tmp/uefi".to_string(),
             downloaded_image_path: None,
             downloaded_uefi_dir: None,
-            confirmation_input: String::new(),
+            safe_mode_disarm_input: String::new(),
+            pending_destructive_action: None,
             boot_disk_override_input: String::new(),
             cancel_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             customize_error_field: None,
@@ -634,12 +642,6 @@ impl App {
 
     // New: handle input for step advancement
     pub fn handle_input(&mut self, key: KeyEvent) -> InputResult {
-        if matches!(key.code, KeyCode::Char('d') | KeyCode::Char('D'))
-            && key.modifiers.contains(KeyModifiers::CONTROL)
-        {
-            self.show_debug_overlay = !self.show_debug_overlay;
-            return InputResult::Continue;
-        }
         match self.current_step_type {
             InstallStepType::Welcome => self.handle_welcome_input(key),
             InstallStepType::BackupConfirmation => self.handle_backup_confirmation_input(key),
@@ -667,7 +669,7 @@ impl App {
                 }
             }
             InstallStepType::ImageSelection => self.handle_os_distro_selection_input(key),
-            InstallStepType::UefiDirectory => self.handle_uefi_source_selection_input(key),
+            InstallStepType::EfiImage => self.handle_uefi_source_selection_input(key),
             InstallStepType::LocaleSelection => {
                 let len = self.locales.len();
                 let action = Self::list_action(key, len, &mut self.locale_index);
@@ -681,6 +683,7 @@ impl App {
             }
             InstallStepType::PlanReview => self.handle_plan_review_input(key),
             InstallStepType::Confirmation => self.handle_confirmation_input(key),
+            InstallStepType::DisarmSafeMode => self.handle_disarm_safe_mode_input(key),
             InstallStepType::DownloadingFedora => self.handle_downloading_fedora_input(key),
             InstallStepType::DownloadingUefi => self.handle_downloading_uefi_input(key),
             step if step.is_config_step() => self.handle_generic_config_input(key),
@@ -785,7 +788,7 @@ impl App {
         let is_boot_disk_selected = self
             .disks
             .get(self.disk_index)
-            .map(|disk| disk.is_boot)
+            .map(|disk| disk.boot_confidence.is_boot())
             .unwrap_or(false);
 
         // If boot disk is selected, accept text input for override
@@ -905,7 +908,7 @@ impl App {
         let is_boot_disk = self
             .disks
             .get(self.disk_index)
-            .map(|disk| disk.is_boot)
+            .map(|disk| disk.boot_confidence.is_boot())
             .unwrap_or(false);
 
         let required_text = if is_boot_disk {
@@ -958,54 +961,8 @@ impl App {
 
     fn handle_confirmation_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
-            KeyCode::Char(c) if c.is_ascii_alphanumeric() => {
-                if self.confirmation_input.len() < 16 {
-                    self.confirmation_input.push(c.to_ascii_uppercase());
-                }
-                InputResult::Continue
-            }
-            KeyCode::Backspace => {
-                self.confirmation_input.pop();
-                InputResult::Continue
-            }
-            KeyCode::Enter => {
-                if self.confirmation_input == "FLASH" {
-                    match validate_partition_plan(&self.build_partition_plan()) {
-                        Ok(()) => {
-                            self.error_message = None;
-                            self.customize_error_field = None;
-                        }
-                        Err(err) => {
-                            self.error_message = Some(err.message);
-                            self.customize_error_field = err.field;
-                            return InputResult::Continue;
-                        }
-                    }
-                    self.destructive_armed = true;
-                    self.error_message = None;
-                    self.confirmation_input.clear();
-                    self.current_step_type = InstallStepType::Flashing;
-                    self.status_message = "🛠️ Starting dry-run execution...".to_string();
-                    self.cancel_requested
-                        .store(false, std::sync::atomic::Ordering::Relaxed);
-                    if let Some(config) = self.build_flash_config() {
-                        return InputResult::StartFlash(config);
-                    }
-                } else {
-                    self.error_message = Some("Type FLASH to begin execution.".to_string());
-                }
-                InputResult::Continue
-            }
-            KeyCode::Up | KeyCode::Left => {
-                Self::adjust_index(2, &mut self.confirmation_index, -1);
-                InputResult::Continue
-            }
-            KeyCode::Down | KeyCode::Right => {
-                Self::adjust_index(2, &mut self.confirmation_index, 1);
-                InputResult::Continue
-            }
+            KeyCode::Enter => self.try_start_flash(),
             KeyCode::Esc => {
-                self.confirmation_input.clear();
                 if let Some(prev) = self.current_step_type.prev() {
                     self.current_step_type = prev;
                 }
@@ -1016,13 +973,80 @@ impl App {
         }
     }
 
-    fn handle_downloading_fedora_input(&mut self, key: KeyEvent) -> InputResult {
-        if !self.destructive_armed {
-            self.error_message =
-                Some("Destructive operations are disarmed. Arm before downloading.".to_string());
-            self.current_step_type = InstallStepType::Confirmation;
+    fn handle_disarm_safe_mode_input(&mut self, key: KeyEvent) -> InputResult {
+        match key.code {
+            KeyCode::Char(c) if c.is_ascii_alphanumeric() => {
+                if self.safe_mode_disarm_input.len() < 16 {
+                    self.safe_mode_disarm_input.push(c);
+                }
+                InputResult::Continue
+            }
+            KeyCode::Backspace => {
+                self.safe_mode_disarm_input.pop();
+                InputResult::Continue
+            }
+            KeyCode::Enter => {
+                if self.safe_mode_disarm_input == "DESTROY" {
+                    self.destructive_armed = true;
+                    self.error_message = None;
+                    self.safe_mode_disarm_input.clear();
+                    match self.pending_destructive_action.take() {
+                        Some(PendingDestructiveAction::StartFlash) => self.try_start_flash(),
+                        None => {
+                            self.current_step_type = InstallStepType::Confirmation;
+                            InputResult::Continue
+                        }
+                    }
+                } else {
+                    self.error_message =
+                        Some("Type DESTROY (exactly) to disarm Safe Mode.".to_string());
+                    InputResult::Continue
+                }
+            }
+            KeyCode::Esc => {
+                self.safe_mode_disarm_input.clear();
+                self.pending_destructive_action = None;
+                self.current_step_type = InstallStepType::Confirmation;
+                InputResult::Continue
+            }
+            KeyCode::Char('q') => InputResult::Quit,
+            _ => InputResult::Continue,
+        }
+    }
+
+    fn try_start_flash(&mut self) -> InputResult {
+        match validate_partition_plan(&self.build_partition_plan()) {
+            Ok(()) => {
+                self.error_message = None;
+                self.customize_error_field = None;
+            }
+            Err(err) => {
+                self.error_message = Some(err.message);
+                self.customize_error_field = err.field;
+                return InputResult::Continue;
+            }
+        }
+
+        if !self.dry_run && !self.destructive_armed {
+            self.pending_destructive_action = Some(PendingDestructiveAction::StartFlash);
+            self.safe_mode_disarm_input.clear();
+            self.error_message = None;
+            self.current_step_type = InstallStepType::DisarmSafeMode;
             return InputResult::Continue;
         }
+
+        self.current_step_type = InstallStepType::Flashing;
+        self.status_message = "🛠️ Starting installation...".to_string();
+        self.cancel_requested
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+
+        if let Some(config) = self.build_flash_config() {
+            return InputResult::StartFlash(config);
+        }
+        InputResult::Continue
+    }
+
+    fn handle_downloading_fedora_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
             KeyCode::Up | KeyCode::Left => {
                 Self::adjust_index(2, &mut self.downloading_fedora_index, -1);
@@ -1037,7 +1061,7 @@ impl App {
                     self.downloaded_fedora = true;
                     if self.requires_uefi_download() {
                         self.current_step_type = InstallStepType::DownloadingUefi;
-                        self.status_message = "⬇️ Preparing UEFI download...".to_string();
+                        self.status_message = "⬇️ Preparing EFI download...".to_string();
                     } else {
                         self.start_flashing();
                     }
@@ -1058,12 +1082,6 @@ impl App {
     }
 
     fn handle_downloading_uefi_input(&mut self, key: KeyEvent) -> InputResult {
-        if !self.destructive_armed {
-            self.error_message =
-                Some("Destructive operations are disarmed. Arm before downloading.".to_string());
-            self.current_step_type = InstallStepType::Confirmation;
-            return InputResult::Continue;
-        }
         match key.code {
             KeyCode::Up | KeyCode::Left => {
                 Self::adjust_index(2, &mut self.downloading_uefi_index, -1);
@@ -1126,7 +1144,7 @@ impl App {
     fn handle_uefi_source_selection_input(&mut self, key: KeyEvent) -> InputResult {
         let is_local = matches!(
             self.uefi_sources.get(self.uefi_source_index),
-            Some(crate::tui::flash_config::UefiSource::LocalDirectory)
+            Some(crate::tui::flash_config::EfiSource::LocalEfiImage)
         );
 
         // If local directory is selected, accept text input for path
@@ -1239,7 +1257,7 @@ impl App {
 
             // Check if we found a non-boot disk or cycled through all
             if let Some(disk) = self.disks.get(self.disk_index) {
-                if !disk.is_boot {
+                if !disk.boot_confidence.is_boot() {
                     return; // Found a safe disk
                 }
             }
@@ -1257,9 +1275,10 @@ impl App {
     }
 
     fn handle_flashing_input(&mut self, key: KeyEvent) -> InputResult {
-        if !self.destructive_armed {
-            self.error_message =
-                Some("Destructive operations are disarmed. Arm before flashing.".to_string());
+        if !self.dry_run && !self.destructive_armed {
+            self.error_message = Some(
+                "SAFE MODE is active. Return to the summary and disarm Safe Mode.".to_string(),
+            );
             self.current_step_type = InstallStepType::Confirmation;
             return InputResult::Continue;
         }
@@ -1403,42 +1422,6 @@ impl App {
         }
     }
 
-    fn handle_uefi_source_path_input(&mut self, key: KeyEvent, len: usize) -> InputResult {
-        match key.code {
-            KeyCode::Char(c) if !c.is_control() => {
-                self.uefi_source_path.push(c);
-                InputResult::Continue
-            }
-            KeyCode::Backspace => {
-                self.uefi_source_path.pop();
-                InputResult::Continue
-            }
-            KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
-                Self::adjust_index(len, &mut self.uefi_index, -1);
-                InputResult::Continue
-            }
-            KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
-                Self::adjust_index(len, &mut self.uefi_index, 1);
-                InputResult::Continue
-            }
-            KeyCode::Enter => {
-                self.error_message = None;
-                if let Some(next) = self.current_step_type.next() {
-                    self.current_step_type = next;
-                }
-                InputResult::Continue
-            }
-            KeyCode::Esc => {
-                if let Some(prev) = self.current_step_type.prev() {
-                    self.current_step_type = prev;
-                }
-                InputResult::Continue
-            }
-            KeyCode::Char('q') => InputResult::Quit,
-            _ => InputResult::Continue,
-        }
-    }
-
     fn apply_customize_edit(&mut self, input: Option<char>) -> bool {
         let target = match self.customize_index {
             0 => Some(&mut self.efi_size),
@@ -1523,11 +1506,10 @@ impl App {
     }
 
     fn requires_uefi_download(&self) -> bool {
-        self.options
-            .iter()
-            .find(|option| option.label == "Download UEFI firmware")
-            .map(|option| option.enabled)
-            .unwrap_or(false)
+        matches!(
+            self.uefi_sources.get(self.uefi_source_index),
+            Some(crate::tui::flash_config::EfiSource::DownloadEfiImage)
+        )
     }
 
     fn start_flashing(&mut self) {
@@ -1554,7 +1536,7 @@ impl App {
 
         let download_uefi_firmware = matches!(
             self.uefi_sources.get(self.uefi_source_index),
-            Some(crate::tui::flash_config::UefiSource::Download)
+            Some(crate::tui::flash_config::EfiSource::DownloadEfiImage)
         );
 
         Some(TuiFlashConfig {
@@ -1576,17 +1558,13 @@ impl App {
                 .partition_schemes
                 .get(self.scheme_index)
                 .unwrap_or(&PartitionScheme::Mbr),
-            uefi_dir: self
-                .downloaded_uefi_dir
-                .clone()
-                .or_else(|| {
-                    if download_uefi_firmware {
-                        self.uefi_dirs.get(self.uefi_index).cloned()
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| PathBuf::from(self.uefi_source_path.clone())),
+            uefi_dir: self.downloaded_uefi_dir.clone().unwrap_or_else(|| {
+                if download_uefi_firmware {
+                    PathBuf::from("/tmp/mash-downloads/uefi")
+                } else {
+                    PathBuf::from(self.uefi_source_path.clone())
+                }
+            }),
             auto_unmount: self
                 .options
                 .iter()
@@ -1827,6 +1805,8 @@ mod tests {
 
     #[test]
     fn disk_confirmation_requires_destroy() {
+        use crate::tui::data_sources::{BootConfidence, TransportType};
+
         let mut app = App::new();
         app.current_step_type = InstallStepType::DiskConfirmation;
         // Set up non-boot disk
@@ -1834,9 +1814,11 @@ mod tests {
             label: "Safe Disk".to_string(),
             path: "/dev/sdb".to_string(),
             size: "512 GB".to_string(),
+            vendor: None,
             model: Some("Data Drive".to_string()),
+            transport: TransportType::Sata,
             removable: false,
-            is_boot: false,
+            boot_confidence: BootConfidence::NotBoot,
         }];
         app.disk_index = 0;
 
@@ -1850,6 +1832,8 @@ mod tests {
 
     #[test]
     fn boot_disk_confirmation_requires_stronger_text() {
+        use crate::tui::data_sources::{BootConfidence, TransportType};
+
         let mut app = App::new();
         app.current_step_type = InstallStepType::DiskConfirmation;
         // Set up boot disk
@@ -1857,9 +1841,11 @@ mod tests {
             label: "Boot Disk".to_string(),
             path: "/dev/sda".to_string(),
             size: "256 GB".to_string(),
+            vendor: None,
             model: Some("Boot Drive".to_string()),
+            transport: TransportType::Sata,
             removable: false,
-            is_boot: true,
+            boot_confidence: BootConfidence::Confident,
         }];
         app.disk_index = 0;
 
@@ -1883,21 +1869,33 @@ mod tests {
     }
 
     #[test]
-    fn confirmation_requires_flash() {
+    fn safe_mode_requires_explicit_disarm_flow() {
         let mut app = App::new();
+        app.dry_run = false;
+        app.destructive_armed = false;
         app.current_step_type = InstallStepType::Confirmation;
-        for ch in "FLAS".chars() {
+
+        // Attempt destructive action => disarm screen.
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::DisarmSafeMode);
+        assert!(!app.destructive_armed);
+
+        // Wrong confirmation string should not arm.
+        for ch in "DESTRO".chars() {
             app.handle_input(key(KeyCode::Char(ch)));
         }
         app.handle_input(key(KeyCode::Enter));
-        assert_eq!(app.current_step_type, InstallStepType::Confirmation);
+        assert_eq!(app.current_step_type, InstallStepType::DisarmSafeMode);
+        assert!(!app.destructive_armed);
 
-        app.confirmation_input.clear();
-        for ch in "FLASH".chars() {
+        // Correct confirmation string should arm and proceed.
+        app.safe_mode_disarm_input.clear();
+        for ch in "DESTROY".chars() {
             app.handle_input(key(KeyCode::Char(ch)));
         }
         let result = app.handle_input(key(KeyCode::Enter));
         assert!(matches!(result, InputResult::StartFlash(_)));
+        assert!(app.destructive_armed);
         assert_eq!(app.current_step_type, InstallStepType::Flashing);
     }
 
@@ -1976,10 +1974,10 @@ mod tests {
     }
 
     #[test]
-    fn download_uefi_flag_follows_option() {
+    fn download_uefi_flag_follows_efi_source_selection() {
         let mut app = App::new();
-        // Set UEFI source to Download (index 1)
-        app.uefi_source_index = 1;
+        // Set EFI source to Download (index 0)
+        app.uefi_source_index = 0;
         let config = app.build_flash_config().expect("config");
         assert!(config.download_uefi_firmware);
     }
@@ -2007,11 +2005,11 @@ mod tests {
     #[test]
     fn uefi_source_defaults_to_local() {
         let app = App::new();
-        assert_eq!(app.uefi_source_index, 0);
+        assert_eq!(app.uefi_source_index, 1);
         if let Some(source) = app.uefi_sources.get(app.uefi_source_index) {
             assert!(matches!(
                 source,
-                crate::tui::flash_config::UefiSource::LocalDirectory
+                crate::tui::flash_config::EfiSource::LocalEfiImage
             ));
         }
     }
@@ -2043,56 +2041,73 @@ mod tests {
         // Should default to index 0 which is non-boot
         if !app.disks.is_empty() {
             if let Some(_disk) = app.disks.get(app.disk_index) {
-                assert!(!_disk.is_boot, "Default disk should not be boot disk");
+                assert!(
+                    !_disk.boot_confidence.is_boot(),
+                    "Default disk should not be boot disk"
+                );
             }
         }
     }
 
     #[test]
     fn app_prefers_removable_media_when_safe() {
+        use crate::tui::data_sources::{BootConfidence, TransportType};
+
         // Create app-like disk list
         let disks = vec![
             DiskOption {
                 label: "Boot SSD".to_string(),
                 path: "/dev/nvme0n1".to_string(),
                 size: "512 GB".to_string(),
+                vendor: None,
                 model: Some("Samsung".to_string()),
+                transport: TransportType::Nvme,
                 removable: false,
-                is_boot: true,
+                boot_confidence: BootConfidence::Confident,
             },
             DiskOption {
                 label: "Internal HDD".to_string(),
                 path: "/dev/sda".to_string(),
                 size: "2 TB".to_string(),
+                vendor: None,
                 model: Some("Seagate".to_string()),
+                transport: TransportType::Sata,
                 removable: false,
-                is_boot: false,
+                boot_confidence: BootConfidence::NotBoot,
             },
             DiskOption {
                 label: "USB Stick".to_string(),
                 path: "/dev/sdb".to_string(),
                 size: "32 GB".to_string(),
+                vendor: None,
                 model: Some("SanDisk".to_string()),
+                transport: TransportType::Usb,
                 removable: true,
-                is_boot: false,
+                boot_confidence: BootConfidence::NotBoot,
             },
         ];
 
         // Simulate the auto-selection logic
         let default_disk_index = disks
             .iter()
-            .position(|disk| !disk.is_boot && disk.removable)
-            .or_else(|| disks.iter().position(|disk| !disk.is_boot))
+            .position(|disk| !disk.boot_confidence.is_boot() && disk.removable)
+            .or_else(|| {
+                disks
+                    .iter()
+                    .position(|disk| !disk.boot_confidence.is_boot())
+            })
             .unwrap_or(0);
 
         // Should select USB (index 2) over internal HDD (index 1)
         assert_eq!(default_disk_index, 2);
         assert!(disks[default_disk_index].removable);
-        assert!(!disks[default_disk_index].is_boot);
+        assert!(!disks[default_disk_index].boot_confidence.is_boot());
     }
 
     #[test]
     fn disk_selection_prevents_selecting_boot_disk() {
+        use crate::tui::data_sources::{BootConfidence, TransportType};
+
         let mut app = App::new();
         app.current_step_type = InstallStepType::DiskSelection;
 
@@ -2102,22 +2117,30 @@ mod tests {
                 label: "Boot Disk".to_string(),
                 path: "/dev/sda".to_string(),
                 size: "256 GB".to_string(),
+                vendor: None,
                 model: Some("Boot Drive".to_string()),
+                transport: TransportType::Sata,
                 removable: false,
-                is_boot: true,
+                boot_confidence: BootConfidence::Confident,
             },
             DiskOption {
                 label: "Target Disk".to_string(),
                 path: "/dev/sdb".to_string(),
                 size: "512 GB".to_string(),
+                vendor: None,
                 model: Some("Data Drive".to_string()),
+                transport: TransportType::Sata,
                 removable: false,
-                is_boot: false,
+                boot_confidence: BootConfidence::NotBoot,
             },
         ];
 
         // Should initialize to index 1 (first non-boot)
-        app.disk_index = app.disks.iter().position(|disk| !disk.is_boot).unwrap_or(0);
+        app.disk_index = app
+            .disks
+            .iter()
+            .position(|disk| !disk.boot_confidence.is_boot())
+            .unwrap_or(0);
 
         assert_eq!(app.disk_index, 1);
 
@@ -2133,6 +2156,8 @@ mod tests {
 
     #[test]
     fn disk_selection_requires_boot_override() {
+        use crate::tui::data_sources::{BootConfidence, TransportType};
+
         let mut app = App::new();
         app.current_step_type = InstallStepType::DiskSelection;
 
@@ -2141,9 +2166,11 @@ mod tests {
             label: "Boot Disk".to_string(),
             path: "/dev/sda".to_string(),
             size: "256 GB".to_string(),
+            vendor: None,
             model: Some("Boot Drive".to_string()),
+            transport: TransportType::Sata,
             removable: false,
-            is_boot: true,
+            boot_confidence: BootConfidence::Confident,
         }];
 
         app.disk_index = 0;
@@ -2171,6 +2198,8 @@ mod tests {
 
     #[test]
     fn disk_selection_allows_non_boot_disk() {
+        use crate::tui::data_sources::{BootConfidence, TransportType};
+
         let mut app = App::new();
         app.current_step_type = InstallStepType::DiskSelection;
 
@@ -2179,9 +2208,11 @@ mod tests {
             label: "Target Disk".to_string(),
             path: "/dev/sdb".to_string(),
             size: "512 GB".to_string(),
+            vendor: None,
             model: Some("Data Drive".to_string()),
+            transport: TransportType::Sata,
             removable: false,
-            is_boot: false,
+            boot_confidence: BootConfidence::NotBoot,
         }];
 
         app.disk_index = 0;
@@ -2196,6 +2227,8 @@ mod tests {
 
     #[test]
     fn adjust_disk_index_skips_boot_disks() {
+        use crate::tui::data_sources::{BootConfidence, TransportType};
+
         let mut app = App::new();
 
         // Set up mixed disks: boot, safe, boot, safe
@@ -2204,33 +2237,41 @@ mod tests {
                 label: "Boot Disk 1".to_string(),
                 path: "/dev/sda".to_string(),
                 size: "256 GB".to_string(),
+                vendor: None,
                 model: None,
+                transport: TransportType::Sata,
                 removable: false,
-                is_boot: true,
+                boot_confidence: BootConfidence::Confident,
             },
             DiskOption {
                 label: "Safe Disk 1".to_string(),
                 path: "/dev/sdb".to_string(),
                 size: "512 GB".to_string(),
+                vendor: None,
                 model: None,
+                transport: TransportType::Sata,
                 removable: false,
-                is_boot: false,
+                boot_confidence: BootConfidence::NotBoot,
             },
             DiskOption {
                 label: "Boot Disk 2".to_string(),
                 path: "/dev/sdc".to_string(),
                 size: "128 GB".to_string(),
+                vendor: None,
                 model: None,
+                transport: TransportType::Sata,
                 removable: false,
-                is_boot: true,
+                boot_confidence: BootConfidence::Confident,
             },
             DiskOption {
                 label: "Safe Disk 2".to_string(),
                 path: "/dev/sdd".to_string(),
                 size: "1 TB".to_string(),
+                vendor: None,
                 model: None,
+                transport: TransportType::Sata,
                 removable: false,
-                is_boot: false,
+                boot_confidence: BootConfidence::NotBoot,
             },
         ];
 
@@ -2239,16 +2280,16 @@ mod tests {
         // Navigate forward - should skip index 2 (boot) and land on index 3 (safe)
         app.adjust_disk_index(1);
         assert_eq!(app.disk_index, 3);
-        assert!(!app.disks[app.disk_index].is_boot);
+        assert!(!app.disks[app.disk_index].boot_confidence.is_boot());
 
         // Navigate forward again - should wrap to index 1 (safe), skipping index 0 (boot)
         app.adjust_disk_index(1);
         assert_eq!(app.disk_index, 1);
-        assert!(!app.disks[app.disk_index].is_boot);
+        assert!(!app.disks[app.disk_index].boot_confidence.is_boot());
 
         // Navigate backward - should go to index 3 (safe), skipping index 2 and 0 (boot)
         app.adjust_disk_index(-1);
         assert_eq!(app.disk_index, 3);
-        assert!(!app.disks[app.disk_index].is_boot);
+        assert!(!app.disks[app.disk_index].boot_confidence.is_boot());
     }
 }

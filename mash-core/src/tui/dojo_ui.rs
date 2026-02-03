@@ -142,6 +142,20 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("💽 Select a target disk:".to_string());
             items
                 .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
+
+            // Show warning banner if boot detection failed
+            use crate::tui::data_sources::BootConfidence;
+            if app
+                .disks
+                .iter()
+                .any(|d| d.boot_confidence == BootConfidence::Unknown)
+            {
+                items.push("".to_string());
+                items.push("⚠️ WARNING: Boot device detection failed!".to_string());
+                items.push("Boot disk tags may be UNVERIFIED. Proceed with caution.".to_string());
+                items.push("".to_string());
+            }
+
             if app.disks.is_empty() {
                 items.push("No disks detected. Press r to refresh.".to_string());
             }
@@ -150,7 +164,7 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
 
             // Show boot disk override instructions if boot disk is selected
             if let Some(disk) = app.disks.get(app.disk_index) {
-                if disk.is_boot {
+                if disk.boot_confidence.is_boot() {
                     items.push("".to_string());
                     items.push("⚠️ DANGER: Boot disk selected!".to_string());
                     items.push(
@@ -166,7 +180,7 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
         InstallStepType::DiskConfirmation => {
             let disk = app.disks.get(app.disk_index);
             if let Some(disk) = disk {
-                let is_boot_disk = disk.is_boot;
+                let is_boot_disk = disk.boot_confidence.is_boot();
                 let model = disk.model.as_deref().unwrap_or("Unknown model").trim();
 
                 if is_boot_disk {
@@ -319,18 +333,18 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                 }
             }
         }
-        InstallStepType::UefiDirectory => {
-            items.push("📁 Select UEFI firmware source:".to_string());
+        InstallStepType::EfiImage => {
+            items.push("🧩 Choose how to get the EFI image:".to_string());
             items
                 .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
 
             let uefi_source = app.uefi_sources.get(app.uefi_source_index);
             let is_local = matches!(
                 uefi_source,
-                Some(crate::tui::flash_config::UefiSource::LocalDirectory)
+                Some(crate::tui::flash_config::EfiSource::LocalEfiImage)
             );
 
-            // Show UEFI source options
+            // Show EFI source options (intent-only)
             let options = app
                 .uefi_sources
                 .iter()
@@ -338,10 +352,10 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                 .collect::<Vec<_>>();
             push_options(&mut items, &options, app.uefi_source_index);
 
-            // If local directory selected, show path input
+            // Only ask for a path if the user chose "Use local EFI image".
             if is_local {
                 items.push("".to_string());
-                items.push("UEFI firmware directory path:".to_string());
+                items.push("Local EFI image path:".to_string());
                 items.push(app.uefi_source_path.clone());
             }
         }
@@ -386,8 +400,13 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::Confirmation => {
             items.push("✅ Review configuration summary:".to_string());
-            items.push("Type FLASH to begin execution.".to_string());
-            items.push(format!("Input: {}", app.confirmation_input));
+            items.push("Press Enter to begin installation.".to_string());
+            if !app.dry_run && !app.destructive_armed {
+                items.push(
+                    "SAFE MODE is ON — you'll be prompted to disarm before any disk writes."
+                        .to_string(),
+                );
+            }
             let effective_image = app
                 .downloaded_image_path
                 .clone()
@@ -397,23 +416,15 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                         .map(|image| image.path.clone())
                 })
                 .unwrap_or_else(|| PathBuf::from(app.image_source_path.clone()));
-            let download_uefi = app
-                .options
-                .iter()
-                .find(|option| option.label == "Download UEFI firmware")
-                .map(|option| option.enabled)
-                .unwrap_or(false);
-            let effective_uefi = app
-                .downloaded_uefi_dir
-                .clone()
-                .or_else(|| {
-                    if download_uefi {
-                        app.uefi_dirs.get(app.uefi_index).cloned()
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| PathBuf::from(app.uefi_source_path.clone()));
+            let download_efi = matches!(
+                app.uefi_sources.get(app.uefi_source_index),
+                Some(crate::tui::flash_config::EfiSource::DownloadEfiImage)
+            );
+            let effective_efi = if download_efi {
+                PathBuf::from("/tmp/mash-downloads/uefi")
+            } else {
+                PathBuf::from(app.uefi_source_path.clone())
+            };
             if let Some(disk) = app.disks.get(app.disk_index) {
                 items.push(format!("Disk: {} ({})", disk.path, disk.size));
                 items.push(format!("Disk label: {}", disk.label));
@@ -432,10 +443,12 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                 "Partitions: EFI {} | BOOT {} | ROOT {} | DATA remainder",
                 app.efi_size, app.boot_size, app.root_end
             ));
-            if download_uefi {
-                items.push("UEFI: Download bundle".to_string());
+            if download_efi {
+                items.push("EFI image: Download".to_string());
+            } else {
+                items.push("EFI image: Local".to_string());
             }
-            items.push(format!("UEFI path: {}", effective_uefi.display()));
+            items.push(format!("EFI path: {}", effective_efi.display()));
             if let Some(locale) = app.locales.get(app.locale_index) {
                 items.push(format!("Locale: {}", locale));
             }
@@ -445,16 +458,10 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                 .find(|option| option.label == "Download Fedora image")
                 .map(|option| option.enabled)
                 .unwrap_or(false);
-            let download_uefi = app
-                .options
-                .iter()
-                .find(|option| option.label == "Download UEFI firmware")
-                .map(|option| option.enabled)
-                .unwrap_or(false);
             items.push(format!(
-                "Downloads: Fedora={} | UEFI={}",
+                "Downloads: Fedora={} | EFI={}",
                 if download_fedora { "Yes" } else { "No" },
-                if download_uefi { "Yes" } else { "No" }
+                if download_efi { "Yes" } else { "No" }
             ));
             if app.dry_run {
                 items.push("Mode: DRY-RUN (no disk writes)".to_string());
@@ -483,6 +490,19 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                 items.push(format!("❌ {}", error));
             }
         }
+        InstallStepType::DisarmSafeMode => {
+            items.push("🛡️ SAFE MODE is active.".to_string());
+            items.push("You attempted a destructive action.".to_string());
+            items.push("".to_string());
+            items.push("To DISARM SAFE MODE and enable disk writes, type: DESTROY".to_string());
+            items.push("Then press Enter.".to_string());
+            items.push("".to_string());
+            items.push(format!("Input: {}", app.safe_mode_disarm_input));
+            if let Some(error) = &app.error_message {
+                items.push(format!("❌ {}", error));
+            }
+            items.push("Esc cancels and returns to the summary.".to_string());
+        }
         InstallStepType::DownloadingFedora => {
             let status = if app.downloaded_fedora {
                 "✅ Fedora image downloaded (stub)."
@@ -502,16 +522,16 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::DownloadingUefi => {
             let status = if app.downloaded_uefi {
-                "✅ UEFI firmware downloaded (stub)."
+                "✅ EFI image downloaded (stub)."
             } else {
-                "⬇️ Ready to simulate UEFI download."
+                "⬇️ Ready to simulate EFI download."
             };
             items.push(status.to_string());
             items.push("Use ↑/↓ to choose • Enter to continue • Esc to go back.".to_string());
             push_options(
                 &mut items,
                 &[
-                    "Mark UEFI download complete".to_string(),
+                    "Mark EFI download complete".to_string(),
                     "Go back".to_string(),
                 ],
                 app.downloading_uefi_index,
@@ -549,44 +569,13 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
         }
     }
 
-    if app.show_debug_overlay {
-        items.push("🧪 Debug overlay (press Ctrl+D to toggle)".to_string());
-        items.push(debug_line(
-            "Disk",
-            app.disks.get(app.disk_index).map(|disk| disk.path.clone()),
-        ));
-        items.push(debug_line(
-            "Scheme",
-            app.partition_schemes
-                .get(app.scheme_index)
-                .map(|scheme| scheme.to_string()),
-        ));
-        items.push(debug_line(
-            "Layout",
-            app.partition_layouts.get(app.layout_index).cloned(),
-        ));
-        items.push(debug_line(
-            "Arming",
-            Some(if app.destructive_armed {
-                "ARMED".to_string()
-            } else {
-                "SAFE".to_string()
-            }),
-        ));
-        items.push(debug_line(
-            "Image",
-            app.images
-                .get(app.image_index)
-                .map(|image| image.label.clone()),
-        ));
-    }
-
     if let Some(error) = &app.error_message {
         if matches!(
             app.current_step_type,
             InstallStepType::PartitionCustomize
                 | InstallStepType::DiskConfirmation
                 | InstallStepType::Confirmation
+                | InstallStepType::DisarmSafeMode
         ) {
             return items;
         }
@@ -624,18 +613,18 @@ fn build_plan_lines(app: &crate::tui::dojo_app::App) -> Vec<String> {
         lines.push("Disk: <not selected>".to_string());
     }
 
-    // UEFI firmware source
+    // EFI image source
     if let Some(uefi_source) = app.uefi_sources.get(app.uefi_source_index) {
         match uefi_source {
-            crate::tui::flash_config::UefiSource::LocalDirectory => {
-                lines.push(format!("UEFI: Local directory ({})", app.uefi_source_path));
+            crate::tui::flash_config::EfiSource::LocalEfiImage => {
+                lines.push(format!("EFI: Local ({})", app.uefi_source_path));
             }
-            crate::tui::flash_config::UefiSource::Download => {
-                lines.push("UEFI: Download firmware".to_string());
+            crate::tui::flash_config::EfiSource::DownloadEfiImage => {
+                lines.push("EFI: Download image".to_string());
             }
         }
     } else {
-        lines.push("UEFI: <not selected>".to_string());
+        lines.push("EFI: <not selected>".to_string());
     }
 
     lines.push("Mounts: /boot/efi, /boot, / (root), /data".to_string());
@@ -663,32 +652,54 @@ fn expected_actions(step: InstallStepType) -> String {
             "Up/Down/Tab, Type, Backspace, R, Enter, Esc, q".to_string()
         }
         InstallStepType::PlanReview => "Enter, Esc, q".to_string(),
-        InstallStepType::Confirmation => "Type FLASH, Enter, Esc, q".to_string(),
+        InstallStepType::Confirmation => "Enter, Esc, q".to_string(),
+        InstallStepType::DisarmSafeMode => "Type DESTROY, Enter, Esc, q".to_string(),
         InstallStepType::DiskSelection
         | InstallStepType::ImageSelection
         | InstallStepType::LocaleSelection
         | InstallStepType::FirstBootUser => "Up/Down/Tab, Enter, Esc, q".to_string(),
-        InstallStepType::DownloadSourceSelection | InstallStepType::UefiDirectory => {
+        InstallStepType::DownloadSourceSelection | InstallStepType::EfiImage => {
             "Up/Down/Tab, Type, Backspace, Enter, Esc, q".to_string()
         }
     }
 }
 
 fn format_disk_entry(disk: &crate::tui::dojo_app::DiskOption) -> String {
-    let model = disk.model.as_deref().unwrap_or("Unknown model").trim();
+    use crate::tui::data_sources::BootConfidence;
+
+    // Build human-readable identity from label (which already includes size + vendor/model)
+    let mut identity = disk.label.clone();
+
+    // Add transport hint if available
+    let transport_hint = disk.transport.hint();
+    if !transport_hint.is_empty() {
+        identity.push_str(&format!(" ({})", transport_hint));
+    }
+
+    // Build tags
     let mut tags = Vec::new();
-    if disk.removable {
-        tags.push("removable");
+
+    // Boot confidence tags
+    match disk.boot_confidence {
+        BootConfidence::Confident => tags.push("⚠ BOOT MEDIA"),
+        BootConfidence::Unverified => tags.push("⚠ BOOT?"),
+        BootConfidence::NotBoot | BootConfidence::Unknown => {
+            // Show removable/internal for non-boot disks
+            if disk.removable {
+                tags.push("REMOVABLE");
+            } else {
+                tags.push("INTERNAL");
+            }
+        }
     }
-    if disk.is_boot {
-        tags.push("⚠ BOOT DEVICE");
-    }
+
     let tag_str = if tags.is_empty() {
         String::new()
     } else {
         format!(" - {}", tags.join(", "))
     };
-    format!("{} - {} - {}{}", disk.path, disk.size, model, tag_str)
+
+    format!("{} - {}{}", disk.path, identity, tag_str)
 }
 
 #[cfg(test)]
@@ -778,11 +789,6 @@ fn progress_phase_lines(progress_state: &ProgressState) -> Vec<String> {
         lines.push(format!("{} {} {}", marker, symbol, phase.name()));
     }
     lines
-}
-
-fn debug_line(label: &str, value: Option<String>) -> String {
-    let value = value.unwrap_or_else(|| "Unknown".to_string());
-    format!("  {}: {}", label, value)
 }
 
 fn ensure_emoji_prefix(message: String) -> String {
