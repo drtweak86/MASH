@@ -201,6 +201,7 @@ pub enum InstallStepType {
     FirstBootUser,
     PlanReview,
     Confirmation,
+    ExecuteConfirmationGate,
     DisarmSafeMode,
     DownloadingFedora,
     DownloadingUefi,
@@ -227,6 +228,7 @@ impl InstallStepType {
             InstallStepType::FirstBootUser,
             InstallStepType::PlanReview,
             InstallStepType::Confirmation,
+            InstallStepType::ExecuteConfirmationGate,
             InstallStepType::DisarmSafeMode,
             InstallStepType::DownloadingFedora,
             InstallStepType::DownloadingUefi,
@@ -253,6 +255,7 @@ impl InstallStepType {
             InstallStepType::FirstBootUser => "First-Boot User",
             InstallStepType::PlanReview => "Execution Plan",
             InstallStepType::Confirmation => "Final Confirmation",
+            InstallStepType::ExecuteConfirmationGate => "Final Execute Gate",
             InstallStepType::DisarmSafeMode => "Disarm Safe Mode",
             InstallStepType::DownloadingFedora => "Downloading Fedora Image",
             InstallStepType::DownloadingUefi => "Downloading EFI Image",
@@ -281,6 +284,7 @@ impl InstallStepType {
             InstallStepType::FirstBootUser => Some(InstallStepType::PlanReview),
             InstallStepType::PlanReview => Some(InstallStepType::Confirmation),
             InstallStepType::Confirmation => None,
+            InstallStepType::ExecuteConfirmationGate => None,
             InstallStepType::DisarmSafeMode => None,
             InstallStepType::DownloadingFedora => None, // Execution steps do not have 'next' in this flow
             InstallStepType::DownloadingUefi => None, // Execution steps do not have 'next' in this flow
@@ -308,6 +312,7 @@ impl InstallStepType {
             InstallStepType::FirstBootUser => Some(InstallStepType::Options),
             InstallStepType::PlanReview => Some(InstallStepType::Options),
             InstallStepType::Confirmation => Some(InstallStepType::PlanReview),
+            InstallStepType::ExecuteConfirmationGate => Some(InstallStepType::Confirmation),
             InstallStepType::DisarmSafeMode => Some(InstallStepType::Confirmation),
             _ => None, // Execution steps do not have 'prev' in this flow
         }
@@ -333,6 +338,7 @@ impl InstallStepType {
                 | InstallStepType::FirstBootUser
                 | InstallStepType::PlanReview
                 | InstallStepType::Confirmation
+                | InstallStepType::ExecuteConfirmationGate
                 | InstallStepType::DisarmSafeMode
         )
     }
@@ -404,6 +410,10 @@ pub struct App {
     pub uefi_source_path: String,
     pub downloaded_image_path: Option<PathBuf>,
     pub downloaded_uefi_dir: Option<PathBuf>,
+    /// WO-036: execute-mode confirmation gate input.
+    pub execute_confirmation_input: String,
+    /// WO-036: execute-mode confirmation gate acknowledged.
+    pub execute_confirmation_confirmed: bool,
     pub safe_mode_disarm_input: String,
     pending_destructive_action: Option<PendingDestructiveAction>,
     pub cancel_requested: Arc<std::sync::atomic::AtomicBool>,
@@ -412,6 +422,8 @@ pub struct App {
     pub developer_mode: bool,
     pub mash_root: PathBuf,
     pub state_path: PathBuf,
+    /// Completion messaging (post-install).
+    pub completion_lines: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -650,6 +662,8 @@ impl App {
             uefi_source_path: "/tmp/uefi".to_string(),
             downloaded_image_path: None,
             downloaded_uefi_dir: None,
+            execute_confirmation_input: String::new(),
+            execute_confirmation_confirmed: false,
             safe_mode_disarm_input: String::new(),
             pending_destructive_action: None,
             cancel_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -658,6 +672,7 @@ impl App {
             developer_mode: false,
             mash_root: PathBuf::from("."),
             state_path: PathBuf::from("state.json"),
+            completion_lines: Vec::new(),
         }
         .with_partition_defaults()
     }
@@ -720,6 +735,9 @@ impl App {
             }
             InstallStepType::PlanReview => self.handle_plan_review_input(key),
             InstallStepType::Confirmation => self.handle_confirmation_input(key),
+            InstallStepType::ExecuteConfirmationGate => {
+                self.handle_execute_confirmation_gate_input(key)
+            }
             InstallStepType::DisarmSafeMode => self.handle_disarm_safe_mode_input(key),
             InstallStepType::DownloadingFedora => self.handle_downloading_fedora_input(key),
             InstallStepType::DownloadingUefi => self.handle_downloading_uefi_input(key),
@@ -948,9 +966,55 @@ impl App {
 
     fn handle_confirmation_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
-            KeyCode::Enter => self.try_start_flash(),
+            KeyCode::Enter => {
+                // WO-036: execute-mode requires an explicit typed confirmation gate.
+                if !self.dry_run && !self.execute_confirmation_confirmed {
+                    self.execute_confirmation_input.clear();
+                    self.error_message = None;
+                    self.current_step_type = InstallStepType::ExecuteConfirmationGate;
+                    return InputResult::Continue;
+                }
+                self.try_start_flash()
+            }
             KeyCode::Esc => {
                 self.go_prev();
+                InputResult::Continue
+            }
+            KeyCode::Char('q') => InputResult::Quit,
+            _ => InputResult::Continue,
+        }
+    }
+
+    fn handle_execute_confirmation_gate_input(&mut self, key: KeyEvent) -> InputResult {
+        const REQUIRED: &str = "I UNDERSTAND THIS WILL ERASE THE SELECTED DISK";
+        match key.code {
+            KeyCode::Char(c) if c.is_ascii_uppercase() || c == ' ' => {
+                if self.execute_confirmation_input.len() < REQUIRED.len() {
+                    self.execute_confirmation_input.push(c);
+                }
+                InputResult::Continue
+            }
+            KeyCode::Backspace => {
+                self.execute_confirmation_input.pop();
+                InputResult::Continue
+            }
+            KeyCode::Enter => {
+                if self.execute_confirmation_input == REQUIRED {
+                    self.execute_confirmation_confirmed = true;
+                    self.error_message = None;
+                    self.execute_confirmation_input.clear();
+                    // Proceed into Safe Mode disarm (if needed) and then execution.
+                    self.try_start_flash()
+                } else {
+                    self.error_message =
+                        Some(format!("Type the full phrase exactly: {}", REQUIRED));
+                    InputResult::Continue
+                }
+            }
+            KeyCode::Esc => {
+                self.execute_confirmation_input.clear();
+                self.execute_confirmation_confirmed = false;
+                self.current_step_type = InstallStepType::Confirmation;
                 InputResult::Continue
             }
             KeyCode::Char('q') => InputResult::Quit,
@@ -1274,12 +1338,21 @@ impl App {
 
     fn go_next(&mut self) {
         if let Some(next) = self.next_step_for(self.current_step_type) {
+            // Any navigation through config steps invalidates the execute confirmation gate.
+            if !self.is_running {
+                self.execute_confirmation_confirmed = false;
+                self.execute_confirmation_input.clear();
+            }
             self.current_step_type = next;
         }
     }
 
     fn go_prev(&mut self) {
         if let Some(prev) = self.prev_step_for(self.current_step_type) {
+            if !self.is_running {
+                self.execute_confirmation_confirmed = false;
+                self.execute_confirmation_input.clear();
+            }
             self.current_step_type = prev;
         }
     }
@@ -1661,6 +1734,17 @@ impl App {
             }
         };
 
+        let disk_identity = self.disks.get(self.disk_index).and_then(|disk| {
+            disk.identity
+                .as_ref()
+                .map(|id| mash_core::install_report::DiskIdentityReport {
+                    vendor: Some(id.vendor.clone()),
+                    model: Some(id.model.clone()),
+                    transport: Some(id.transport.hint().to_string()),
+                    size_bytes: Some(id.size_bytes),
+                })
+        });
+
         Some(TuiFlashConfig {
             mash_root: self.mash_root.clone(),
             state_path: self.state_path.clone(),
@@ -1710,6 +1794,18 @@ impl App {
             image_version: "43".to_string(),
             image_edition: "KDE".to_string(),
             dry_run: self.dry_run,
+            disk_identity,
+            os_distro_label: self
+                .os_distros
+                .get(self.os_distro_index)
+                .map(|d| d.display().to_string())
+                .unwrap_or_else(|| "Unknown".to_string()),
+            os_flavour_label: self
+                .os_variants
+                .get(self.os_variant_index)
+                .map(|v| v.label.clone())
+                .unwrap_or_else(|| "Unknown".to_string()),
+            typed_execute_confirmation: self.execute_confirmation_confirmed,
         })
     }
 }
@@ -2004,20 +2100,34 @@ mod tests {
         app.destructive_armed = false;
         app.current_step_type = InstallStepType::Confirmation;
 
-        // Attempt destructive action => disarm screen.
+        // Attempt destructive action => execute confirmation gate first.
         app.handle_input(key(KeyCode::Enter));
-        assert_eq!(app.current_step_type, InstallStepType::DisarmSafeMode);
+        assert_eq!(
+            app.current_step_type,
+            InstallStepType::ExecuteConfirmationGate
+        );
         assert!(!app.destructive_armed);
 
-        // Wrong confirmation string should not arm.
-        for ch in "DESTRO".chars() {
+        // Wrong confirmation string should not proceed.
+        for ch in "I UNDERSTAND".chars() {
+            app.handle_input(key(KeyCode::Char(ch)));
+        }
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(
+            app.current_step_type,
+            InstallStepType::ExecuteConfirmationGate
+        );
+        assert!(!app.destructive_armed);
+
+        // Correct execute-gate string should proceed into Safe Mode disarm screen.
+        app.execute_confirmation_input.clear();
+        for ch in "I UNDERSTAND THIS WILL ERASE THE SELECTED DISK".chars() {
             app.handle_input(key(KeyCode::Char(ch)));
         }
         app.handle_input(key(KeyCode::Enter));
         assert_eq!(app.current_step_type, InstallStepType::DisarmSafeMode);
-        assert!(!app.destructive_armed);
 
-        // Correct confirmation string should arm and proceed.
+        // Safe Mode disarm string is still required before disk writes.
         app.safe_mode_disarm_input.clear();
         for ch in "DESTROY".chars() {
             app.handle_input(key(KeyCode::Char(ch)));

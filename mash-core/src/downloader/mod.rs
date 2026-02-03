@@ -6,10 +6,10 @@ use reqwest::StatusCode;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Seek};
+use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -29,12 +29,32 @@ pub struct DownloadIndex {
     // Present for the scheduled health-check action (issue #45).
     #[serde(default)]
     pub health_checks: Vec<HealthCheckSpec>,
+
+    #[serde(default)]
+    pub assets: Vec<AssetSpec>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct HealthCheckSpec {
     pub name: String,
     pub url: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetKind {
+    Zip,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AssetSpec {
+    pub name: String,
+    pub kind: AssetKind,
+    pub file_name: String,
+    pub checksum_sha256: String,
+    #[serde(default)]
+    pub checksum_url: Option<String>,
+    pub mirrors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -51,10 +71,7 @@ pub struct ImageSpec {
 
 pub static DOWNLOAD_INDEX: Lazy<DownloadIndex> = Lazy::new(|| {
     let index = include_str!("../../../docs/os-download-links.toml");
-    toml::from_str(index).unwrap_or(DownloadIndex {
-        images: Vec::new(),
-        health_checks: Vec::new(),
-    })
+    toml::from_str(index).expect("failed to parse docs/os-download-links.toml (download index)")
 });
 
 pub fn parse_index(toml_text: &str) -> Result<DownloadIndex> {
@@ -68,8 +85,14 @@ pub struct ImageKey {
     pub arch: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetKey {
+    pub name: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct DownloadOptions {
+    pub asset: Option<AssetKey>,
     pub image: Option<ImageKey>,
     pub mirror_override: Option<String>,
     pub checksum_override: Option<String>,
@@ -83,6 +106,7 @@ pub struct DownloadOptions {
 impl Default for DownloadOptions {
     fn default() -> Self {
         Self {
+            asset: None,
             image: None,
             mirror_override: None,
             checksum_override: None,
@@ -93,6 +117,13 @@ impl Default for DownloadOptions {
             resume: true,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DownloadProgress {
+    pub downloaded: u64,
+    pub total: Option<u64>,
+    pub speed_bytes_per_sec: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +204,19 @@ fn pick_source_from_index(index: &DownloadIndex, opts: &DownloadOptions) -> Resu
         })
 }
 
+fn pick_asset_from_index(index: &DownloadIndex, opts: &DownloadOptions) -> Result<AssetSpec> {
+    let key = opts
+        .asset
+        .as_ref()
+        .context("download selection required (set DownloadOptions.asset)")?;
+    index
+        .assets
+        .iter()
+        .find(|spec| spec.name == key.name)
+        .cloned()
+        .with_context(|| format!("no asset download spec found for name={}", key.name))
+}
+
 fn download_checksum(opts: &DownloadOptions, client: &Client, spec: &ImageSpec) -> Result<String> {
     if let Some(ref checksum) = opts.checksum_override {
         return Ok(checksum.clone());
@@ -211,15 +255,66 @@ fn create_http_client(timeout_secs: u64) -> Result<Client> {
 }
 
 pub fn download(opts: &DownloadOptions) -> Result<DownloadArtifact> {
-    download_from_index(&DOWNLOAD_INDEX, opts)
+    download_from_index_with_progress(&DOWNLOAD_INDEX, opts, None)
 }
 
 fn download_from_index(index: &DownloadIndex, opts: &DownloadOptions) -> Result<DownloadArtifact> {
-    let spec = pick_source_from_index(index, opts)?;
+    download_from_index_with_progress(index, opts, None)
+}
+
+pub fn download_with_progress(
+    opts: &DownloadOptions,
+    progress: &mut dyn FnMut(DownloadProgress) -> bool,
+) -> Result<DownloadArtifact> {
+    download_from_index_with_progress(&DOWNLOAD_INDEX, opts, Some(progress))
+}
+
+fn download_from_index_with_progress(
+    index: &DownloadIndex,
+    opts: &DownloadOptions,
+    mut progress: Option<&mut dyn FnMut(DownloadProgress) -> bool>,
+) -> Result<DownloadArtifact> {
+    // Images and assets are both downloaded as files; spec selection differs.
+    let (file_name, mirrors, checksum, checksum_url) = if opts.asset.is_some() {
+        let spec = pick_asset_from_index(index, opts)?;
+        (
+            spec.file_name,
+            spec.mirrors,
+            spec.checksum_sha256,
+            spec.checksum_url,
+        )
+    } else {
+        let spec = pick_source_from_index(index, opts)?;
+        (
+            spec.file_name,
+            spec.mirrors,
+            spec.checksum_sha256,
+            spec.checksum_url,
+        )
+    };
+
     let client = create_http_client(opts.timeout_secs)?;
-    let checksum = download_checksum(opts, &client, &spec)?;
+    let checksum = {
+        if let Some(ref checksum) = opts.checksum_override {
+            checksum.clone()
+        } else if let Some(url) = opts.checksum_url.clone().or(checksum_url) {
+            let response = client
+                .get(url)
+                .send()
+                .context("Failed to fetch checksum from URL")?
+                .error_for_status()?;
+            let checksum_text = response.text()?;
+            if let Some(extracted) = extract_sha256_from_checksum_file(&checksum_text, &file_name) {
+                extracted
+            } else {
+                anyhow::bail!("checksum URL did not contain an entry for {}", file_name);
+            }
+        } else {
+            checksum
+        }
+    };
     fs::create_dir_all(&opts.download_dir)?;
-    let target = opts.download_dir.join(&spec.file_name);
+    let target = opts.download_dir.join(&file_name);
     let mut last_err = None;
     let mut resumed = false;
 
@@ -227,31 +322,41 @@ fn download_from_index(index: &DownloadIndex, opts: &DownloadOptions) -> Result<
         info!("Download attempt {}/{}", attempt, opts.max_retries.max(1));
 
         let result = if opts.resume && target.exists() {
-            match download_with_resume(&client, &spec.mirrors, &target, attempt) {
+            match download_with_resume(&client, &mirrors, &target, attempt, &mut progress) {
                 Ok(size) => {
                     resumed = true;
                     Ok(size)
                 }
                 Err(_) => {
                     let _ = fs::remove_file(&target);
-                    download_full(&client, &spec.mirrors, &target, attempt)
+                    download_full(&client, &mirrors, &target, attempt, &mut progress)
                 }
             }
         } else {
-            download_full(&client, &spec.mirrors, &target, attempt)
+            download_full(&client, &mirrors, &target, attempt, &mut progress)
         };
 
         match result {
             Ok(size) => {
                 let artifact = DownloadArtifact::new(
-                    spec.file_name.clone(),
+                    file_name.clone(),
                     target.clone(),
                     checksum.clone(),
                     size,
                     resumed,
                 );
-                artifact.verify_checksum()?;
-                return Ok(artifact);
+                match artifact.verify_checksum() {
+                    Ok(()) => return Ok(artifact),
+                    Err(err) => {
+                        // If checksum fails, remove the file so the next attempt cannot
+                        // "resume" a known-bad artifact.
+                        let _ = fs::remove_file(&target);
+                        last_err = Some(err);
+                        if attempt < opts.max_retries.max(1) {
+                            sleep(Duration::from_secs(2));
+                        }
+                    }
+                }
             }
             Err(err) => {
                 last_err = Some(err);
@@ -311,6 +416,7 @@ fn download_full(
     mirrors: &[String],
     target: &Path,
     attempt: usize,
+    progress: &mut Option<&mut dyn FnMut(DownloadProgress) -> bool>,
 ) -> Result<u64> {
     let mut last_err = None;
     for mirror in mirrors {
@@ -324,8 +430,39 @@ fn download_full(
                     last_err = Some(anyhow::anyhow!("{} returned {}", mirror, response.status()));
                     continue;
                 }
+                let total = response.content_length();
                 let mut dest = File::create(target)?;
-                io::copy(&mut response, &mut dest)?;
+                let mut downloaded: u64 = 0;
+                let start = Instant::now();
+                let mut last_tick = Instant::now();
+                let mut buf = [0u8; 8192];
+                loop {
+                    let read = response.read(&mut buf)?;
+                    if read == 0 {
+                        break;
+                    }
+                    dest.write_all(&buf[..read])?;
+                    downloaded = downloaded.saturating_add(read as u64);
+                    if let Some(cb) = progress.as_deref_mut() {
+                        if last_tick.elapsed() >= Duration::from_millis(200) {
+                            let elapsed = start.elapsed().as_secs_f64();
+                            let speed = if elapsed > 0.0 {
+                                (downloaded as f64 / elapsed) as u64
+                            } else {
+                                0
+                            };
+                            let keep_going = cb(DownloadProgress {
+                                downloaded,
+                                total,
+                                speed_bytes_per_sec: speed,
+                            });
+                            if !keep_going {
+                                anyhow::bail!("cancelled");
+                            }
+                            last_tick = Instant::now();
+                        }
+                    }
+                }
                 return Ok(dest.stream_position()?);
             }
             Err(err) => {
@@ -341,6 +478,7 @@ fn download_with_resume(
     mirrors: &[String],
     target: &Path,
     attempt: usize,
+    progress: &mut Option<&mut dyn FnMut(DownloadProgress) -> bool>,
 ) -> Result<u64> {
     let current_len = target.metadata().map(|m| m.len()).unwrap_or(0);
     if current_len == 0 {
@@ -357,11 +495,75 @@ fn download_with_resume(
                 let status = response.status();
                 if status == StatusCode::PARTIAL_CONTENT {
                     let mut dest = OpenOptions::new().append(true).open(target)?;
-                    io::copy(&mut response, &mut dest)?;
+                    let total = response
+                        .content_length()
+                        .map(|t| t.saturating_add(current_len));
+                    let mut downloaded = current_len;
+                    let start = Instant::now();
+                    let mut last_tick = Instant::now();
+                    let mut buf = [0u8; 8192];
+                    loop {
+                        let read = response.read(&mut buf)?;
+                        if read == 0 {
+                            break;
+                        }
+                        dest.write_all(&buf[..read])?;
+                        downloaded = downloaded.saturating_add(read as u64);
+                        if let Some(cb) = progress.as_deref_mut() {
+                            if last_tick.elapsed() >= Duration::from_millis(200) {
+                                let elapsed = start.elapsed().as_secs_f64();
+                                let speed = if elapsed > 0.0 {
+                                    ((downloaded - current_len) as f64 / elapsed) as u64
+                                } else {
+                                    0
+                                };
+                                let keep_going = cb(DownloadProgress {
+                                    downloaded,
+                                    total,
+                                    speed_bytes_per_sec: speed,
+                                });
+                                if !keep_going {
+                                    anyhow::bail!("cancelled");
+                                }
+                                last_tick = Instant::now();
+                            }
+                        }
+                    }
                     return Ok(dest.stream_position()?);
                 } else if status.is_success() {
                     let mut dest = File::create(target)?;
-                    io::copy(&mut response, &mut dest)?;
+                    let total = response.content_length();
+                    let mut downloaded: u64 = 0;
+                    let start = Instant::now();
+                    let mut last_tick = Instant::now();
+                    let mut buf = [0u8; 8192];
+                    loop {
+                        let read = response.read(&mut buf)?;
+                        if read == 0 {
+                            break;
+                        }
+                        dest.write_all(&buf[..read])?;
+                        downloaded = downloaded.saturating_add(read as u64);
+                        if let Some(cb) = progress.as_deref_mut() {
+                            if last_tick.elapsed() >= Duration::from_millis(200) {
+                                let elapsed = start.elapsed().as_secs_f64();
+                                let speed = if elapsed > 0.0 {
+                                    (downloaded as f64 / elapsed) as u64
+                                } else {
+                                    0
+                                };
+                                let keep_going = cb(DownloadProgress {
+                                    downloaded,
+                                    total,
+                                    speed_bytes_per_sec: speed,
+                                });
+                                if !keep_going {
+                                    anyhow::bail!("cancelled");
+                                }
+                                last_tick = Instant::now();
+                            }
+                        }
+                    }
                     return Ok(dest.stream_position()?);
                 }
             }
@@ -527,6 +729,7 @@ mod tests {
                 mirrors,
             }],
             health_checks: Vec::new(),
+            assets: Vec::new(),
         }
     }
 

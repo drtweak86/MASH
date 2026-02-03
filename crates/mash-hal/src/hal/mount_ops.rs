@@ -29,6 +29,12 @@ pub trait MountOps {
     /// * `dry_run` - If true, log the operation but don't execute it
     fn unmount(&self, target: &Path, dry_run: bool) -> Result<()>;
 
+    /// Unmount a path and any nested mounts beneath it.
+    ///
+    /// This is used for "auto-unmount" flows where a partition may have bind-mounts or nested
+    /// mounts under the same tree.
+    fn unmount_recursive(&self, target: &Path, dry_run: bool) -> Result<()>;
+
     /// Check if a path is currently mounted.
     ///
     /// # Arguments

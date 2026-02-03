@@ -15,6 +15,7 @@ pub mod download_manager;
 pub mod downloader;
 pub mod errors;
 pub mod flash;
+pub mod install_report;
 pub mod locale;
 pub mod logging;
 pub mod partitioning;

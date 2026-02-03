@@ -10,20 +10,23 @@
 //!   p4: DATA (ext4) - for mash-staging
 
 use anyhow::{bail, Context, Result};
-use log::{debug, info};
+use log::info;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::cli::PartitionScheme;
 use crate::errors::MashError;
+use crate::install_report::{DiskIdentityReport, InstallReportWriter, RunMode, SelectionReport};
 use crate::locale::LocaleConfig;
 use crate::progress::{Phase, ProgressUpdate};
+use mash_hal::{
+    FlashOptions, FormatOptions, InstallerHal, LinuxHal, MountOptions, PartedOp, PartedOptions,
+    RsyncOptions, WipeFsOptions,
+};
 
 /// Flash a full-disk image to a target block device.
 ///
@@ -32,38 +35,20 @@ use crate::progress::{Phase, ProgressUpdate};
 ///
 /// This is used for non-Fedora OS profiles (Ubuntu, Raspberry Pi OS, Manjaro) which ship as full
 /// disk images with their own partition tables.
-pub fn flash_raw_image_to_disk(image_path: &Path, target_disk: &Path) -> Result<()> {
+pub fn flash_raw_image_to_disk(
+    hal: &dyn mash_hal::FlashOps,
+    image_path: &Path,
+    target_disk: &Path,
+    opts: &FlashOptions,
+) -> Result<()> {
     info!(
         "💾 Flashing image {} -> {}",
         image_path.display(),
         target_disk.display()
     );
 
-    let input = fs::File::open(image_path)
-        .with_context(|| format!("Failed to open image: {}", image_path.display()))?;
-
-    let mut reader: Box<dyn Read> = if image_path.extension().is_some_and(|e| e == "xz") {
-        Box::new(xz2::read::XzDecoder::new(input))
-    } else {
-        Box::new(input)
-    };
-
-    let mut out = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(target_disk)
-        .with_context(|| format!("Failed to open target disk: {}", target_disk.display()))?;
-
-    // For regular files (CI tests), truncate; for block devices, this may fail and is fine.
-    let _ = out.set_len(0);
-    let _ = out.seek(SeekFrom::Start(0));
-
-    io::copy(&mut reader, &mut out).context("Failed to write image to target disk")?;
-
-    // Best-effort flush (block devices may ignore).
-    out.sync_all().ok();
-    Ok(())
+    hal.flash_raw_image(image_path, target_disk, opts)
+        .context("Failed to flash raw image to target disk")
 }
 
 /// Mount points for the installation
@@ -138,11 +123,13 @@ struct BtrfsSubvols {
 
 /// Installation context with all configuration
 pub struct FlashContext {
+    pub hal: Arc<dyn InstallerHal>,
     pub image: PathBuf,
     pub disk: String,
     pub scheme: PartitionScheme,
     pub uefi_dir: PathBuf,
     pub dry_run: bool,
+    pub confirmed: bool,
     pub auto_unmount: bool,
     pub locale: Option<LocaleConfig>,
     pub early_ssh: bool,
@@ -152,10 +139,14 @@ pub struct FlashContext {
     pub efi_size: String,
     pub boot_size: String,
     pub root_end: String,
+    pub report: Option<InstallReportWriter>,
 }
 
 impl FlashContext {
     fn send_progress(&self, update: ProgressUpdate) {
+        if let Some(ref report) = self.report {
+            report.record_progress_update(&update);
+        }
         if let Some(ref tx) = self.progress_tx {
             let _ = tx.send(update);
         }
@@ -200,6 +191,14 @@ impl FlashContext {
 /// (UI-only selections like "download Fedora" belong in the TUI layer.)
 #[derive(Debug, Clone)]
 pub struct FlashConfig {
+    /// Human label for the selected OS (for reporting / completion messaging).
+    pub os_distro: Option<String>,
+    /// Human label for the selected flavour/variant (for reporting / completion messaging).
+    pub os_flavour: Option<String>,
+    /// Selected target disk identity (best-effort; may be missing on some hardware).
+    pub disk_identity: Option<DiskIdentityReport>,
+    /// Where EFI came from (e.g. "download" or "local") for reporting.
+    pub efi_source: Option<String>,
     pub image: PathBuf,
     pub disk: String,
     pub scheme: PartitionScheme,
@@ -266,6 +265,10 @@ pub fn run(
 ) -> Result<()> {
     // Create a temporary FlashConfig for CLI run
     let cli_flash_config = FlashConfig {
+        os_distro: Some("Fedora".to_string()),
+        os_flavour: None,
+        disk_identity: None,
+        efi_source: None,
         image: image.to_path_buf(),
         disk: disk.to_string(),
         scheme,
@@ -291,6 +294,27 @@ pub fn run_with_progress(
     config: &FlashConfig,
     yes_i_know: bool, // Still required separately for explicit confirmation
 ) -> Result<()> {
+    run_with_progress_with_confirmation(config, yes_i_know, false)
+}
+
+/// Full run function with progress reporting + explicit typed confirmation (WO-036).
+pub fn run_with_progress_with_confirmation(
+    config: &FlashConfig,
+    yes_i_know: bool,
+    typed_confirmation: bool,
+) -> Result<()> {
+    let hal: Arc<dyn InstallerHal> = Arc::new(LinuxHal::new());
+    run_with_progress_with_confirmation_with_hal(config, yes_i_know, typed_confirmation, hal)
+}
+
+/// Full run function with progress reporting + explicit typed confirmation (WO-036),
+/// using the provided HAL implementation.
+pub fn run_with_progress_with_confirmation_with_hal(
+    config: &FlashConfig,
+    yes_i_know: bool,
+    typed_confirmation: bool,
+    hal: Arc<dyn InstallerHal>,
+) -> Result<()> {
     info!("🍠 MASH Full-Loop Installer: Fedora KDE + UEFI Boot for RPi4");
     info!("📋 GPT layout with 4 partitions (EFI, BOOT, ROOT/btrfs, DATA)");
 
@@ -309,7 +333,30 @@ pub fn run_with_progress(
         return Err(MashError::MissingYesIKnow.into());
     }
 
-    show_lsblk(&disk)?;
+    show_lsblk(&*hal, &disk)?;
+
+    // Persistent install report artifact (always).
+    let mode = if config.dry_run {
+        RunMode::DryRun
+    } else {
+        RunMode::Execute
+    };
+    let selection = SelectionReport {
+        distro: config
+            .os_distro
+            .clone()
+            .unwrap_or_else(|| "Fedora".to_string()),
+        flavour: config.os_flavour.clone(),
+        target_disk: disk.clone(),
+        disk_identity: config.disk_identity.clone(),
+        partition_scheme: Some(format!("{}", config.scheme)),
+        efi_size: Some(config.efi_size.clone()),
+        boot_size: Some(config.boot_size.clone()),
+        root_end: Some(config.root_end.clone()),
+        efi_source: config.efi_source.clone(),
+        efi_path: Some(config.uefi_dir.display().to_string()),
+    };
+    let report = InstallReportWriter::new(mode, yes_i_know, typed_confirmation, selection).ok();
 
     // Create work directory
     let work_dir = PathBuf::from("/tmp/mash-install");
@@ -336,11 +383,13 @@ pub fn run_with_progress(
     };
 
     let mut ctx = FlashContext {
+        hal,
         image: config.image.clone(),
         disk: disk.clone(),
         scheme: config.scheme,
         uefi_dir: effective_uefi_dir,
         dry_run: config.dry_run,
+        confirmed: yes_i_know,
         auto_unmount: config.auto_unmount,
         locale: config.locale.clone(),
         early_ssh: config.early_ssh,
@@ -350,6 +399,7 @@ pub fn run_with_progress(
         efi_size: config.efi_size.clone(),
         boot_size: config.boot_size.clone(),
         root_end: config.root_end.clone(),
+        report,
     };
 
     // If the image is an .xz file, decompress it
@@ -409,7 +459,7 @@ fn prepare_mount_points(ctx: &FlashContext, mounts: &MountPoints) -> Result<()> 
 fn execute_partition_phase(ctx: &FlashContext) -> Result<()> {
     ctx.check_cancel()?;
     ctx.start_phase(Phase::Partition);
-    unmount_disk_partitions(&ctx.disk, ctx.auto_unmount)?;
+    unmount_disk_partitions(&*ctx.hal, &ctx.disk, ctx.auto_unmount, ctx.dry_run)?;
     match ctx.scheme {
         PartitionScheme::Mbr => partition_disk_mbr(ctx)?,
         PartitionScheme::Gpt => partition_disk_gpt(ctx)?,
@@ -500,9 +550,13 @@ fn execute_copy_efi_phase(ctx: &FlashContext, mounts: &MountPoints) -> Result<()
     ctx.check_cancel()?;
     ctx.start_phase(Phase::CopyEfi);
     // Copy Fedora EFI tree (safe for vfat)
-    rsync_vfat_safe(&mounts.src_efi.join("EFI"), &mounts.dst_efi.join("EFI"))?;
+    rsync_vfat_safe(
+        ctx,
+        &mounts.src_efi.join("EFI"),
+        &mounts.dst_efi.join("EFI"),
+    )?;
     // Copy UEFI firmware (LAST - overwrites any conflicts)
-    rsync_vfat_safe(&ctx.uefi_dir, &mounts.dst_efi)?;
+    rsync_vfat_safe(ctx, &ctx.uefi_dir, &mounts.dst_efi)?;
     // Write config.txt
     write_config_txt(&mounts.dst_efi)?;
     ctx.complete_phase(Phase::CopyEfi);
@@ -562,23 +616,22 @@ fn execute_cleanup_phase(ctx: &FlashContext) -> Result<()> {
     ctx.check_cancel()?;
     ctx.start_phase(Phase::Cleanup);
     ctx.status("💾 Syncing filesystems...");
-    let _ = Command::new("sync").status();
+    let _ = ctx.hal.sync();
     ctx.complete_phase(Phase::Cleanup);
     Ok(())
 }
 
 fn simulate_installation(ctx: &FlashContext) -> Result<()> {
+    // DRY-RUN must never look destructive. We avoid disk-op wording and mark phases as skipped.
     for phase in Phase::all() {
         ctx.check_cancel()?;
-        if matches!(phase, Phase::DownloadImage | Phase::DownloadUefi) {
-            ctx.send_progress(ProgressUpdate::PhaseSkipped(*phase));
-            ctx.status(&format!("(dry-run) Skipping {}", phase.name()));
-            continue;
-        }
-        ctx.start_phase(*phase);
-        ctx.status(&format!("(dry-run) Would execute: {}", phase.name()));
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        ctx.complete_phase(*phase);
+        ctx.send_progress(ProgressUpdate::PhaseSkipped(*phase));
+        ctx.status(&format!(
+            "DRY-RUN: would run phase {}/{}",
+            phase.number(),
+            Phase::total()
+        ));
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
     ctx.send_progress(ProgressUpdate::Complete);
     Ok(())
@@ -588,22 +641,22 @@ fn simulate_installation(ctx: &FlashContext) -> Result<()> {
 // Partition and Format Functions (GPT with parted)
 // ============================================================================
 
-fn unmount_disk_partitions(disk: &str, auto_unmount: bool) -> Result<()> {
+fn unmount_disk_partitions(
+    hal: &dyn InstallerHal,
+    disk: &str,
+    auto_unmount: bool,
+    dry_run: bool,
+) -> Result<()> {
     info!("🔍 Checking for mounted partitions on {}...", disk);
-    let output = Command::new("lsblk")
-        .args(["-lnpo", "MOUNTPOINT", disk])
-        .output()
-        .context("Failed to run lsblk")?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for mp in stdout.lines().filter(|l| !l.is_empty()) {
+    let mountpoints = hal.lsblk_mountpoints(Path::new(disk))?;
+    for mp in mountpoints {
         if auto_unmount {
-            info!("🔌 Unmounting {}", mp);
-            let _ = Command::new("umount").args(["-R", mp]).status();
+            info!("🔌 Unmounting {}", mp.display());
+            let _ = hal.unmount_recursive(&mp, dry_run);
         } else {
             bail!(
                 "Partition mounted at {}. Use --auto-unmount or unmount manually.",
-                mp
+                mp.display()
             );
         }
     }
@@ -615,8 +668,11 @@ fn partition_disk_mbr(ctx: &FlashContext) -> Result<()> {
     ctx.status("🔪 Creating MBR (msdos) partition table with parted...");
 
     // Wipe existing
-    run_command("wipefs", &["-a", &ctx.disk])?;
-    udev_settle();
+    ctx.hal.wipefs_all(
+        Path::new(&ctx.disk),
+        &WipeFsOptions::new(ctx.dry_run, ctx.confirmed),
+    )?;
+    let _ = ctx.hal.udev_settle();
 
     let efi_start = "4MiB";
     let efi_end = ctx.efi_size.clone();
@@ -626,60 +682,78 @@ fn partition_disk_mbr(ctx: &FlashContext) -> Result<()> {
     );
 
     // Create msdos partition table
-    run_command("parted", &["-s", &ctx.disk, "mklabel", "msdos"])?;
+    ctx.hal.parted(
+        Path::new(&ctx.disk),
+        PartedOp::MkLabel {
+            label: "msdos".to_string(),
+        },
+        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+    )?;
 
     // p1: EFI (fat32) — mark bootable for broad Pi UEFI compatibility
-    run_command(
-        "parted",
-        &[
-            "-s", "-a", "optimal", &ctx.disk, "mkpart", "primary", "fat32", efi_start, &efi_end,
-        ],
+    ctx.hal.parted(
+        Path::new(&ctx.disk),
+        PartedOp::MkPart {
+            part_type: "primary".to_string(),
+            fs_type: "fat32".to_string(),
+            start: efi_start.to_string(),
+            end: efi_end.clone(),
+        },
+        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
     )?;
     // On msdos, "esp" isn't always supported; boot flag is the reliable choice.
-    let _ = run_command("parted", &["-s", &ctx.disk, "set", "1", "boot", "on"]);
+    let _ = ctx.hal.parted(
+        Path::new(&ctx.disk),
+        PartedOp::SetFlag {
+            part_num: 1,
+            flag: "boot".to_string(),
+            state: "on".to_string(),
+        },
+        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+    );
 
     // p2: BOOT (ext4)
-    run_command(
-        "parted",
-        &[
-            "-s", "-a", "optimal", &ctx.disk, "mkpart", "primary", "ext4", &efi_end, &boot_end,
-        ],
+    ctx.hal.parted(
+        Path::new(&ctx.disk),
+        PartedOp::MkPart {
+            part_type: "primary".to_string(),
+            fs_type: "ext4".to_string(),
+            start: efi_end.clone(),
+            end: boot_end.clone(),
+        },
+        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
     )?;
 
     // p3: ROOT (btrfs) — keep filesystem consistent with pipeline; only the table differs.
-    run_command(
-        "parted",
-        &[
-            "-s",
-            "-a",
-            "optimal",
-            &ctx.disk,
-            "mkpart",
-            "primary",
-            "btrfs",
-            &boot_end,
-            &ctx.root_end,
-        ],
+    ctx.hal.parted(
+        Path::new(&ctx.disk),
+        PartedOp::MkPart {
+            part_type: "primary".to_string(),
+            fs_type: "btrfs".to_string(),
+            start: boot_end.clone(),
+            end: ctx.root_end.clone(),
+        },
+        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
     )?;
 
     // p4: DATA (btrfs)
-    run_command(
-        "parted",
-        &[
-            "-s",
-            "-a",
-            "optimal",
-            &ctx.disk,
-            "mkpart",
-            "primary",
-            "btrfs",
-            &ctx.root_end,
-            "100%",
-        ],
+    ctx.hal.parted(
+        Path::new(&ctx.disk),
+        PartedOp::MkPart {
+            part_type: "primary".to_string(),
+            fs_type: "btrfs".to_string(),
+            start: ctx.root_end.clone(),
+            end: "100%".to_string(),
+        },
+        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
     )?;
 
-    run_command("parted", &["-s", &ctx.disk, "print"])?;
-    udev_settle();
+    let _ = ctx.hal.parted(
+        Path::new(&ctx.disk),
+        PartedOp::Print,
+        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+    )?;
+    let _ = ctx.hal.udev_settle();
 
     info!("📋 MBR partition table created (4 partitions)");
     Ok(())
@@ -689,8 +763,11 @@ fn partition_disk_gpt(ctx: &FlashContext) -> Result<()> {
     ctx.status("🔪 Creating GPT partition table with parted...");
 
     // Wipe existing
-    run_command("wipefs", &["-a", &ctx.disk])?;
-    udev_settle();
+    ctx.hal.wipefs_all(
+        Path::new(&ctx.disk),
+        &WipeFsOptions::new(ctx.dry_run, ctx.confirmed),
+    )?;
+    let _ = ctx.hal.udev_settle();
 
     // Calculate partition boundaries
     let efi_start = "4MiB";
@@ -701,60 +778,78 @@ fn partition_disk_gpt(ctx: &FlashContext) -> Result<()> {
     ); // Calculate based on ctx values
 
     // Create GPT partition table
-    run_command("parted", &["-s", &ctx.disk, "mklabel", "gpt"])?;
+    ctx.hal.parted(
+        Path::new(&ctx.disk),
+        PartedOp::MkLabel {
+            label: "gpt".to_string(),
+        },
+        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+    )?;
 
     // p1: EFI (fat32) with esp flag
-    run_command(
-        "parted",
-        &[
-            "-s", "-a", "optimal", &ctx.disk, "mkpart", "primary", "fat32", efi_start, &efi_end,
-        ],
+    ctx.hal.parted(
+        Path::new(&ctx.disk),
+        PartedOp::MkPart {
+            part_type: "primary".to_string(),
+            fs_type: "fat32".to_string(),
+            start: efi_start.to_string(),
+            end: efi_end.clone(),
+        },
+        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
     )?;
-    run_command("parted", &["-s", &ctx.disk, "set", "1", "esp", "on"])?;
+    ctx.hal.parted(
+        Path::new(&ctx.disk),
+        PartedOp::SetFlag {
+            part_num: 1,
+            flag: "esp".to_string(),
+            state: "on".to_string(),
+        },
+        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+    )?;
 
     // p2: BOOT (ext4)
-    run_command(
-        "parted",
-        &[
-            "-s", "-a", "optimal", &ctx.disk, "mkpart", "primary", "ext4", &efi_end, &boot_end,
-        ],
+    ctx.hal.parted(
+        Path::new(&ctx.disk),
+        PartedOp::MkPart {
+            part_type: "primary".to_string(),
+            fs_type: "ext4".to_string(),
+            start: efi_end.clone(),
+            end: boot_end.clone(),
+        },
+        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
     )?;
 
     // p3: ROOT (btrfs) - from boot_end to ROOT_END
-    run_command(
-        "parted",
-        &[
-            "-s",
-            "-a",
-            "optimal",
-            &ctx.disk,
-            "mkpart",
-            "primary",
-            "btrfs",
-            &boot_end,
-            &ctx.root_end,
-        ],
-    )?; // Use value from context
+    ctx.hal.parted(
+        Path::new(&ctx.disk),
+        PartedOp::MkPart {
+            part_type: "primary".to_string(),
+            fs_type: "btrfs".to_string(),
+            start: boot_end.clone(),
+            end: ctx.root_end.clone(),
+        },
+        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+    )?;
 
     // p4: DATA (btrfs) - from ROOT_END to 100%
-    run_command(
-        "parted",
-        &[
-            "-s",
-            "-a",
-            "optimal",
-            &ctx.disk,
-            "mkpart",
-            "primary",
-            "btrfs",
-            &ctx.root_end,
-            "100%",
-        ],
-    )?; // Use value from context
+    ctx.hal.parted(
+        Path::new(&ctx.disk),
+        PartedOp::MkPart {
+            part_type: "primary".to_string(),
+            fs_type: "btrfs".to_string(),
+            start: ctx.root_end.clone(),
+            end: "100%".to_string(),
+        },
+        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+    )?;
 
     // Show result
-    run_command("parted", &["-s", &ctx.disk, "print"])?;
-    udev_settle();
+    let _ = ctx.hal.parted(
+        Path::new(&ctx.disk),
+        PartedOp::Print,
+        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+    )?;
+    let _ = ctx.hal.udev_settle();
 
     info!("📋 GPT partition table created (4 partitions)");
     Ok(())
@@ -767,18 +862,43 @@ fn format_partitions(ctx: &FlashContext) -> Result<()> {
     let p4 = ctx.partition_path(4);
 
     ctx.status("✨ Formatting EFI partition (FAT32)...");
-    run_command("mkfs.vfat", &["-F", "32", "-n", "EFI", &p1])?;
+    ctx.hal.format_vfat(
+        Path::new(&p1),
+        "EFI",
+        &FormatOptions::new(ctx.dry_run, ctx.confirmed),
+    )?;
 
     ctx.status("✨ Formatting BOOT partition (ext4)...");
-    run_command("mkfs.ext4", &["-F", "-L", "BOOT", &p2])?;
+    ctx.hal.format_ext4(
+        Path::new(&p2),
+        &FormatOptions::new(ctx.dry_run, ctx.confirmed).with_args(vec![
+            "-F".to_string(),
+            "-L".to_string(),
+            "BOOT".to_string(),
+        ]),
+    )?;
 
     ctx.status("✨ Formatting ROOT partition (btrfs)...");
-    run_command("mkfs.btrfs", &["-f", "-L", "FEDORA", &p3])?;
+    ctx.hal.format_btrfs(
+        Path::new(&p3),
+        &FormatOptions::new(ctx.dry_run, ctx.confirmed).with_args(vec![
+            "-f".to_string(),
+            "-L".to_string(),
+            "FEDORA".to_string(),
+        ]),
+    )?;
 
     ctx.status("✨ Formatting DATA partition (btrfs)...");
-    run_command("mkfs.btrfs", &["-f", "-L", "DATA", &p4])?;
+    ctx.hal.format_btrfs(
+        Path::new(&p4),
+        &FormatOptions::new(ctx.dry_run, ctx.confirmed).with_args(vec![
+            "-f".to_string(),
+            "-L".to_string(),
+            "DATA".to_string(),
+        ]),
+    )?;
 
-    udev_settle();
+    let _ = ctx.hal.udev_settle();
     Ok(())
 }
 
@@ -787,23 +907,15 @@ fn format_partitions(ctx: &FlashContext) -> Result<()> {
 // ============================================================================
 
 fn setup_image_loop(ctx: &mut FlashContext) -> Result<()> {
-    let output = Command::new("losetup")
-        .args(["--show", "-Pf", ctx.image.to_str().unwrap()])
-        .output()
+    let loop_dev = ctx
+        .hal
+        .losetup_attach(&ctx.image, true)
         .context("Failed to setup loop device")?;
-
-    if !output.status.success() {
-        bail!(
-            "losetup failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    let loop_dev = String::from_utf8_lossy(&output.stdout).trim().to_string();
     info!("🔄 Image mounted at loop device: {}", loop_dev);
     ctx.loop_device = Some(loop_dev);
 
-    std::thread::sleep(std::time::Duration::from_secs(1));
+    // Wait for kernel to surface loop partitions (best-effort).
+    let _ = ctx.hal.udev_settle();
     Ok(())
 }
 
@@ -818,25 +930,32 @@ fn mount_source_partitions(ctx: &FlashContext, mounts: &MountPoints) -> Result<B
     let img_root = format!("{}p3", loop_dev);
 
     // Mount EFI and boot
-    run_command("mount", &[&img_efi, mounts.src_efi.to_str().unwrap()])?;
-    run_command("mount", &[&img_boot, mounts.src_boot.to_str().unwrap()])?;
+    ctx.hal.mount_device(
+        Path::new(&img_efi),
+        &mounts.src_efi,
+        None,
+        MountOptions::new(),
+        ctx.dry_run,
+    )?;
+    ctx.hal.mount_device(
+        Path::new(&img_boot),
+        &mounts.src_boot,
+        None,
+        MountOptions::new(),
+        ctx.dry_run,
+    )?;
 
     // Mount btrfs root (top-level first to detect subvols)
-    run_command(
-        "mount",
-        &[
-            "-t",
-            "btrfs",
-            &img_root,
-            mounts.src_root_top.to_str().unwrap(),
-        ],
+    ctx.hal.mount_device(
+        Path::new(&img_root),
+        &mounts.src_root_top,
+        Some("btrfs"),
+        MountOptions::new(),
+        ctx.dry_run,
     )?;
 
     // Detect subvolumes
-    let subvol_output = Command::new("btrfs")
-        .args(["subvolume", "list", mounts.src_root_top.to_str().unwrap()])
-        .output()?;
-    let subvol_list = String::from_utf8_lossy(&subvol_output.stdout);
+    let subvol_list = ctx.hal.btrfs_subvolume_list(&mounts.src_root_top)?;
 
     let has_root = subvol_list.contains(" path root");
     let has_home = subvol_list.contains(" path home");
@@ -852,41 +971,29 @@ fn mount_source_partitions(ctx: &FlashContext, mounts: &MountPoints) -> Result<B
     );
 
     // Mount subvolumes
-    run_command(
-        "mount",
-        &[
-            "-t",
-            "btrfs",
-            "-o",
-            "subvol=root",
-            &img_root,
-            mounts.src_root_subvol.to_str().unwrap(),
-        ],
+    ctx.hal.mount_device(
+        Path::new(&img_root),
+        &mounts.src_root_subvol,
+        Some("btrfs"),
+        MountOptions::with_options("subvol=root"),
+        ctx.dry_run,
     )?;
     if has_home {
-        run_command(
-            "mount",
-            &[
-                "-t",
-                "btrfs",
-                "-o",
-                "subvol=home",
-                &img_root,
-                mounts.src_home_subvol.to_str().unwrap(),
-            ],
+        ctx.hal.mount_device(
+            Path::new(&img_root),
+            &mounts.src_home_subvol,
+            Some("btrfs"),
+            MountOptions::with_options("subvol=home"),
+            ctx.dry_run,
         )?;
     }
     if has_var {
-        run_command(
-            "mount",
-            &[
-                "-t",
-                "btrfs",
-                "-o",
-                "subvol=var",
-                &img_root,
-                mounts.src_var_subvol.to_str().unwrap(),
-            ],
+        ctx.hal.mount_device(
+            Path::new(&img_root),
+            &mounts.src_var_subvol,
+            Some("btrfs"),
+            MountOptions::with_options("subvol=var"),
+            ctx.dry_run,
         )?;
     }
 
@@ -903,12 +1010,33 @@ fn mount_dest_partitions(ctx: &FlashContext, mounts: &MountPoints) -> Result<()>
     let p3 = ctx.partition_path(3);
     let p4 = ctx.partition_path(4);
 
-    run_command("mount", &[&p1, mounts.dst_efi.to_str().unwrap()])?;
-    run_command("mount", &[&p2, mounts.dst_boot.to_str().unwrap()])?;
-    run_command("mount", &[&p4, mounts.dst_data.to_str().unwrap()])?;
-    run_command(
-        "mount",
-        &["-t", "btrfs", &p3, mounts.dst_root_top.to_str().unwrap()],
+    ctx.hal.mount_device(
+        Path::new(&p1),
+        &mounts.dst_efi,
+        None,
+        MountOptions::new(),
+        ctx.dry_run,
+    )?;
+    ctx.hal.mount_device(
+        Path::new(&p2),
+        &mounts.dst_boot,
+        None,
+        MountOptions::new(),
+        ctx.dry_run,
+    )?;
+    ctx.hal.mount_device(
+        Path::new(&p4),
+        &mounts.dst_data,
+        None,
+        MountOptions::new(),
+        ctx.dry_run,
+    )?;
+    ctx.hal.mount_device(
+        Path::new(&p3),
+        &mounts.dst_root_top,
+        Some("btrfs"),
+        MountOptions::new(),
+        ctx.dry_run,
     )?;
 
     Ok(())
@@ -922,71 +1050,41 @@ fn create_dest_subvols(
     let p3 = ctx.partition_path(3);
 
     // Create subvolumes
-    run_command(
-        "btrfs",
-        &[
-            "subvolume",
-            "create",
-            mounts.dst_root_top.join("root").to_str().unwrap(),
-        ],
-    )?;
+    ctx.hal
+        .btrfs_subvolume_create(&mounts.dst_root_top.join("root"))?;
     if subvols.has_home {
-        run_command(
-            "btrfs",
-            &[
-                "subvolume",
-                "create",
-                mounts.dst_root_top.join("home").to_str().unwrap(),
-            ],
-        )?;
+        ctx.hal
+            .btrfs_subvolume_create(&mounts.dst_root_top.join("home"))?;
     }
     if subvols.has_var {
-        run_command(
-            "btrfs",
-            &[
-                "subvolume",
-                "create",
-                mounts.dst_root_top.join("var").to_str().unwrap(),
-            ],
-        )?;
+        ctx.hal
+            .btrfs_subvolume_create(&mounts.dst_root_top.join("var"))?;
     }
 
     // Mount subvolumes for copying
-    run_command(
-        "mount",
-        &[
-            "-t",
-            "btrfs",
-            "-o",
-            "subvol=root",
-            &p3,
-            mounts.dst_root_subvol.to_str().unwrap(),
-        ],
+    ctx.hal.mount_device(
+        Path::new(&p3),
+        &mounts.dst_root_subvol,
+        Some("btrfs"),
+        MountOptions::with_options("subvol=root"),
+        ctx.dry_run,
     )?;
     if subvols.has_home {
-        run_command(
-            "mount",
-            &[
-                "-t",
-                "btrfs",
-                "-o",
-                "subvol=home",
-                &p3,
-                mounts.dst_home_subvol.to_str().unwrap(),
-            ],
+        ctx.hal.mount_device(
+            Path::new(&p3),
+            &mounts.dst_home_subvol,
+            Some("btrfs"),
+            MountOptions::with_options("subvol=home"),
+            ctx.dry_run,
         )?;
     }
     if subvols.has_var {
-        run_command(
-            "mount",
-            &[
-                "-t",
-                "btrfs",
-                "-o",
-                "subvol=var",
-                &p3,
-                mounts.dst_var_subvol.to_str().unwrap(),
-            ],
+        ctx.hal.mount_device(
+            Path::new(&p3),
+            &mounts.dst_var_subvol,
+            Some("btrfs"),
+            MountOptions::with_options("subvol=var"),
+            ctx.dry_run,
         )?;
     }
 
@@ -1000,44 +1098,24 @@ fn create_dest_subvols(
 fn rsync_with_progress(ctx: &FlashContext, src: &Path, dst: &Path, label: &str) -> Result<()> {
     ctx.status(&format!("📦 Copying {}...", label));
 
-    let src_str = format!("{}/", src.to_str().unwrap());
-    let dst_str = dst.to_str().unwrap();
-
-    let mut child = Command::new("rsync")
-        .args([
-            "-aHAX",
-            "--numeric-ids",
-            "--info=progress2",
-            &src_str,
-            dst_str,
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("Failed to spawn rsync")?;
-
-    if let Some(stdout) = child.stdout.take() {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines().map_while(Result::ok) {
-            if cancel_requested() {
-                let _ = child.kill();
-                bail!("Cancelled");
-            }
-            if let Some(progress) = parse_rsync_progress(&line) {
-                ctx.send_progress(ProgressUpdate::RsyncProgress {
-                    percent: progress.percent,
-                    speed_mbps: progress.speed_mbps,
-                    files_done: progress.files_done,
-                    files_total: progress.files_total,
-                });
-            }
+    let mut on_line = |line: &str| -> bool {
+        if cancel_requested() {
+            return false;
         }
-    }
+        if let Some(progress) = parse_rsync_progress(line) {
+            ctx.send_progress(ProgressUpdate::RsyncProgress {
+                percent: progress.percent,
+                speed_mbps: progress.speed_mbps,
+                files_done: progress.files_done,
+                files_total: progress.files_total,
+            });
+        }
+        true
+    };
 
-    let status = child.wait()?;
-    if !status.success() {
-        bail!("rsync failed for {}", label);
-    }
+    ctx.hal
+        .rsync_stream_stdout(src, dst, &RsyncOptions::progress2_archive(), &mut on_line)
+        .with_context(|| format!("rsync failed for {}", label))?;
     Ok(())
 }
 
@@ -1067,19 +1145,11 @@ fn cancel_requested() -> bool {
 }
 
 /// VFAT-safe rsync (no ownership/permissions)
-fn rsync_vfat_safe(src: &Path, dst: &Path) -> Result<()> {
+fn rsync_vfat_safe(ctx: &FlashContext, src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
-    run_command(
-        "rsync",
-        &[
-            "-rltD",
-            "--no-owner",
-            "--no-group",
-            "--no-perms",
-            &format!("{}/", src.to_str().unwrap()),
-            dst.to_str().unwrap(),
-        ],
-    )
+    let mut on_line = |_line: &str| -> bool { true };
+    ctx.hal
+        .rsync_stream_stdout(src, dst, &RsyncOptions::vfat_safe(), &mut on_line)
 }
 
 struct RsyncProgress {
@@ -1161,8 +1231,8 @@ dtoverlay=upstream-pi4
 }
 
 fn configure_boot(ctx: &FlashContext, mounts: &MountPoints, _subvols: &BtrfsSubvols) -> Result<()> {
-    let boot_uuid = get_partition_uuid(&ctx.partition_path(2))?;
-    let root_uuid = get_partition_uuid(&ctx.partition_path(3))?;
+    let boot_uuid = get_partition_uuid(ctx, Path::new(&ctx.partition_path(2)))?;
+    let root_uuid = get_partition_uuid(ctx, Path::new(&ctx.partition_path(3)))?;
 
     // Write GRUB stub on EFI -> points to /boot UUID
     ctx.status("📝 Writing GRUB stub...");
@@ -1399,10 +1469,10 @@ fn enable_early_ssh(target_root: &Path) -> Result<()> {
 fn generate_fstab(ctx: &FlashContext, target_root: &Path, subvols: &BtrfsSubvols) -> Result<()> {
     ctx.status("📋 Generating /etc/fstab...");
 
-    let efi_uuid = get_partition_uuid(&ctx.partition_path(1))?;
-    let boot_uuid = get_partition_uuid(&ctx.partition_path(2))?;
-    let root_uuid = get_partition_uuid(&ctx.partition_path(3))?;
-    let data_uuid = get_partition_uuid(&ctx.partition_path(4))?;
+    let efi_uuid = get_partition_uuid(ctx, Path::new(&ctx.partition_path(1)))?;
+    let boot_uuid = get_partition_uuid(ctx, Path::new(&ctx.partition_path(2)))?;
+    let root_uuid = get_partition_uuid(ctx, Path::new(&ctx.partition_path(3)))?;
+    let data_uuid = get_partition_uuid(ctx, Path::new(&ctx.partition_path(4)))?;
 
     let mut fstab = String::from("# /etc/fstab - Generated by MASH Installer\n");
     fstab.push_str(&format!(
@@ -1441,15 +1511,10 @@ fn generate_fstab(ctx: &FlashContext, target_root: &Path, subvols: &BtrfsSubvols
     Ok(())
 }
 
-fn get_partition_uuid(device: &str) -> Result<String> {
-    let output = Command::new("blkid")
-        .args(["-s", "UUID", "-o", "value", device])
-        .output()
-        .context("Failed to get partition UUID")?;
-    if !output.status.success() {
-        bail!("blkid failed for {}", device);
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+fn get_partition_uuid(ctx: &FlashContext, device: &Path) -> Result<String> {
+    ctx.hal
+        .blkid_uuid(device)
+        .with_context(|| format!("Failed to get UUID for {}", device.display()))
 }
 
 fn stage_dojo(ctx: &FlashContext, data_mount: &Path, target_root: &Path) -> Result<()> {
@@ -1464,7 +1529,7 @@ fn stage_dojo(ctx: &FlashContext, data_mount: &Path, target_root: &Path) -> Resu
     let dojo_script = staging_dir.join("install_dojo.sh");
     let script_content = include_str!("dojo_install_template.sh");
     fs::write(&dojo_script, script_content.replace("{{PLACEHOLDER}}", ""))?;
-    run_command("chmod", &["+x", dojo_script.to_str().unwrap()])?;
+    fs::set_permissions(&dojo_script, fs::Permissions::from_mode(0o755))?;
 
     stage_firstboot_dojo(ctx, target_root)?;
 
@@ -1531,14 +1596,9 @@ fn decompress_xz_image(ctx: &FlashContext, xz_image_path: &Path) -> Result<PathB
         return Ok(raw_image_path);
     }
 
-    let mut cmd = Command::new("xz");
-    cmd.args(["-dc", xz_image_path.to_str().unwrap()]);
-
-    let mut child = cmd
-        .stdout(Stdio::piped())
-        .spawn()
-        .context("Failed to spawn xz process")?;
-
+    let input = std::fs::File::open(xz_image_path)
+        .with_context(|| format!("Failed to open xz image: {}", xz_image_path.display()))?;
+    let mut decoder = xz2::read::XzDecoder::new(input);
     let mut output_file = std::fs::File::create(&raw_image_path).with_context(|| {
         format!(
             "Failed to create raw image file: {}",
@@ -1546,20 +1606,7 @@ fn decompress_xz_image(ctx: &FlashContext, xz_image_path: &Path) -> Result<PathB
         )
     })?;
 
-    let mut stdout = child
-        .stdout
-        .take()
-        .context("Failed to get stdout from xz process")?;
-    std::io::copy(&mut stdout, &mut output_file).context("Failed to copy decompressed data")?;
-
-    let status = child.wait().context("Failed to wait for xz process")?;
-
-    if !status.success() {
-        bail!(
-            "xz decompression failed with exit code: {:?}",
-            status.code()
-        );
-    }
+    std::io::copy(&mut decoder, &mut output_file).context("Failed to decompress xz image")?;
 
     ctx.status(&format!(
         "Decompression complete: {} -> {}",
@@ -1622,17 +1669,15 @@ fn cleanup(ctx: &FlashContext) {
 
     for mp in &mount_points {
         if mp.exists() {
-            let _ = Command::new("umount")
-                .args(["-R", mp.to_str().unwrap()])
-                .status();
+            let _ = ctx.hal.unmount_recursive(mp, false);
         }
     }
 
     if let Some(ref loop_dev) = ctx.loop_device {
-        let _ = Command::new("losetup").args(["-d", loop_dev]).status();
+        let _ = ctx.hal.losetup_detach(loop_dev);
     }
 
-    udev_settle();
+    let _ = ctx.hal.udev_settle();
 }
 
 fn normalize_disk(d: &str) -> String {
@@ -1643,35 +1688,17 @@ fn normalize_disk(d: &str) -> String {
     }
 }
 
-fn show_lsblk(disk: &str) -> Result<()> {
+fn show_lsblk(hal: &dyn InstallerHal, disk: &str) -> Result<()> {
     info!("🧾 Current disk layout for {}", disk);
-    let output = Command::new("lsblk")
-        .args(["-o", "NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS,MODEL", disk])
-        .output()
-        .context("Failed to run lsblk")?;
-    info!("\n{}", String::from_utf8_lossy(&output.stdout));
+    let table = hal.lsblk_table(Path::new(disk))?;
+    info!("\n{}", table);
     Ok(())
-}
-
-fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
-    debug!("Running: {} {}", cmd, args.join(" "));
-    let status = Command::new(cmd)
-        .args(args)
-        .status()
-        .with_context(|| format!("Failed to execute {}", cmd))?;
-    if !status.success() {
-        bail!("{} failed with exit code: {:?}", cmd, status.code());
-    }
-    Ok(())
-}
-
-fn udev_settle() {
-    let _ = Command::new("udevadm").arg("settle").status();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mash_hal::FakeHal;
 
     #[test]
     fn test_normalize_disk() {
@@ -1682,11 +1709,13 @@ mod tests {
     #[test]
     fn test_partition_path() {
         let ctx = FlashContext {
+            hal: Arc::new(FakeHal::new()),
             image: PathBuf::new(),
             disk: "/dev/sda".to_string(),
             scheme: PartitionScheme::Mbr,
             uefi_dir: PathBuf::new(),
             dry_run: false,
+            confirmed: true,
             auto_unmount: false,
             locale: None,
             early_ssh: false,
@@ -1696,6 +1725,7 @@ mod tests {
             efi_size: "512M".to_string(),
             boot_size: "1G".to_string(),
             root_end: "100%".to_string(),
+            report: None,
         };
         assert_eq!(ctx.partition_path(1), "/dev/sda1");
         assert_eq!(ctx.partition_path(4), "/dev/sda4");

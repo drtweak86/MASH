@@ -1,4 +1,4 @@
-# MASH 🍠 v1.2.14
+# MASH 🍠 v1.4.0
 
 **Minimal, Automated, Self-Hosting installer for Fedora on Raspberry Pi 4B**
 
@@ -8,36 +8,32 @@ MASH is an opinionated installer that automates Fedora KDE installation on Raspb
 
 ## ✨ What MASH Does
 
-- 📥 **Downloads Fedora** — Automatically fetches Fedora 42/43 aarch64 images (KDE, Xfce, LXQt, Minimal, Server)
-- 📥 **Downloads UEFI firmware** — Fetches the latest RPi4 UEFI firmware from GitHub
-- 🗜️ **Decompresses** — Safely extracts `.raw.xz` → `.raw`
-- 🔄 **Loop-mounts** — Mounts the source image for filesystem-level copying
-- 💾 **Installs via rsync** — Copies system files preserving permissions and attributes
-- 🔧 **Configures UEFI boot** — Ensures `EFI/BOOT/BOOTAA64.EFI` is correctly placed
-- 🌍 **Applies locale settings** — Configures keyboard layout and language
-- ✅ **Supports MBR and GPT** — You choose the partition scheme
+- 📥 **Downloads OS Images** — Automatically fetches images for Fedora (KDE, Xfce, LXQt, Minimal, Server), Ubuntu (Server/Desktop), Raspberry Pi OS (Lite/Desktop), and Manjaro (ARM).
+- 🗜️ **Decompresses** — Safely extracts `.raw.xz` → `.raw` (or similar formats).
+- 🔄 **Loop-mounts** — Mounts the source image for filesystem-level copying (handled via `mash-hal`).
+- 💾 **Installs via rsync** — Copies system files preserving permissions and attributes (handled via `mash-hal`).
+- 🔧 **Configures UEFI boot** — Ensures `EFI/BOOT/BOOTAA64.EFI` is correctly placed.
+- 🌍 **Applies locale settings** — Configures keyboard layout and language.
+- ✅ **Supports MBR and GPT** — You choose the partition scheme, guided by OS-specific rules.
 
 ---
 
-## 🚀 Two Ways to Run
+## 🚀 Two Ways to Run — Always Starts in SAFE MODE
 
-### 1. Interactive TUI Mode (Recommended)
+MASH is designed for safety. It always starts in `[SAFE MODE]`, where destructive actions are prevented. You must explicitly arm the installer to proceed with any modifications.
+
+### 1. Interactive TUI Mode (Recommended for one-shot install)
 
 Launch the Dojo UI — it guides you through every step:
 
 ```bash
 sudo mash
 ```
+You will be prompted to ENABLE DESTRUCTIVE MODE by typing `DESTROY` before any disk modifications.
 
-On first boot, a **MASH Dojo** TUI runs once to finish setup. To rerun it later:
-```bash
-sudo rm /var/lib/mash/dojo.completed
-sudo systemctl enable --now mash-dojo.service
-```
+### 2. CLI Mode (For Scripting — Only use with `---armed` flag)
 
-### 2. CLI Mode (For Scripting)
-
-Fully automated installation with command-line flags:
+Fully automated installation with command-line flags. **This mode requires explicit `--armed` flag to perform destructive operations.**
 
 ```bash
 sudo mash flash \
@@ -46,6 +42,7 @@ sudo mash flash \
   --download-image \
   --download-uefi \
   --auto-unmount \
+  --armed \
   --yes-i-know
 ```
 
@@ -55,27 +52,32 @@ sudo mash flash \
 
 This installer **DESTROYS THE TARGET DISK**.
 
-- All existing data will be erased
-- All partitions will be deleted
-- There is no undo
+MASH is designed to protect your running system and boot media. It starts in `[SAFE MODE]`, where no destructive operations can occur. You must explicitly type `DESTROY` to switch to `[ARMED]` mode before any disk modifications.
 
-You will be asked to confirm before any destructive action. **Double-check the device name every time.**
+- All existing data on the target disk will be erased.
+- All partitions on the target disk will be deleted.
+- There is no undo.
+
+You will be asked to confirm by typing `DESTROY` before enabling destructive actions. **Double-check the device name every time.** The installer will also prevent you from selecting your running system's boot disk by default.
 
 ---
 
 ## 📦 Partition Layout
 
-MASH creates a 4-partition layout:
+MASH now uses OS-specific partitioning rules. The layout will vary depending on the chosen operating system.
+
+**Example: Fedora's Default Layout** (subject to change by Fedora itself)
 
 | Partition | Size | Format | Purpose |
-|-----------|------|--------|---------|
+|---|---|---|---|
 | EFI | 1 GiB | FAT32 | UEFI boot files |
 | BOOT | 2 GiB | ext4 | Kernel and initramfs |
 | ROOT | ~1.8 TiB | btrfs | System root (subvols: root, home, var) |
-| DATA | Remaining | ext4 | User data and staging |
+| DATA | Remaining | ext4 | User data and staging (optional) |
 
-Defaults: MBR scheme, EFI 1 GiB, BOOT 2 GiB, ROOT end 1800 GiB, DATA remainder.
-Partition sizes are configurable via CLI flags (`--efi-size`, `--boot-size`, `--root-end`).
+**Important OS-Specific Notes:**
+- Manjaro ARM images are flashed with their default 2-partition layout; the installer will **not** create a third data partition during installation, but this can be done post-boot.
+- Partition sizes are generally configurable via CLI flags (`--efi-size`, `--boot-size`, `--root-end`) for Fedora, but behavior may vary for other OSes based on their requirements.
 
 ---
 
@@ -118,10 +120,12 @@ The binary is output to `mash-installer/target/release/mash`.
 
 ## 🎯 Design Philosophy
 
-- **User choice is sacred** — MBR vs GPT is always your decision
-- **Destructive actions require explicit confirmation** — No silent overwrites
-- **Noisy and defensive** — Verbose logging, clear error messages
-- **No surprises** — What you see is what you get
+- **User choice is sacred** — MBR vs GPT is always your decision, but guided by OS needs.
+- **Destructive actions require explicit confirmation** — Type `DESTROY` to proceed; no silent overwrites.
+- **Boot media is protected** — The installer prevents accidental selection of the running system's drive.
+- **Rust-native HAL for safety** — All critical system operations are implemented in Rust for robustness, testability, and determinism.
+- **Noisy and defensive** — Verbose logging, clear error messages.
+- **No surprises** — What you see is what you get.
 
 ---
 
@@ -133,9 +137,9 @@ The binary is output to `mash-installer/target/release/mash`.
 - Network connection (for downloads)
 
 **Target (Raspberry Pi 4B):**
-- Raspberry Pi 4 Model B
+- Raspberry Pi 4 Model B (MASH performs hardware detection and may warn/fail on other models)
 - SD card or USB drive (8+ GB minimum, 32+ GB recommended)
-- UEFI firmware installed (or use `--download-uefi`)
+- UEFI firmware installed (or it will be downloaded/configured automatically by the installer)
 
 ---
 
@@ -159,6 +163,12 @@ Verify your disk is connected and identify it correctly:
 ```bash
 lsblk
 ```
+
+### "Destructive operation blocked / Not in ARMED mode"
+MASH starts in `[SAFE MODE]`. You must explicitly type `DESTROY` at the prompt to enable destructive operations and switch to `[ARMED]` mode. This protects against accidental data loss.
+
+### Checking Logs
+All MASH logs are routed to `~/.mash/mash.log`. You can also toggle an in-TUI log buffer by pressing `F12`.
 
 ---
 

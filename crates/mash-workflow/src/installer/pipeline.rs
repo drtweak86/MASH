@@ -248,6 +248,7 @@ fn run_download_stage(
     }
 
     let opts = downloader::DownloadOptions {
+        asset: None,
         image: Some(downloader::ImageKey {
             os: downloader::OsKind::Fedora,
             // This pipeline is currently Fedora-oriented; default to the canonical Fedora entry.

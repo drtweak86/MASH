@@ -1,29 +1,31 @@
 # MASH Architecture 🧠
 
-This document describes the technical design and module structure of the MASH installer.
+This document describes the technical design and modular structure of the MASH installer.
 
 ---
 
 ## Overview
 
-MASH is a Rust CLI application built with:
-- **Clap** for argument parsing
-- **Ratatui** for the terminal UI
-- **Crossterm** for terminal control
-- **Reqwest** for HTTP downloads
+MASH is a Rust application built around a modular architecture:
+- **`mash-installer`**: The main executable, a thin orchestration layer.
+- **`mash-core`**: Shared types, state, error definitions, and core configuration.
+- **`crates/mash-hal`**: The Hardware Abstraction Layer, handling all low-level, "world-touching" system operations (filesystem, block devices, mounting, partitioning). All external commands (e.g., `rsync`, `parted`, `mount`) are replaced by Rust-native implementations here, where feasible, or safely wrapped.
+- **`crates/mash-tui`**: Reusable `ratatui` widgets and UI components, implementing the interactive terminal interface.
+- **`crates/mash-workflow`**: The stage engine, defining pipeline steps, orchestration, and state management for the installation process.
 
-The installer operates by:
-1. Downloading or locating a Fedora `.raw` image
-2. Loop-mounting the source image partitions
-3. Partitioning and formatting the target disk
-4. Copying filesystems via `rsync`
-5. Configuring UEFI boot
+The installer operates with a focus on safety and determinism:
+1.  **Safety First**: Starts in `[SAFE MODE]`, requiring explicit `DESTROY` arming for destructive actions.
+2.  **Source Drive Protection**: Automatically identifies and protects the running system's boot media.
+3.  **Enforced Workflow**: Guides the user through Distro → Flavour → Disk → Partition → Review stages.
+4.  **Rust-native Operations**: All critical system operations are performed via `mash-hal`, eliminating fragile shell script glue.
 
 ---
 
 ## Execution Modes
 
-### TUI Mode (Default)
+MASH operates in two primary modes, always prioritizing safety and an enforced workflow.
+
+### 1. Interactive TUI Mode (Default)
 
 When run without subcommands, MASH launches an interactive terminal Dojo UI:
 
@@ -31,160 +33,134 @@ When run without subcommands, MASH launches an interactive terminal Dojo UI:
 sudo mash
 ```
 
-The TUI uses Ratatui to render a single-screen interface showing:
-- Installation steps with status indicators
-- Progress bar
-- Status messages
+**Safety Architecture:**
+-   **Safe Mode (`[SAFE MODE]` - Green Header):** The installer always starts in this read-only state. All destructive operations are blocked.
+-   **Arming Sequence (`DESTROY` prompt):** To proceed with destructive actions, the user must explicitly type `DESTROY` at a modal prompt.
+-   **Armed Mode (`[ARMED]` - Red Header):** Once armed, destructive HAL calls are permitted.
 
-**Entry point:** `tui::run()` → `dojo_app::App` + `dojo_ui::draw()`
+**Enforced Workflow:**
+The TUI guides the user through a strict sequence of steps to prevent errors and ensure a complete configuration:
+1.  **Welcome**
+2.  **Distro Selection**: Choose the operating system (e.g., Fedora, Ubuntu, RPi OS, Manjaro). Only fully wired OSes are shown.
+3.  **Flavour / Edition Selection**: Context-aware variants for the chosen distro appear.
+4.  **Disk Selection**: Select the target installation disk. The **source drive (boot media) is automatically detected and protected**, raising a UI error if selected accidentally.
+5.  **Partition Wizard**: Configure the disk layout (Whole Disk with distro-defined layout or Manual Layout). EFI options are shown only if required.
+6.  **Review & Confirm**
+7.  **Installation Progress**
 
-### TUI Evolution: Phase B1 → B3
+The TUI uses `crates/mash-tui` for rendering, with `mash-workflow` orchestrating the state transitions and `mash-hal` performing system operations.
 
-The TUI has been built in phases to keep CI green while progressively replacing stub data with real, read-only sources.
+### 2. CLI Mode (For Scripting)
 
-#### Phase B1 - Stub-backed UI State (no real disk logic)
-
-What changed and why:
-- Goal: get a complete Dojo UI flow on-screen quickly, with selectable options everywhere and no blank screens.
-- Reason: enable UI iteration without any dependency on disk scanning, downloads, or flashing.
-
-How it was implemented:
-- Added a single-screen Dojo UI state machine in `tui/dojo_app.rs` with explicit step types.
-- Built full step rendering in `tui/dojo_ui.rs` using in-memory stub lists.
-- Added progress scaffolding in `tui/progress.rs` to render telemetry without depending on real operations.
-- Kept any flashing logic untouched; UI flow driven entirely by stub state.
-
-Result:
-- Every step renders a selectable list and supports forward/back navigation.
-- Confirmation screen is derived from the current in-memory state.
-
-#### Phase B2 - TUI Flow Completion (stub-safe)
-
-What changed and why:
-- Goal: ensure every Dojo UI step is reachable in sequence and selectable.
-- Reason: eliminate dead ends and placeholder content before introducing real data sources.
-
-How it was implemented:
-- Rewired step transitions so `PartitionLayout -> PartitionCustomize -> DownloadSourceSelection`.
-- Added explicit per-step input handling for download steps, still stubbed.
-- Replaced "content not loaded yet" placeholders with real, selectable stub options.
-- Expanded confirmation summary to include more selected values.
-
-Result:
-- The entire Dojo UI path is traversable from Welcome to Complete using only stub state.
-- Download steps are simulated but selectable, with no side effects.
-
-#### Phase B3 - Read-only data plumbing behind feature flags
-
-What changed and why:
-- Goal: start plumbing real data sources while keeping behavior non-destructive by default.
-- Reason: allow real-world validation of lists without any disk writes or downloads.
-
-How it was implemented:
-- Added `tui/data_sources.rs` for read-only data collectors (no side effects).
-- Introduced feature flags (environment variables) to enable real data per category:
-  - `MASH_TUI_REAL_DATA=1` enables all read-only sources.
-  - `MASH_TUI_REAL_DISKS=1` enables disk scan from `/sys/block`.
-  - `MASH_TUI_REAL_IMAGES=1` enables local image metadata scan + remote metadata list.
-  - `MASH_TUI_REAL_LOCALES=1` enables locale/keymap lists from system files.
-  - `MASH_TUI_IMAGE_DIRS=/path1:/path2` overrides local image scan paths.
-- Disk scan uses `/sys/block` only and formats sizes; no writes.
-- Image metadata uses filenames for local matches and enum-driven remote metadata; no downloads.
-- Locale/keymap uses `/usr/share/i18n/SUPPORTED` and `/usr/share/X11/xkb/rules/base.lst`.
-- Confirmation summary now reflects real selections (when flags are enabled) without altering UI layout.
-
-Result:
-- Default behavior remains stubbed and safe.
-- Real lists can be turned on for validation without any destructive operations.
-
-### CLI Mode
-
-For scripting and automation, use the `flash` subcommand:
+For scripting and automation, use the `flash` subcommand. This mode requires explicit flags to perform destructive operations and disable safety features:
 
 ```bash
-sudo mash flash --disk /dev/sda --scheme mbr --download-image --download-uefi --yes-i-know
+sudo mash flash \
+  --disk /dev/sda \
+  --scheme gpt \
+  --distro fedora \
+  --flavour kde \
+  --download-image \
+  --auto-unmount \
+  --armed \
+  --yes-i-know
 ```
 
-The `preflight` subcommand runs system checks:
+The `preflight` subcommand runs system checks, including hardware detection:
 
 ```bash
 sudo mash preflight
 ```
 
-**Entry point:** `main.rs` dispatches based on `cli::Command`
-
----
+**Entry point:** `main.rs` dispatches based on `cli::Command`.
 
 ## Module Structure
 
+The MASH project is organized into a Cargo workspace, promoting modularity and clean dependency boundaries:
+
 ```
-src/
-├── main.rs           # Entry point, mode dispatch
-├── cli.rs            # CLI argument definitions
-├── flash.rs          # Installation pipeline
-├── download.rs       # Image and UEFI downloads
-├── locale.rs         # Locale configuration
-├── preflight.rs      # System checks
-├── errors.rs         # Error types
-├── logging.rs        # Log setup
-└── tui/
-    ├── mod.rs        # Terminal setup, main loop
-    ├── dojo_app.rs   # App state, InstallStep, ProgressEvent
-    ├── dojo_ui.rs    # UI rendering
-    ├── flash_config.rs # FlashConfig struct
-    ├── progress.rs   # Phase tracking
-    ├── input.rs      # Text input widget
-    ├── widgets.rs    # Reusable components
-    ├── app.rs        # Legacy wizard (gated)
-    └── ui.rs         # Legacy UI (gated)
+.
+├── Cargo.toml                      # Workspace definition
+├── mash-installer/                 # The main executable (thin orchestration)
+│   └── src/main.rs                 # Initializes workflow and TUI
+├── mash-core/                      # Shared types, state, error definitions, config
+│   ├── src/cli.rs                  # CLI argument definitions
+│   ├── src/errors.rs               # Custom error types (`MASHError`)
+│   ├── src/logging.rs              # Log setup (routed to ~/.mash/mash.log)
+│   ├── src/state_manager/          # Installation state persistence
+│   └── ...                         # Other shared utilities
+└── crates/
+    ├── mash-hal/                   # Hardware Abstraction Layer
+    │   ├── src/lib.rs              # Traits (MountOps, BlockOps, etc.) + LinuxHal/FakeHal implementations
+    │   └── ...                     # Rust-native system operation implementations
+    ├── mash-tui/                   # Terminal User Interface components
+    │   ├── src/lib.rs              # Reusable Ratatui widgets, input handling, progress rendering
+    │   └── ...                     # UI logic, layout grid, safety state display
+    └── mash-workflow/              # Stage engine and orchestration
+        ├── src/lib.rs              # StageRunner, pipeline logic, OS-specific install stages
+        └── ...                     # Resumable workflow management
 ```
+Existing modules within `mash-core` (like `flash.rs`, `preflight.rs`, `download.rs`, `locale.rs`) now delegate their core system interactions to `mash-hal` and their workflow logic to `mash-workflow`.
+
 
 ---
 
 ## Installation Pipeline
 
-The core installation logic lives in `flash.rs`. Here's the high-level flow:
+The core installation logic is orchestrated by `mash-workflow` and executed through a series of well-defined stages, leveraging `mash-hal` for all critical system interactions. This ensures determinism, testability, and safety.
 
-### 1. Setup Phase
-- Create work directory with mount points
-- Attach source image to loop device (`losetup`)
-- Detect btrfs subvolumes in source
+Here's the high-level flow:
 
-### 2. Mount Source
-- Mount source EFI partition (FAT32)
-- Mount source BOOT partition (ext4)
-- Mount source ROOT partition (btrfs with subvolumes: root, home, var)
+### 1. Preflight Checks
+- Performed by `mash-workflow`.
+- Verifies system requirements, hardware compatibility, and essential tools.
 
-### 3. Partition Target
-- Create partition table (MBR or GPT based on user choice)
-- Create 4 partitions:
-  - **p1 (EFI):** 1 GiB, FAT32, esp flag
-  - **p2 (BOOT):** 2 GiB, ext4
-  - **p3 (ROOT):** ~1.8 TiB, btrfs
-  - **p4 (DATA):** Remaining space, ext4
+### 2. OS/Image Download (if required)
+- Orchestrated by `mash-workflow`.
+- Uses `mash-core`'s download logic to fetch OS images and potentially UEFI firmware.
+- Supports resume and checksum verification.
 
-### 4. Format Target
-- `mkfs.vfat` for EFI
-- `mkfs.ext4` for BOOT and DATA
-- `mkfs.btrfs` for ROOT, then create subvolumes
+### 3. Source Image Preparation
+- Handled by `mash-hal`.
+- Attaches the source OS image to a loop device.
+- Detects partitions and filesystems within the image.
 
-### 5. Copy Filesystems
-- `rsync -aHAXx` from source to target for each partition
-- Preserves permissions, ACLs, xattrs, and hard links
+### 4. Target Disk Partitioning
+- Orchestrated by `mash-workflow`, driven by OS-specific rules.
+- Performed by `mash-hal`.
+- Creates partition table (MBR or GPT, based on user choice and OS compatibility).
+- Creates OS-defined partitions (e.g., EFI, BOOT, ROOT, DATA).
 
-### 6. Configure UEFI
-- Copy UEFI firmware files to EFI partition
-- Ensure `EFI/BOOT/BOOTAA64.EFI` exists
-- Configure GRUB if needed
+### 5. Target Filesystem Formatting
+- Orchestrated by `mash-workflow`.
+- Performed by `mash-hal`.
+- Formats target partitions (e.g., FAT32 for EFI, ext4 for BOOT, btrfs for ROOT).
+- Creates btrfs subvolumes if required.
 
-### 7. Apply Locale
-- Patch `/etc/locale.conf` and `/etc/vconsole.conf`
-- Configure keyboard layout
+### 6. Filesystem Copy
+- Orchestrated by `mash-workflow`.
+- Performed by `mash-hal`, leveraging `rsync` functionality internally where applicable or Rust-native file copying.
+- Copies system files from the prepared source image to the target partitions.
+- Preserves permissions, ACLs, xattrs, and hard links.
 
-### 8. Cleanup
-- Unmount all partitions (target then source)
-- Detach loop device
-- Remove work directory
+### 7. UEFI Boot Configuration
+- Orchestrated by `mash-workflow`.
+- Performed by `mash-hal`.
+- Copies UEFI firmware files and ensures `EFI/BOOT/BOOTAA64.EFI` is correctly placed.
+- Configures bootloader (e.g., GRUB entries).
+
+### 8. System Configuration & Locale
+- Orchestrated by `mash-workflow`.
+- Performed by `mash-hal`.
+- Applies locale settings (language, keyboard layout).
+- Performs other OS-specific post-installation configuration.
+
+### 9. Cleanup
+- Orchestrated by `mash-workflow`.
+- Performed by `mash-hal`.
+- Unmounts all target and source partitions (RAII-based `MountGuard`/`MountPoint` ensures atomic cleanup even on error).
+- Detaches loop devices.
+- Removes temporary work directories.
 
 ---
 
@@ -192,42 +168,41 @@ The core installation logic lives in `flash.rs`. Here's the high-level flow:
 
 ### Why Both?
 
-Raspberry Pi UEFI firmware behavior varies by:
-- Firmware version
-- Boot media type (SD vs USB vs NVMe)
-- Specific Pi 4 revision
+The choice between MBR and GPT can be influenced by:
+-   **OS Compatibility**: Some operating systems have preferred or mandatory partition schemes.
+-   **Hardware Compatibility**: UEFI firmware versions, boot media type (SD vs USB vs NVMe), and specific Raspberry Pi 4 revisions can all play a role.
+-   **User Preference**: For advanced users with specific needs.
 
-**MBR (msdos)** is the default because:
-- Maximum compatibility with all UEFI firmware versions
-- Simpler partition table structure
-- Reliable on all boot media
+**MBR (msdos)** is often chosen for:
+-   Maximum compatibility with older UEFI firmware versions.
+-   Simpler partition table structure.
+-   Reliability on a wider range of boot media.
 
-**GPT** is available for:
-- Users who specifically want it
-- Large disks (>2 TiB)
-- Modern setups with known-good firmware
+**GPT** is typically used for:
+-   Modern systems and larger disks (>2 TiB).
+-   When explicitly required by the OS or user.
 
-### User Choice is Mandatory
+### User Choice, Guided by OS Rules
 
-MASH never automatically selects between MBR and GPT. The user must explicitly choose via:
-- TUI selection screen
-- `--scheme mbr` or `--scheme gpt` flag
+MASH guides the user's choice and, where necessary, enforces OS-specific partitioning rules. The user will still make a decision via:
+-   TUI selection screen (with dynamic options based on selected OS)
+-   `--scheme mbr` or `--scheme gpt` flag (CLI mode)
 
-This is a core design principle — see [DOJO.md](DOJO.md).
+This approach ensures both user control and system compatibility – see [DOJO.md](DOJO.md) for more on core design principles.
 
 ---
 
 ## Progress Communication
 
-The flash operation runs in a background thread to keep the UI responsive. Communication happens via `mpsc` channels:
+The installation process runs in a background thread within `mash-workflow` to keep the UI responsive. Communication happens via `mpsc` channels, sending `ProgressUpdate` messages from `mash-workflow` (which in turn receives updates from `mash-hal` for low-level operations) back to the TUI.
 
 ```rust
-// In flash.rs
-ctx.send_progress(ProgressUpdate::PhaseStarted(Phase::Partitioning));
-// ... do work ...
-ctx.send_progress(ProgressUpdate::PhaseCompleted(Phase::Partitioning));
+// In mash-workflow/src/lib.rs (example)
+self.ctx.send_progress(ProgressUpdate::PhaseStarted(Phase::Partitioning));
+// ... mash-hal operations ...
+self.ctx.send_progress(ProgressUpdate::PhaseCompleted(Phase::Partitioning));
 
-// In TUI
+// In mash-tui/src/lib.rs (example)
 while let Ok(update) = progress_rx.try_recv() {
     match update {
         ProgressUpdate::PhaseStarted(phase) => { /* update UI */ }
@@ -239,91 +214,71 @@ while let Ok(update) = progress_rx.try_recv() {
 
 ### Phases
 
-1. `Validation` — Check paths and permissions
-2. `Mounting` — Mount source image
-3. `Partitioning` — Create partition table
-4. `Formatting` — Format filesystems
-5. `CopyingEfi` — Copy EFI partition
-6. `CopyingBoot` — Copy boot partition
-7. `CopyingRoot` — Copy root filesystem
-8. `ConfiguringUefi` — Set up boot
-9. `ApplyingLocale` — Configure locale
-10. `Cleanup` — Unmount and detach
+Phases are now defined and managed within `mash-workflow`, providing a clear, resumable sequence:
+1.  `Validation`
+2.  `Download`
+3.  `SetupSource`
+4.  `Partitioning`
+5.  `Formatting`
+6.  `CopyingFiles`
+7.  `BootConfiguration`
+8.  `PostInstallConfig`
+9.  `Cleanup`
 
 ---
 
 ## Download Module
 
-`download.rs` handles:
+The `download.rs` module (within `mash-core`) handles fetching OS images and related files. Its operations are orchestrated by `mash-workflow` and leverage `mash-hal` for secure file I/O and temporary storage.
 
-### Fedora Image Download
-- Constructs URL based on version and edition
-- Downloads `.raw.xz` with progress indication
-- Decompresses to `.raw`
+### OS Image Download
+- Constructs URLs based on OS, variant, and architecture.
+- Downloads `.raw.xz` (or similar compressed formats) with progress indication.
+- Supports checksum verification and resume capabilities.
 
-### UEFI Firmware Download
-- Fetches latest release from `pftf/RPi4` GitHub repo
-- Downloads and extracts firmware zip
-- Places files in specified directory
+### UEFI Firmware Download (if applicable)
+- Fetches firmware when required (e.g., Raspberry Pi UEFI).
+- Downloads and extracts firmware archives.
+- Places files in the correct location via `mash-hal`.
 
 ---
 
 ## Locale Configuration
 
-`locale.rs` provides offline locale patching:
+The `locale.rs` module provides offline locale patching. These operations are performed via `mash-hal` to ensure safe and robust system configuration:
 
-- Modifies `/etc/locale.conf` for language
-- Modifies `/etc/vconsole.conf` for keyboard layout
-- Runs at install time, not first boot
-- Has unit tests for validation
+-   Modifies `/etc/locale.conf` for language settings.
+-   Modifies `/etc/vconsole.conf` for keyboard layout settings.
+-   Runs at install time, not first boot.
+-   Includes unit tests for validation.
 
 ---
 
 ## Error Handling
 
-- Uses `anyhow` for error context chaining
-- Custom `MashError` enum in `errors.rs`
-- All destructive operations wrapped in cleanup guards
-- Cleanup runs even on error (via `CleanupGuard` struct)
+MASH employs robust error handling with `anyhow` for context chaining and `mash_core::error::MASHError` for specific, typed error conditions.
+
+-   **`MASHError` enum**: Defines specific error types like `DiskBusy`, `PermissionDenied`, `SafetyLock`, and `ValidationFailed`, enabling precise error reporting and handling.
+-   **Cleanup Guards**: All destructive operations (performed via `mash-hal`) are wrapped in RAII-based cleanup guards (`MountGuard`, `MountPoint`). These ensure that even if an error occurs, mounted filesystems are unmounted and temporary resources are released, preventing system state corruption.
+-   **Deterministic Execution**: Typed errors and cleanup guards contribute to deterministic behavior, making MASH reliable even in failure scenarios.
 
 ---
 
 ## External Commands
 
-MASH shells out to these system utilities:
+A core principle of MASH's safety hardening is to minimize direct shelling out to external commands. Most system utilities that MASH interacts with (e.g., `lsblk`, `parted`, `mount`, `umount`, `losetup`, `xz`) are now wrapped in Rust-native implementations within `mash-hal`. This provides type safety, error handling, and deterministic behavior.
 
-| Command | Purpose |
-|---------|---------|
-| `lsblk` | List block devices |
-| `parted` | Partition disk |
-| `mkfs.vfat` | Format FAT32 |
-| `mkfs.ext4` | Format ext4 |
-| `mkfs.btrfs` | Format btrfs |
-| `btrfs subvolume` | Create btrfs subvolumes |
-| `mount` / `umount` | Mount filesystems |
-| `rsync` | Copy files |
-| `losetup` | Loop device management |
-| `xz` | Decompress images |
+However, a few specialized commands are still invoked externally due to their complexity or unique functionality, but always through carefully designed and safely wrapped interfaces within `mash-hal`:
 
-These must be available on the host system.
+| Command | Purpose | Notes |
+|---------|---------|-------|
+| `mkfs.*` | Format various filesystems (e.g., `mkfs.vfat`, `mkfs.ext4`, `mkfs.btrfs`) | Invoked via `mash-hal` with strict parameter validation. |
+| `btrfs subvolume` | Create btrfs subvolumes | Invoked via `mash-hal` for btrfs-specific operations. |
+| `rsync` | Copy filesystems | Used internally by `mash-hal` for efficient, robust file copying, with parameters carefully controlled. |
 
----
+These commands are treated as trusted system binaries and are expected to be available on the host system.
 
-## Legacy Code
 
-The `tui/app.rs` and `tui/ui.rs` modules contain a previous multi-screen wizard implementation. These are:
-- Gated with `#![allow(dead_code)]`
-- Not the default entry point
-- Preserved for reference
-
-The current default uses `tui/dojo_app.rs` and `tui/dojo_ui.rs`.
-
-## Naming Map (Historical -> Current)
-
-| Old name | New name | Notes |
-|---|---|---|
-| `tui/new_app.rs` | `tui/dojo_app.rs` | “Dojo” = the primary interactive installer flow |
-| `tui/new_ui.rs` | `tui/dojo_ui.rs` | Rendering for Dojo UI |
 
 ---
 
@@ -331,9 +286,10 @@ The current default uses `tui/dojo_app.rs` and `tui/dojo_ui.rs`.
 
 > **Note:** These are architectural observations, not planned features.
 
-- **Btrfs subvolumes:** Currently hardcoded (root, home, var). Could be configurable.
-- **Partition sizes:** Configurable via CLI but not TUI. TUI could expose these.
-- **First-boot hooks:** Infrastructure exists but hooks are minimal.
+-   **Fine-grained HAL Control**: Exposing more granular control over `mash-hal` operations for advanced use cases.
+-   **Configurable Partitioning**: While OS-driven, exploring more user-configurable options for partition layouts within the TUI.
+-   **Advanced Logging**: Enhancements to the in-TUI log buffer and remote logging capabilities.
+-   **Extensibility**: Defining clearer extension points for adding new OSes or custom installation stages.
 
 ---
 

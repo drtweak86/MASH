@@ -177,6 +177,14 @@ pub struct TuiFlashConfig {
     pub image_source_selection: ImageSource, // New field to indicate image source
     pub image_version: String,        // New field for selected Fedora version
     pub image_edition: String,        // New field for selected Fedora edition
+    /// Best-effort target disk identity (for reporting).
+    pub disk_identity: Option<mash_core::install_report::DiskIdentityReport>,
+    /// Human label for reporting / completion messaging.
+    pub os_distro_label: String,
+    /// Human label for flavour/variant (for reporting / completion messaging).
+    pub os_flavour_label: String,
+    /// Execute-mode confirmation gate was typed (WO-036).
+    pub typed_execute_confirmation: bool,
 }
 
 impl TryFrom<TuiFlashConfig> for mash_core::flash::FlashConfig {
@@ -184,6 +192,13 @@ impl TryFrom<TuiFlashConfig> for mash_core::flash::FlashConfig {
 
     fn try_from(cfg: TuiFlashConfig) -> std::result::Result<Self, Self::Error> {
         let flash = mash_core::flash::FlashConfig {
+            os_distro: Some(cfg.os_distro_label),
+            os_flavour: Some(cfg.os_flavour_label),
+            disk_identity: cfg.disk_identity,
+            efi_source: Some(match cfg.download_uefi_firmware {
+                true => "download".to_string(),
+                false => "local".to_string(),
+            }),
             image: cfg.image,
             disk: cfg.disk,
             scheme: cfg.scheme,

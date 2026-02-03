@@ -3,7 +3,10 @@
 //! This implementation records all operations without executing them,
 //! allowing for CI-safe testing without root privileges or real hardware.
 
-use super::{FlashOps, FormatOps, FormatOptions, MountOps, MountOptions};
+use super::{
+    BtrfsOps, FlashOps, FormatOps, FormatOptions, LoopOps, MountOps, MountOptions, PartedOp,
+    PartedOptions, PartitionOps, ProbeOps, RsyncOps, RsyncOptions, SystemOps, WipeFsOptions,
+};
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -26,9 +29,49 @@ pub enum Operation {
     FormatBtrfs {
         device: PathBuf,
     },
+    FormatVfat {
+        device: PathBuf,
+        label: String,
+    },
     FlashImage {
         image: PathBuf,
         target: PathBuf,
+    },
+    Sync,
+    UdevSettle,
+    WipeFsAll {
+        disk: PathBuf,
+    },
+    Parted {
+        disk: PathBuf,
+        op: String,
+    },
+    LosetupAttach {
+        image: PathBuf,
+        scan_partitions: bool,
+        loop_device: String,
+    },
+    LosetupDetach {
+        loop_device: String,
+    },
+    BtrfsSubvolumeList {
+        mount_point: PathBuf,
+    },
+    BtrfsSubvolumeCreate {
+        path: PathBuf,
+    },
+    Rsync {
+        src: PathBuf,
+        dst: PathBuf,
+    },
+    LsblkMountpoints {
+        disk: PathBuf,
+    },
+    LsblkTable {
+        disk: PathBuf,
+    },
+    BlkidUuid {
+        device: PathBuf,
     },
 }
 
@@ -145,6 +188,11 @@ impl MountOps for FakeHal {
         Ok(())
     }
 
+    fn unmount_recursive(&self, target: &Path, dry_run: bool) -> Result<()> {
+        // FakeHal does not model nested mount trees; treat as a normal unmount for recording.
+        self.unmount(target, dry_run)
+    }
+
     fn is_mounted(&self, path: &Path) -> Result<bool> {
         let is_mounted = self.state.lock().unwrap().mounted_paths.contains(path);
         log::info!("FAKE HAL: is_mounted({}) = {}", path.display(), is_mounted);
@@ -190,6 +238,30 @@ impl FormatOps for FakeHal {
 
         Ok(())
     }
+
+    fn format_vfat(&self, device: &Path, label: &str, opts: &FormatOptions) -> Result<()> {
+        if !opts.dry_run && !opts.confirmed {
+            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
+        }
+
+        if opts.dry_run {
+            log::info!(
+                "FAKE HAL DRY RUN: mkfs.vfat {} ({})",
+                device.display(),
+                label
+            );
+            return Ok(());
+        }
+
+        log::info!("FAKE HAL: mkfs.vfat {} ({})", device.display(), label);
+
+        self.record_operation(Operation::FormatVfat {
+            device: device.to_path_buf(),
+            label: label.to_string(),
+        });
+
+        Ok(())
+    }
 }
 
 impl FlashOps for FakeHal {
@@ -223,6 +295,115 @@ impl FlashOps for FakeHal {
             target: target_disk.to_path_buf(),
         });
 
+        Ok(())
+    }
+}
+
+impl SystemOps for FakeHal {
+    fn sync(&self) -> Result<()> {
+        self.record_operation(Operation::Sync);
+        Ok(())
+    }
+
+    fn udev_settle(&self) -> Result<()> {
+        self.record_operation(Operation::UdevSettle);
+        Ok(())
+    }
+}
+
+impl ProbeOps for FakeHal {
+    fn lsblk_mountpoints(&self, disk: &Path) -> Result<Vec<PathBuf>> {
+        self.record_operation(Operation::LsblkMountpoints {
+            disk: disk.to_path_buf(),
+        });
+        Ok(Vec::new())
+    }
+
+    fn lsblk_table(&self, disk: &Path) -> Result<String> {
+        self.record_operation(Operation::LsblkTable {
+            disk: disk.to_path_buf(),
+        });
+        Ok(String::new())
+    }
+
+    fn blkid_uuid(&self, device: &Path) -> Result<String> {
+        self.record_operation(Operation::BlkidUuid {
+            device: device.to_path_buf(),
+        });
+        Ok("FAKE-UUID".to_string())
+    }
+}
+
+impl PartitionOps for FakeHal {
+    fn wipefs_all(&self, disk: &Path, opts: &WipeFsOptions) -> Result<()> {
+        if !opts.dry_run && !opts.confirmed {
+            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
+        }
+        self.record_operation(Operation::WipeFsAll {
+            disk: disk.to_path_buf(),
+        });
+        Ok(())
+    }
+
+    fn parted(&self, disk: &Path, op: PartedOp, opts: &PartedOptions) -> Result<String> {
+        if !opts.dry_run && !opts.confirmed {
+            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
+        }
+        self.record_operation(Operation::Parted {
+            disk: disk.to_path_buf(),
+            op: format!("{:?}", op),
+        });
+        Ok(String::new())
+    }
+}
+
+impl LoopOps for FakeHal {
+    fn losetup_attach(&self, image: &Path, scan_partitions: bool) -> Result<String> {
+        let loop_device = "/dev/loop0".to_string();
+        self.record_operation(Operation::LosetupAttach {
+            image: image.to_path_buf(),
+            scan_partitions,
+            loop_device: loop_device.clone(),
+        });
+        Ok(loop_device)
+    }
+
+    fn losetup_detach(&self, loop_device: &str) -> Result<()> {
+        self.record_operation(Operation::LosetupDetach {
+            loop_device: loop_device.to_string(),
+        });
+        Ok(())
+    }
+}
+
+impl BtrfsOps for FakeHal {
+    fn btrfs_subvolume_list(&self, mount_point: &Path) -> Result<String> {
+        self.record_operation(Operation::BtrfsSubvolumeList {
+            mount_point: mount_point.to_path_buf(),
+        });
+        Ok(String::new())
+    }
+
+    fn btrfs_subvolume_create(&self, path: &Path) -> Result<()> {
+        self.record_operation(Operation::BtrfsSubvolumeCreate {
+            path: path.to_path_buf(),
+        });
+        Ok(())
+    }
+}
+
+impl RsyncOps for FakeHal {
+    fn rsync_stream_stdout(
+        &self,
+        src: &Path,
+        dst: &Path,
+        _opts: &RsyncOptions,
+        _on_stdout_line: &mut dyn FnMut(&str) -> bool,
+    ) -> Result<()> {
+        self.record_operation(Operation::Rsync {
+            src: src.to_path_buf(),
+            dst: dst.to_path_buf(),
+        });
         Ok(())
     }
 }

@@ -44,6 +44,7 @@ pub fn run<H>(
     hal: &H,
     cfg: &OsInstallConfig,
     destructive_confirmed: bool,
+    typed_confirmation: bool,
     cancel: Option<&AtomicBool>,
 ) -> Result<InstallState>
 where
@@ -58,13 +59,43 @@ where
 
     let mut stages: Vec<StageDefinition<'_>> = Vec::new();
 
+    // Persistent install report artifact (always).
+    let mode = if cfg.dry_run {
+        mash_core::install_report::RunMode::DryRun
+    } else {
+        mash_core::install_report::RunMode::Execute
+    };
+    let selection = mash_core::install_report::SelectionReport {
+        distro: format!("{:?}", cfg.os),
+        flavour: Some(cfg.variant.clone()),
+        target_disk: cfg.target_disk.display().to_string(),
+        disk_identity: None,
+        partition_scheme: None,
+        efi_size: None,
+        boot_size: None,
+        root_end: None,
+        efi_source: None,
+        efi_path: None,
+    };
+    let report = mash_core::install_report::InstallReportWriter::new(
+        mode,
+        destructive_confirmed,
+        typed_confirmation,
+        selection,
+    )
+    .ok();
+
     // Persist the install intent early so resumes are self-describing.
     let os = cfg.os;
     let variant = cfg.variant.clone();
     let progress_intent = cfg.progress_tx.clone();
+    let report_intent = report.clone();
     stages.push(StageDefinition {
         name: "Record install intent",
         run: Box::new(move |state, _dry_run| {
+            if let Some(ref report) = report_intent {
+                report.stage_started("Record install intent");
+            }
             if let Some(tx) = &progress_intent {
                 let _ = tx.send(ProgressUpdate::Status(
                     "🧾 Recording install intent...".to_string(),
@@ -72,6 +103,9 @@ where
             }
             state.selected_os = Some(format!("{:?}", os));
             state.selected_variant = Some(variant.clone());
+            if let Some(ref report) = report_intent {
+                report.stage_completed("Record install intent");
+            }
             Ok(())
         }),
     });
@@ -79,9 +113,13 @@ where
     // Download stage (optional).
     let cfg_dl = cfg.clone();
     let cancel_dl = cancel;
+    let report_dl = report.clone();
     stages.push(StageDefinition {
         name: "Download OS image",
         run: Box::new(move |state, dry_run| {
+            if let Some(ref report) = report_dl {
+                report.stage_started("Download OS image");
+            }
             if let Some(tx) = &cfg_dl.progress_tx {
                 let _ = tx.send(ProgressUpdate::Status(
                     "⬇️ Downloading OS image...".to_string(),
@@ -89,6 +127,9 @@ where
             }
             if matches!(cfg_dl.image_source, ImageSource::Local(_)) {
                 log::info!("Download stage skipped; using local image");
+                if let Some(ref report) = report_dl {
+                    report.stage_completed("Download OS image");
+                }
                 return Ok(());
             }
             if dry_run {
@@ -99,10 +140,16 @@ where
                     cfg_dl.arch,
                     cfg_dl.download_dir.display()
                 );
+                if let Some(ref report) = report_dl {
+                    report.stage_completed("Download OS image");
+                }
                 return Ok(());
             }
             if let Some(flag) = cancel_dl {
                 if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    if let Some(ref report) = report_dl {
+                        report.stage_error("Download OS image", "cancelled");
+                    }
                     anyhow::bail!("cancelled");
                 }
             }
@@ -111,7 +158,15 @@ where
                 download_dir: cfg_dl.download_dir.clone(),
                 ..Default::default()
             };
-            let artifact = downloader::download(&opts)?;
+            let artifact = match downloader::download(&opts) {
+                Ok(artifact) => artifact,
+                Err(err) => {
+                    if let Some(ref report) = report_dl {
+                        report.stage_error("Download OS image", &err.to_string());
+                    }
+                    return Err(err);
+                }
+            };
             state.record_download(DownloadArtifact::new(
                 artifact.name.clone(),
                 &artifact.path,
@@ -121,6 +176,9 @@ where
             ));
             state.mark_checksum_verified(&artifact.checksum);
             state.set_partial_resume(artifact.resumed);
+            if let Some(ref report) = report_dl {
+                report.stage_completed("Download OS image");
+            }
             Ok(())
         }),
     });
@@ -129,9 +187,13 @@ where
     let cfg_flash = cfg.clone();
     let cancel_flash = cancel;
     let hal_flash = hal.clone();
+    let report_flash = report.clone();
     stages.push(StageDefinition {
         name: "Flash OS image",
         run: Box::new(move |state, dry_run| {
+            if let Some(ref report) = report_flash {
+                report.stage_started("Flash OS image");
+            }
             if let Some(tx) = &cfg_flash.progress_tx {
                 let _ = tx.send(ProgressUpdate::Status(
                     "💾 Flashing image to disk...".to_string(),
@@ -144,17 +206,29 @@ where
                     cfg_flash.variant,
                     cfg_flash.target_disk.display()
                 );
+                if let Some(ref report) = report_flash {
+                    report.stage_completed("Flash OS image");
+                }
                 return Ok(());
             }
             if let Some(flag) = cancel_flash {
                 if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    if let Some(ref report) = report_flash {
+                        report.stage_error("Flash OS image", "cancelled");
+                    }
                     anyhow::bail!("cancelled");
                 }
             }
 
             let image_path = resolve_image_path(&cfg_flash, state)?;
             let opts = mash_hal::FlashOptions::new(dry_run, destructive_confirmed);
-            hal_flash.flash_raw_image(&image_path, &cfg_flash.target_disk, &opts)?;
+            if let Err(err) = hal_flash.flash_raw_image(&image_path, &cfg_flash.target_disk, &opts)
+            {
+                if let Some(ref report) = report_flash {
+                    report.stage_error("Flash OS image", &err.to_string());
+                }
+                return Err(err);
+            }
 
             if !state
                 .flashed_devices
@@ -165,25 +239,38 @@ where
                     .flashed_devices
                     .push(cfg_flash.target_disk.display().to_string());
             }
+            if let Some(ref report) = report_flash {
+                report.stage_completed("Flash OS image");
+            }
             Ok(())
         }),
     });
 
     // OS-specific post-flash rules.
     let cfg_rules = cfg.clone();
+    let report_rules = report.clone();
     stages.push(StageDefinition {
         name: "Apply OS-specific rules",
         run: Box::new(move |state, dry_run| {
+            if let Some(ref report) = report_rules {
+                report.stage_started("Apply OS-specific rules");
+            }
             if let Some(tx) = &cfg_rules.progress_tx {
                 let _ = tx.send(ProgressUpdate::Status(
                     "🔧 Applying OS rules...".to_string(),
                 ));
             }
             if dry_run {
+                if let Some(ref report) = report_rules {
+                    report.stage_completed("Apply OS-specific rules");
+                }
                 return Ok(());
             }
             if cfg_rules.os == OsKind::Manjaro {
                 state.post_boot_partition_expansion_required = true;
+            }
+            if let Some(ref report) = report_rules {
+                report.stage_completed("Apply OS-specific rules");
             }
             Ok(())
         }),
@@ -191,6 +278,9 @@ where
 
     // Ensure we write the final state even if the caller doesn't persist runner output.
     let final_state = runner.run(&stages)?;
+    if let Some(ref report) = report {
+        report.record_progress_update(&ProgressUpdate::Complete);
+    }
     save_state_atomic(&state_path, &final_state)?;
     Ok(final_state)
 }
@@ -264,7 +354,7 @@ mod tests {
         };
 
         let hal = mash_hal::LinuxHal::new();
-        let state = run(&hal, &cfg, true, None).unwrap();
+        let state = run(&hal, &cfg, true, false, None).unwrap();
         assert!(state
             .flashed_devices
             .iter()
@@ -301,7 +391,7 @@ mod tests {
         };
 
         let hal = mash_hal::LinuxHal::new();
-        let state = run(&hal, &cfg, true, None).unwrap();
+        let state = run(&hal, &cfg, true, false, None).unwrap();
         assert!(!state.post_boot_partition_expansion_required);
         let written = std::fs::read(&disk_path).unwrap();
         assert_eq!(written, content);
@@ -333,7 +423,7 @@ mod tests {
         };
 
         let hal = mash_hal::LinuxHal::new();
-        let state = run(&hal, &cfg, true, None).unwrap();
+        let state = run(&hal, &cfg, true, false, None).unwrap();
         assert!(state.post_boot_partition_expansion_required);
         let written = std::fs::read(&disk_path).unwrap();
         assert_eq!(written, content);

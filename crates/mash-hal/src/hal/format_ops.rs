@@ -18,6 +18,9 @@ pub trait FormatOps {
     /// * `device` - Block device path (e.g., `/dev/sda2`)
     /// * `opts` - Formatting options including dry-run and confirmation
     fn format_btrfs(&self, device: &Path, opts: &FormatOptions) -> Result<()>;
+
+    /// Format a device with VFAT (FAT32), typically used for EFI system partitions.
+    fn format_vfat(&self, device: &Path, label: &str, opts: &FormatOptions) -> Result<()>;
 }
 
 /// Options for formatting operations.

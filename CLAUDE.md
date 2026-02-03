@@ -4,9 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MASH (Minimal, Automated, Self-Hosting) is a Rust-based installer that automates Fedora KDE installation on Raspberry Pi 4B with UEFI boot support. The installer is **destructive by design** but requires explicit user confirmation for dangerous operations.
+MASH (Minimal, Automated, Self-Hosting) is a Rust-based installer that automates OS installation on Raspberry Pi 4B with UEFI boot support. It now supports Fedora KDE, Ubuntu, Raspberry Pi OS, and Manjaro.
 
-**Current version:** v1.2.11
+The installer is **destructive by design**, but strictly enforces a **SAFE MODE** initially. Destructive actions require explicit user confirmation via an **ARMING SEQUENCE** (typing `DESTROY`). This is a safety-critical feature.
+
+**Current version:** v1.4.0
 
 ## Build Commands
 
@@ -28,56 +30,76 @@ cd mash-installer && cargo test test_name
 
 ### Two Execution Modes
 
-1. **TUI Mode** (default, no subcommand): Interactive terminal wizard via `tui::run()`
-2. **CLI Mode** (subcommands: `preflight`, `flash`): For scripting and automation
+MASH operates with a strong emphasis on safety and an enforced workflow.
+
+1.  **TUI Mode** (default, no subcommand): Interactive terminal wizard.
+    -   Always starts in **`[SAFE MODE]`** (read-only).
+    -   Requires an **Arming Sequence** (typing `DESTROY`) to switch to **`[ARMED]`** mode for destructive operations.
+    -   Enforces a sequential workflow: Welcome → Distro → Flavour → Disk → Partition → Review.
+    -   Protects the installer's boot media from accidental selection.
+
+2.  **CLI Mode** (subcommands: `preflight`, `flash`): For scripting and automation.
+    -   Requires explicit `--armed` flag to perform destructive operations.
 
 ### Module Structure
 
+MASH is organized as a Cargo workspace with dedicated crates for different functionalities:
+
 ```
-src/
-├── main.rs           # Entry point, mode dispatch
-├── cli.rs            # Clap argument parsing, PartitionScheme enum
-├── flash.rs          # Core installation pipeline
-├── download.rs       # Fedora image and UEFI firmware downloads
-├── locale.rs         # Offline locale/keymap patching
-├── preflight.rs      # System requirement checks
-├── errors.rs         # Error types
-├── logging.rs        # Log initialization
-└── tui/
-    ├── mod.rs        # TUI entry point, terminal setup
-    ├── new_app.rs    # New app state (InstallStep, ProgressEvent, App)
-    ├── new_ui.rs     # New single-screen UI rendering
-    ├── flash_config.rs # FlashConfig, ImageSource, ImageEditionOption
-    ├── app.rs        # Legacy wizard state machine (gated, not default)
-    ├── ui.rs         # Legacy multi-screen rendering (gated, not default)
-    ├── input.rs      # Text input widget
-    ├── progress.rs   # Progress tracking and phases
-    └── widgets.rs    # Reusable UI components
+.
+├── mash-installer/             # Main executable (thin orchestration)
+├── mash-core/                  # Shared types, errors, config, download logic
+└── crates/
+    ├── mash-hal/               # Hardware Abstraction Layer (system ops)
+    ├── mash-tui/               # Terminal User Interface components (UI, widgets, input)
+    └── mash-workflow/          # Stage engine, state management, install pipelines
 ```
+`mash-tui` is the primary crate for all UI-related development.
 
-### TUI Architecture
+### TUI Architecture (crates/mash-tui)
 
-**Current default:** The TUI uses `new_app.rs` and `new_ui.rs` for a streamlined single-screen flow.
+The TUI (Terminal User Interface) is built using `ratatui` within the `crates/mash-tui` crate. It implements a purposeful layout grid to provide clear user guidance and real-time system information.
 
-**Legacy code:** `app.rs` and `ui.rs` contain the previous multi-screen wizard. These modules are gated with `#![allow(dead_code)]` and are not the default entry point.
+**UI Layout Grid:**
+-   **Left Sidebar**: Displays the step progress (Welcome → Distro → Flavour → Disk → Partition → Review).
+-   **Center**: The active screen for user interaction (e.g., distro selection, disk partitioning).
+-   **Right Panel**: Provides essential system information (RAM, CPU, detected disks, current Safety State).
+-   **Bottom Bar**: Shows key legends (`Space`, `Enter`, `Esc`, `q`) for navigation and actions.
 
-### Key Types
+**Enforced Workflow:**
+The TUI strictly guides the user through the following sequence, ensuring no steps are missed and critical safety checks are performed:
+1.  **Welcome**: Initial greeting and overview.
+2.  **Distro Selection**: Choose the operating system. Only distros with valid download URLs and checksums are presented; no placeholders.
+3.  **Flavour / Edition Selection**: Context-aware variants appear after distro selection (e.g., Fedora → Server / Workstation / KDE; Raspberry Pi OS → Lite / Desktop; Ubuntu → Server / Desktop).
+4.  **Disk Selection**: Choose the target disk. The installer's source drive (boot media) is automatically excluded.
+5.  **Partition Wizard**: Select partitioning strategy (Whole Disk or Manual Layout). EFI options are shown only if required by the board/distro metadata.
+6.  **Review**: Final confirmation of all selections before proceeding.
+7.  **Installation Progress**: Displays real-time progress updates.
 
-- `FlashConfig` — Accumulated user configuration (disk, scheme, locale, etc.)
-- `ImageSource` — Local file vs download selection
-- `PartitionScheme` — MBR or GPT
-- `ProgressUpdate` / `Phase` — Progress communication from flash thread
+This architecture ensures a clear, safe, and guided installation experience, with all destructive actions gated by the `DESTROY` arming sequence.
 
-### Installation Pipeline (`flash.rs`)
+### Key Types (Relevant to TUI)
 
-1. Validate disk and image paths
-2. Loop-mount source image partitions (EFI, BOOT, ROOT with btrfs subvols)
-3. Partition target disk (MBR or GPT based on user choice)
-4. Format partitions (FAT32 for EFI, ext4 for BOOT/DATA, btrfs for ROOT)
-5. rsync filesystems from source to target
-6. Configure UEFI boot (`EFI/BOOT/BOOTAA64.EFI`)
-7. Apply locale patches if configured
-8. Cleanup: unmount and detach loop devices
+-   **`InstallConfig`** (from `mash-core`): Accumulates user configuration choices (OS, variant, target disk, partitioning scheme, locale, etc.).
+-   **`InstallStep`** (from `mash-workflow`): Represents the current stage of the enforced workflow (e.g., `DistroSelection`, `PartitionWizard`).
+-   **`ProgressUpdate`** / **`Phase`** (from `mash-workflow`): Communication mechanism for progress from the background installation thread to the TUI.
+-   **`MASHError`** (from `mash-core`): Standardized error types, including `SafetyLock`, `DiskBusy`, etc.
+
+### Installation Pipeline
+
+The core installation logic is now orchestrated by `crates/mash-workflow` and executed via `crates/mash-hal` for system operations. This ensures a robust, testable, and deterministic process.
+
+The TUI (driven by `crates/mash-tui`) communicates with `mash-workflow` to initiate and monitor the stages of the installation, which include:
+
+1.  **Preflight Checks**: Verifying system readiness.
+2.  **OS/Image Download**: Fetching necessary OS images.
+3.  **Source Image Preparation**: Setting up the source data.
+4.  **Target Disk Partitioning**: Creating the disk layout.
+5.  **Target Filesystem Formatting**: Preparing filesystems.
+6.  **Filesystem Copy**: Transferring OS files.
+7.  **UEFI Boot Configuration**: Setting up bootloaders.
+8.  **System Configuration & Locale**: Applying post-install settings.
+9.  **Cleanup**: Releasing resources.
 
 ### Progress Communication
 
@@ -85,21 +107,15 @@ Downloads and flashing run in separate threads, sending `ProgressUpdate` message
 
 ## Core Principles (from docs/DOJO.md)
 
-- **Destructive actions must be explicit** — Always require confirmation
-- **GPT/MBR user choice is mandatory** — Never remove this decision from users
-- **Scripts should be noisy, clear, and defensive** — No silent failures
-- **Overwrites must create a `bak/` mirror** — Preserve previous state
+-   **Destructive actions must be explicit** — Always require an explicit `DESTROY` arming sequence.
+-   **GPT/MBR choice is guided by OS rules** — The installer will guide the user and may enforce OS-specific rules.
+-   **Noisy, clear, and defensive** — Verbose logging, clear error messages.
+-   **No surprises** — What you see is what you get.
+-   **Overwrites must create a `bak/` mirror** — Preserve previous state (where applicable).
 
 ## External Dependencies
 
-The installer shells out to system commands:
-- `lsblk` — List block devices
-- `parted` — Partition disk
-- `mkfs.vfat`, `mkfs.ext4`, `mkfs.btrfs` — Format partitions
-- `mount` / `umount` — Mount filesystems
-- `rsync` — Copy files
-- `xz` — Decompress images
-- `losetup` — Loop device management
+Most interactions with system utilities (e.g., `lsblk`, `parted`, `mkfs.*`, `mount`, `rsync`) are now encapsulated within the `crates/mash-hal` Hardware Abstraction Layer. This means that Claude (as the UI developer) can rely on `mash-hal` to perform these operations safely and reliably without needing to understand the underlying shell calls. This separation of concerns simplifies UI development and ensures robustness.
 
 ## CLI Flags Reference
 
@@ -107,30 +123,33 @@ The installer shells out to system commands:
 mash flash [OPTIONS] --disk <DISK>
 
 Options:
-  --image <PATH>           Path to Fedora .raw image
-  --disk <DEVICE>          Target disk (e.g., /dev/sda)
-  --scheme <mbr|gpt>       Partition scheme (default: mbr)
-  --uefi-dir <PATH>        Directory containing UEFI files
-  --download-image         Auto-download Fedora image
-  --download-uefi          Auto-download UEFI firmware
-  --image-version <VER>    Fedora version (default: 43)
-  --image-edition <ED>     Fedora edition (default: KDE)
-  --auto-unmount           Auto-unmount target partitions
-  --yes-i-know             Confirm destructive operation
-  --locale <LANG:KEYMAP>   Locale setting (e.g., en_GB.UTF-8:uk)
-  --early-ssh              Enable SSH before graphical login
+  --armed                  REQUIRED: Confirm destructive operation; enables ARMRED mode.
+  --distro <NAME>          Operating System to install (e.g., fedora, ubuntu, rpios, manjaro)
+  --flavour <NAME>         OS Edition/Flavour (e.g., kde, desktop, server, lite)
+  --image <PATH>           Path to local OS image file
+  --disk <DEVICE>          Target disk (e.g., /dev/sda). Will be protected if it is the source drive.
+  --scheme <mbr|gpt>       Partition scheme (default: mbr). Will be guided by OS rules.
   --efi-size <SIZE>        EFI partition size (default: 1024MiB)
   --boot-size <SIZE>       BOOT partition size (default: 2048MiB)
   --root-end <SIZE>        ROOT partition end (default: 1800GiB)
+  --locale <LANG:KEYMAP>   Locale setting (e.g., en_GB.UTF-8:uk)
+  --early-ssh              Enable SSH before graphical login
   --dry-run                Simulate without changes
 ```
 
 ## Testing Notes
 
-- **Always use `--dry-run` flag** when testing installation logic
-- Unit tests exist in `locale.rs` for locale patching
-- Full installation testing requires physical media (too dangerous to automate)
-- Run `make lint` before committing — CI enforces `-D warnings`
+
+
+-   **Always use `--dry-run` flag** when testing installation logic.
+
+-   **UI Testing**: When testing UI components or flows, `mash-hal` provides `MockDiskOps` to simulate disk operations without touching real hardware, ensuring CI safety.
+
+-   Unit tests exist in `locale.rs` for locale patching.
+
+-   Full installation testing requires physical media (too dangerous to automate).
+
+-   Run `make lint` before committing — CI enforces `-D warnings`.
 
 ## Git Workflow
 

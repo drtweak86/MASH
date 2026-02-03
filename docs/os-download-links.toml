@@ -111,3 +111,16 @@ url = "https://manjaro.org/products/download/arm"
 [[health_checks]]
 name = "Raspberry Pi OS landing page"
 url = "https://www.raspberrypi.com/software/operating-systems/"
+
+# -----------------------------------------------------------------------------
+# Non-OS Assets (e.g. EFI firmware bundles)
+# -----------------------------------------------------------------------------
+
+[[assets]]
+name = "rpi4_uefi_firmware_zip_v1_50"
+kind = "zip"
+file_name = "RPi4_UEFI_Firmware_v1.50.zip"
+checksum_sha256 = "3c46d357301ed383d14bfd2f23e53c5e56f15c3a34d404e50a06aac60b0fa3fe"
+mirrors = [
+  "https://github.com/pftf/RPi4/releases/download/v1.50/RPi4_UEFI_Firmware_v1.50.zip",
+]

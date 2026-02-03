@@ -56,18 +56,30 @@ pub fn run() -> anyhow::Result<()> {
             if *download_uefi {
                 log::info!("⬇️ Downloading UEFI firmware...");
                 let uefi_dest_dir = downloads_dir.join("uefi");
-                mash_core::download::download_uefi_firmware(&uefi_dest_dir)?;
+                let mut progress = |_p: mash_core::downloader::DownloadProgress| true;
+                let mut stage = |_msg: &str| {};
+                mash_core::download_manager::fetch_uefi_bundle(
+                    &downloads_dir,
+                    &mut progress,
+                    &mut stage,
+                    None,
+                )?;
                 final_uefi_dir = Some(uefi_dest_dir);
             }
 
             if *download_image {
                 log::info!("⬇️ Downloading Fedora image...");
-                let image_dest_dir = downloads_dir.join("images");
-                final_image_path = Some(mash_core::download::download_fedora_image(
-                    &image_dest_dir,
+                let mut progress = |_p: mash_core::downloader::DownloadProgress| true;
+                let mut stage = |_msg: &str| {};
+                let path = mash_core::download_manager::fetch_fedora_image(
+                    &downloads_dir,
                     image_version,
                     image_edition,
-                )?);
+                    &mut progress,
+                    &mut stage,
+                    None,
+                )?;
+                final_image_path = Some(path);
             }
 
             let parsed_locale = if let Some(l_str) = locale.as_ref() {
@@ -77,6 +89,14 @@ pub fn run() -> anyhow::Result<()> {
             };
 
             let cli_flash_config = mash_core::flash::FlashConfig {
+                os_distro: Some("Fedora".to_string()),
+                os_flavour: None,
+                disk_identity: None,
+                efi_source: Some(if *download_uefi {
+                    "download".to_string()
+                } else {
+                    "local".to_string()
+                }),
                 image: final_image_path
                     .as_ref()
                     .context("Image path is required (provide --image or use --download-image)")?

@@ -30,7 +30,12 @@ pub fn draw(f: &mut Frame, app: &App) {
         )
         .split(f.area());
 
-    // Title bar with SAFE/ARMED indicator
+    // Title bar: mode + SAFE/ARMED indicator (must be unambiguous).
+    let (mode_label, mode_color) = if app.dry_run {
+        ("DRY-RUN", Color::Yellow)
+    } else {
+        ("EXECUTE", Color::Red)
+    };
     let (arming_label, arming_color) = if app.destructive_armed {
         ("ARMED", Color::Red)
     } else {
@@ -38,6 +43,8 @@ pub fn draw(f: &mut Frame, app: &App) {
     };
     let title_line = Line::from(vec![
         Span::styled("MASH Installer", Style::default().fg(Color::White)),
+        Span::raw(" | "),
+        Span::styled(mode_label, Style::default().fg(mode_color)),
         Span::raw(" | "),
         Span::styled(arming_label, Style::default().fg(arming_color)),
     ]);
@@ -150,6 +157,7 @@ fn build_step_sidebar(app: &App) -> String {
         (InstallStepType::Options, "Options"),
         (InstallStepType::PlanReview, "Review Plan"),
         (InstallStepType::Confirmation, "Confirm"),
+        (InstallStepType::ExecuteConfirmationGate, "Execute Gate"),
         (InstallStepType::Flashing, "Installing..."),
         (InstallStepType::Complete, "Complete!"),
     ];
@@ -185,6 +193,7 @@ fn is_step_before(step_a: InstallStepType, step_b: InstallStepType) -> bool {
         InstallStepType::Options,
         InstallStepType::PlanReview,
         InstallStepType::Confirmation,
+        InstallStepType::ExecuteConfirmationGate,
         InstallStepType::DisarmSafeMode,
         InstallStepType::Flashing,
         InstallStepType::Complete,
@@ -202,6 +211,14 @@ fn is_step_before(step_a: InstallStepType, step_b: InstallStepType) -> bool {
 /// Build the right info panel showing current selections and status
 fn build_info_panel(app: &App, progress_state: &ProgressState) -> String {
     let mut lines = Vec::new();
+
+    // Mode status (prominent; DRY-RUN must not look destructive)
+    if app.dry_run {
+        lines.push("🟡 DRY-RUN (no disk writes)".to_string());
+    } else {
+        lines.push("🔴 EXECUTE (disk writes possible)".to_string());
+    }
+    lines.push("".to_string());
 
     // Safety status (prominent)
     let arming_status = if app.destructive_armed {
@@ -629,8 +646,12 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                 );
                 items.push("".to_string());
             }
+            if !app.dry_run {
+                items.push("⚠️ EXECUTE MODE — this will erase the selected disk.".to_string());
+                items.push("".to_string());
+            }
             items.push("⌨️ Keys:".to_string());
-            items.push("  Enter — BEGIN INSTALLATION".to_string());
+            items.push("  Enter — Continue".to_string());
             items.push("  Esc — Go back to review".to_string());
             items.push("".to_string());
             let effective_image = app
@@ -657,6 +678,12 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                     None => "❌ IDENTITY FAILED".to_string(),
                 };
                 items.push(format!("Disk: {} - {}", disk.path, disk_info));
+            }
+            if let Some(distro) = app.os_distros.get(app.os_distro_index) {
+                items.push(format!("Distro: {}", distro.display()));
+            }
+            if let Some(variant) = app.os_variants.get(app.os_variant_index) {
+                items.push(format!("Flavour: {}", variant.label));
             }
             if let Some(scheme) = app.partition_schemes.get(app.scheme_index) {
                 items.push(format!("Scheme: {}", scheme));
@@ -715,6 +742,58 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                     .unwrap_or_else(|| "Prompt to create user".to_string())
             ));
             push_options(&mut items, &["Go back".to_string()], 0);
+            if let Some(error) = &app.error_message {
+                items.push(format!("❌ {}", error));
+            }
+        }
+        InstallStepType::ExecuteConfirmationGate => {
+            items.push("🛑 FINAL EXECUTE GATE".to_string());
+            items.push("".to_string());
+            items.push("This is the last checkpoint before disk erase.".to_string());
+            items.push("".to_string());
+            items.push("Type EXACTLY (including spaces):".to_string());
+            items.push("I UNDERSTAND THIS WILL ERASE THE SELECTED DISK".to_string());
+            items.push("".to_string());
+            items.push(format!("Input: {}", app.execute_confirmation_input));
+            items.push("".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  Type phrase — Input must match exactly".to_string());
+            items.push("  Enter — Submit".to_string());
+            items.push("  Esc — Cancel and go back".to_string());
+            items.push("".to_string());
+
+            // Repeat the destructive intent summary.
+            if let Some(distro) = app.os_distros.get(app.os_distro_index) {
+                items.push(format!("Distro: {}", distro.display()));
+            }
+            if let Some(variant) = app.os_variants.get(app.os_variant_index) {
+                items.push(format!("Flavour: {}", variant.label));
+            }
+            if let Some(disk) = app.disks.get(app.disk_index) {
+                let disk_info = match &disk.identity {
+                    Some(identity) => identity.display_string(),
+                    None => "❌ IDENTITY FAILED".to_string(),
+                };
+                items.push(format!("Disk: {} - {}", disk.path, disk_info));
+            }
+            if let Some(scheme) = app.partition_schemes.get(app.scheme_index) {
+                items.push(format!("Scheme: {}", scheme));
+            }
+            items.push(format!(
+                "Partitions: EFI {} | BOOT {} | ROOT {} | DATA remainder",
+                app.efi_size, app.boot_size, app.root_end
+            ));
+            let download_efi = matches!(
+                app.uefi_sources.get(app.uefi_source_index),
+                Some(super::flash_config::EfiSource::DownloadEfiImage)
+            );
+            if download_efi {
+                items.push("EFI image: Download".to_string());
+            } else {
+                items.push("EFI image: Local".to_string());
+            }
+            items.push(format!("EFI path: {}", app.uefi_source_path));
+
             if let Some(error) = &app.error_message {
                 items.push(format!("❌ {}", error));
             }
@@ -798,7 +877,12 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
             push_options(&mut items, &["Viewing live telemetry".to_string()], 0);
         }
         InstallStepType::Complete => {
-            items.push("🎉 Installation complete.".to_string());
+            if app.completion_lines.is_empty() {
+                items.push("🎉 Installation complete.".to_string());
+            } else {
+                items.extend(app.completion_lines.clone());
+            }
+            items.push("".to_string());
             items.push("Press Enter to exit.".to_string());
             push_options(&mut items, &["Exit installer".to_string()], 0);
         }
@@ -810,6 +894,7 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
             InstallStepType::PartitionCustomize
                 | InstallStepType::DiskConfirmation
                 | InstallStepType::Confirmation
+                | InstallStepType::ExecuteConfirmationGate
                 | InstallStepType::DisarmSafeMode
         ) {
             return items;
@@ -903,6 +988,7 @@ fn expected_actions(step: InstallStepType) -> String {
         }
         InstallStepType::PlanReview => "Enter, Esc, q".to_string(),
         InstallStepType::Confirmation => "Enter, Esc, q".to_string(),
+        InstallStepType::ExecuteConfirmationGate => "Type EXACT phrase, Enter, Esc, q".to_string(),
         InstallStepType::DisarmSafeMode => "Type DESTROY, Enter, Esc, q".to_string(),
         InstallStepType::DiskSelection
         | InstallStepType::ImageSelection

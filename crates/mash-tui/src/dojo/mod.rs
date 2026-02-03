@@ -19,8 +19,8 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use mash_core::cli::Cli;
-use mash_core::download::DownloadProgress;
 use mash_core::download_manager;
+use mash_core::downloader::DownloadProgress;
 use mash_core::flash;
 use mash_workflow::installer;
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -131,18 +131,6 @@ pub fn run_new_ui(
             }
         }
 
-        if app.current_step_type == dojo_app::InstallStepType::Flashing {
-            let is_complete = app
-                .progress_state
-                .lock()
-                .map(|state| state.is_complete)
-                .unwrap_or(false);
-            if is_complete {
-                app.current_step_type = dojo_app::InstallStepType::Complete;
-                app.status_message = "🎉 Dry-run complete.".to_string();
-            }
-        }
-
         if let Some(ref rx) = flash_result_rx {
             if let Ok(result) = rx.try_recv() {
                 match result {
@@ -153,10 +141,15 @@ pub fn run_new_ui(
                             }
                             app.error_message = Some("Download cancelled.".to_string());
                             app.status_message = "🛑 Download cancelled.".to_string();
+                            app.is_running = false;
                         } else {
+                            let completion = build_completion_lines(&outcome);
                             app.downloaded_image_path = outcome.image_path;
                             app.downloaded_uefi_dir = outcome.uefi_dir;
-                            app.status_message = "✅ Downloads complete.".to_string();
+                            app.is_running = false;
+                            app.current_step_type = dojo_app::InstallStepType::Complete;
+                            app.completion_lines = completion;
+                            app.status_message = "✅ Complete.".to_string();
                         }
                     }
                     Err(err) => {
@@ -167,12 +160,14 @@ pub fn run_new_ui(
                             }
                             app.error_message = Some("Execution cancelled.".to_string());
                             app.status_message = "🛑 Execution cancelled.".to_string();
+                            app.is_running = false;
                         } else {
                             if let Ok(mut state) = app.progress_state.lock() {
                                 state.apply_update(ProgressUpdate::Error(msg.clone()));
                             }
                             app.error_message = Some(format!("Execution failed: {}", msg));
                             app.status_message = "❌ Execution failed.".to_string();
+                            app.is_running = false;
                         }
                     }
                 }
@@ -181,10 +176,48 @@ pub fn run_new_ui(
     }
 }
 
+fn build_completion_lines(outcome: &DownloadOutcome) -> Vec<String> {
+    let mut lines = Vec::new();
+    if outcome.dry_run {
+        lines.push("✅ DRY-RUN complete.".to_string());
+        lines.push("No disk writes occurred.".to_string());
+        lines.push("".to_string());
+        lines.push(format!(
+            "Selected: {} ({})",
+            outcome.os_distro_label, outcome.os_flavour_label
+        ));
+        lines.push("".to_string());
+        lines.push("Report: /mash/install-report.json".to_string());
+        return lines;
+    }
+
+    lines.push("🎉 Installation complete.".to_string());
+    lines.push(format!(
+        "Installed: {} ({})",
+        outcome.os_distro_label, outcome.os_flavour_label
+    ));
+    lines.push("".to_string());
+    lines.push("Next steps:".to_string());
+    lines.push("1) Safely remove the installer media.".to_string());
+    lines.push("2) Insert the target media into the Raspberry Pi and boot.".to_string());
+    lines.push("3) Follow the first-boot prompts.".to_string());
+    if outcome.post_boot_partition_expansion_required {
+        lines.push("".to_string());
+        lines.push("⚠️ Note (Manjaro): post-boot partition expansion is required.".to_string());
+    }
+    lines.push("".to_string());
+    lines.push("Report: /mash/install-report.json".to_string());
+    lines
+}
+
 struct DownloadOutcome {
     image_path: Option<PathBuf>,
     uefi_dir: Option<PathBuf>,
     cancelled: bool,
+    post_boot_partition_expansion_required: bool,
+    os_distro_label: String,
+    os_flavour_label: String,
+    dry_run: bool,
 }
 
 fn run_execution_pipeline(
@@ -200,7 +233,7 @@ fn run_execution_pipeline(
         }
     };
 
-    // Fedora uses the existing installer behavior; other OS profiles use the new stage-runner flow.
+    // Fedora uses the full-loop installer; other OS profiles flash upstream full-disk images.
     if matches!(config.os_distro, flash_config::OsDistro::Fedora) {
         let mut downloaded_image = None;
         let mut downloaded_uefi = None;
@@ -247,6 +280,10 @@ fn run_execution_pipeline(
                             image_path: None,
                             uefi_dir: None,
                             cancelled: true,
+                            post_boot_partition_expansion_required: false,
+                            os_distro_label: config.os_distro_label.clone(),
+                            os_flavour_label: config.os_flavour_label.clone(),
+                            dry_run: config.dry_run,
                         });
                     }
                     send(ProgressUpdate::Error(err.to_string()));
@@ -296,6 +333,10 @@ fn run_execution_pipeline(
                             image_path: downloaded_image,
                             uefi_dir: None,
                             cancelled: true,
+                            post_boot_partition_expansion_required: false,
+                            os_distro_label: config.os_distro_label.clone(),
+                            os_flavour_label: config.os_flavour_label.clone(),
+                            dry_run: config.dry_run,
                         });
                     }
                     send(ProgressUpdate::Error(err.to_string()));
@@ -320,6 +361,10 @@ fn run_execution_pipeline(
                 image_path: None,
                 uefi_dir: None,
                 cancelled: true,
+                post_boot_partition_expansion_required: false,
+                os_distro_label: config.os_distro_label.clone(),
+                os_flavour_label: config.os_flavour_label.clone(),
+                dry_run: config.dry_run,
             });
         }
 
@@ -331,7 +376,14 @@ fn run_execution_pipeline(
         }
 
         let flash_cfg: flash::FlashConfig = config.clone().try_into()?;
-        let flash_result = flash::run_with_progress(&flash_cfg, yes_i_know);
+        let hal: std::sync::Arc<dyn mash_hal::InstallerHal> =
+            std::sync::Arc::new(mash_hal::LinuxHal::new());
+        let flash_result = flash::run_with_progress_with_confirmation_with_hal(
+            &flash_cfg,
+            yes_i_know,
+            config.typed_execute_confirmation,
+            hal,
+        );
         flash::clear_cancel_flag();
 
         match flash_result {
@@ -339,6 +391,10 @@ fn run_execution_pipeline(
                 image_path: downloaded_image,
                 uefi_dir: downloaded_uefi,
                 cancelled: false,
+                post_boot_partition_expansion_required: false,
+                os_distro_label: config.os_distro_label.clone(),
+                os_flavour_label: config.os_flavour_label.clone(),
+                dry_run: config.dry_run,
             }),
             Err(err) => Err(err),
         }
@@ -365,24 +421,49 @@ fn run_execution_pipeline(
         };
 
         let hal = mash_hal::LinuxHal::new();
-        let result =
-            installer::os_install::run(&hal, &install_cfg, yes_i_know, Some(cancel_flag.as_ref()));
+        let result = installer::os_install::run(
+            &hal,
+            &install_cfg,
+            yes_i_know,
+            config.typed_execute_confirmation,
+            Some(cancel_flag.as_ref()),
+        );
         flash::clear_cancel_flag();
 
         match result {
-            Ok(_state) => Ok(DownloadOutcome {
-                image_path: Some(config.image),
-                uefi_dir: None,
-                cancelled: false,
-            }),
+            Ok(state) => {
+                if let Some(ref tx) = config.progress_tx {
+                    let _ = tx.send(ProgressUpdate::Complete);
+                }
+                Ok(DownloadOutcome {
+                    image_path: Some(config.image),
+                    uefi_dir: None,
+                    cancelled: false,
+                    post_boot_partition_expansion_required: state
+                        .post_boot_partition_expansion_required,
+                    os_distro_label: config.os_distro_label.clone(),
+                    os_flavour_label: config.os_flavour_label.clone(),
+                    dry_run: config.dry_run,
+                })
+            }
             Err(err) => {
                 if err.to_string().to_lowercase().contains("cancel") {
+                    if let Some(ref tx) = config.progress_tx {
+                        let _ = tx.send(ProgressUpdate::Error("Cancelled".to_string()));
+                    }
                     Ok(DownloadOutcome {
                         image_path: None,
                         uefi_dir: None,
                         cancelled: true,
+                        post_boot_partition_expansion_required: false,
+                        os_distro_label: config.os_distro_label.clone(),
+                        os_flavour_label: config.os_flavour_label.clone(),
+                        dry_run: config.dry_run,
                     })
                 } else {
+                    if let Some(ref tx) = config.progress_tx {
+                        let _ = tx.send(ProgressUpdate::Error(err.to_string()));
+                    }
                     Err(err)
                 }
             }
