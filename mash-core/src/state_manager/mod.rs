@@ -35,7 +35,9 @@ pub struct InstallState {
     pub completed_stages: Vec<StageName>,
     pub download_artifacts: Vec<DownloadArtifact>,
     pub verified_checksums: Vec<String>,
+    pub formatted_devices: Vec<String>,
     pub partial_ok_resume: bool,
+    pub boot_stage_completed: bool,
 }
 
 impl InstallState {
@@ -47,7 +49,9 @@ impl InstallState {
             completed_stages: Vec::new(),
             download_artifacts: Vec::new(),
             verified_checksums: Vec::new(),
+            formatted_devices: Vec::new(),
             partial_ok_resume: false,
+            boot_stage_completed: false,
         }
     }
 
@@ -68,6 +72,17 @@ impl InstallState {
 
     pub fn record_download(&mut self, artifact: DownloadArtifact) {
         self.download_artifacts.push(artifact);
+    }
+
+    pub fn record_formatted_device(&mut self, device: &Path) {
+        let name = device.display().to_string();
+        if !self.formatted_devices.iter().any(|entry| entry == &name) {
+            self.formatted_devices.push(name);
+        }
+    }
+
+    pub fn mark_boot_completed(&mut self) {
+        self.boot_stage_completed = true;
     }
 
     pub fn mark_checksum_verified(&mut self, checksum: &str) {

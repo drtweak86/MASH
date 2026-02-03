@@ -148,18 +148,18 @@ pub fn download(opts: &DownloadOptions) -> Result<DownloadArtifact> {
     for attempt in 1..=opts.max_retries.max(1) {
         info!("Download attempt {}/{}", attempt, opts.max_retries.max(1));
         let result = if opts.resume && target.exists() {
-            match download_with_resume(&client, &spec.mirrors, &target) {
+            match download_with_resume(&client, &spec.mirrors, &target, attempt) {
                 Ok(size) => {
                     resumed = true;
                     Ok(size)
                 }
                 Err(_) => {
                     let _ = fs::remove_file(&target);
-                    download_full(&client, &spec.mirrors, &target)
+                    download_full(&client, &spec.mirrors, &target, attempt)
                 }
             }
         } else {
-            download_full(&client, &spec.mirrors, &target)
+            download_full(&client, &spec.mirrors, &target, attempt)
         };
         match result {
             Ok(_) => {
@@ -186,10 +186,18 @@ pub fn download(opts: &DownloadOptions) -> Result<DownloadArtifact> {
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("download failed")))
 }
 
-fn download_full(client: &Client, mirrors: &[String], target: &Path) -> Result<u64> {
+fn download_full(
+    client: &Client,
+    mirrors: &[String],
+    target: &Path,
+    attempt: usize,
+) -> Result<u64> {
     let mut last_err = None;
     for mirror in mirrors {
-        let response = client.get(mirror).send();
+        let response = client
+            .get(mirror)
+            .header("X-MASH-ATTEMPT", attempt.to_string())
+            .send();
         match response {
             Ok(mut response) => {
                 if !response.status().is_success() {
@@ -208,7 +216,12 @@ fn download_full(client: &Client, mirrors: &[String], target: &Path) -> Result<u
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("all mirrors failed")))
 }
 
-fn download_with_resume(client: &Client, mirrors: &[String], target: &Path) -> Result<u64> {
+fn download_with_resume(
+    client: &Client,
+    mirrors: &[String],
+    target: &Path,
+    attempt: usize,
+) -> Result<u64> {
     let current_len = target.metadata().map(|m| m.len()).unwrap_or(0);
     if current_len == 0 {
         return Err(anyhow::anyhow!("resume requested but no partial file"));
@@ -216,6 +229,7 @@ fn download_with_resume(client: &Client, mirrors: &[String], target: &Path) -> R
     for mirror in mirrors {
         let response = client
             .get(mirror)
+            .header("X-MASH-ATTEMPT", attempt.to_string())
             .header("Range", format!("bytes={}-", current_len))
             .send();
         match response {
@@ -264,7 +278,9 @@ mod tests {
         let body = b"abcdef";
         let checksum = format!("{:x}", Sha256::digest(body));
         server.mock(|when, then| {
-            when.method(GET).path("/image");
+            when.method(GET)
+                .path("/image")
+                .header("x-mash-attempt", "1");
             then.status(200).body(body);
         });
         let opts = make_opts(&server, &checksum);
@@ -290,11 +306,15 @@ mod tests {
         let body = b"retry";
         let checksum = format!("{:x}", Sha256::digest(body));
         server.mock(|when, then| {
-            when.method(GET).path("/image");
+            when.method(GET)
+                .path("/image")
+                .header("x-mash-attempt", "1");
             then.status(500);
         });
         server.mock(|when, then| {
-            when.method(GET).path("/image");
+            when.method(GET)
+                .path("/image")
+                .header("x-mash-attempt", "2");
             then.status(200).body(body);
         });
         let opts = make_opts(&server, &checksum);
@@ -308,7 +328,10 @@ mod tests {
         let body = b"0123456789";
         let checksum = format!("{:x}", Sha256::digest(body));
         server.mock(|when, then| {
-            when.method(GET).path("/image").header("range", "bytes=5-");
+            when.method(GET)
+                .path("/image")
+                .header("range", "bytes=5-")
+                .header("x-mash-attempt", "1");
             then.status(206).body(&body[5..]);
         });
         let opts = make_opts(&server, &checksum);

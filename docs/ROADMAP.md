@@ -7,13 +7,13 @@ This document summarizes the phased TUI evolution and the next recommended steps
 ## Phase B1 - Stub-backed UI state
 
 Goal:
-- Get the entire wizard rendering end-to-end without any real disk logic.
+- Get the entire Dojo UI rendering end-to-end without any real disk logic.
 
 Why:
 - Enable rapid UI iteration while keeping the system safe and CI green.
 
 How:
-- Added `tui/new_app.rs` + `tui/new_ui.rs` with in-memory stub options.
+- Added `tui/dojo_app.rs` + `tui/dojo_ui.rs` with in-memory stub options.
 - Ensured forward/back navigation and a coherent confirmation summary.
 
 Result:

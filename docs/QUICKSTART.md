@@ -70,7 +70,7 @@ nvme0n1    500G   disk            ← System drive (DON'T USE!)
 
 ### Option A: Interactive TUI (Recommended)
 
-Launch the wizard and follow the prompts:
+Launch the Dojo UI and follow the prompts:
 
 ```bash
 sudo mash
@@ -266,4 +266,4 @@ sudo passwd yourusername
 
 ---
 
-**Ready to install?** Run `sudo mash` and follow the wizard! 🍠
+**Ready to install?** Run `sudo mash` and follow the Dojo UI! 🍠

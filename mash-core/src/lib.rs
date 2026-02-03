@@ -1,7 +1,7 @@
 //! 🍠 MASH - Fedora KDE for Raspberry Pi 4B
 //!
-//! A friendly TUI wizard for installing Fedora KDE on Raspberry Pi 4 with UEFI boot.
-//! Run without arguments to launch the interactive TUI wizard.
+//! A friendly Dojo UI (TUI) for installing Fedora KDE on Raspberry Pi 4 with UEFI boot.
+//! Run without arguments to launch the interactive Dojo UI.
 
 #![allow(dead_code)] // Future use
 #![allow(clippy::too_many_arguments)] // Installer config has many params
@@ -26,6 +26,9 @@ pub mod state_manager;
 pub mod system_config;
 mod tui;
 
+#[cfg(test)]
+pub mod test_env;
+
 pub fn run() -> anyhow::Result<()> {
     logging::init();
     let cli = cli::Cli::parse();
@@ -42,9 +45,9 @@ pub fn run() -> anyhow::Result<()> {
     }
 
     match &cli.command {
-        // No subcommand = launch TUI wizard (default)
+        // No subcommand = launch Dojo UI (default)
         None => {
-            log::info!("🎉 Launching MASH TUI wizard...");
+            log::info!("🎉 Launching MASH Dojo UI...");
             tui::run(&cli, cli.watch, cli.dry_run)?;
         }
         // Preflight checks

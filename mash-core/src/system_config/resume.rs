@@ -1,7 +1,9 @@
 use crate::system_config::services;
 use anyhow::{Context, Result};
+use once_cell::sync::Lazy;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use zbus::blocking::Connection;
 
 const UNIT_NAME: &str = "mash-core-resume.service";
@@ -9,6 +11,11 @@ const UNIT_NAME: &str = "mash-core-resume.service";
 pub fn resume_unit_name() -> &'static str {
     UNIT_NAME
 }
+
+type ConnectionFactory = Box<dyn Fn() -> Option<Connection> + Send + Sync + 'static>;
+
+static CONNECTION_FACTORY: Lazy<Mutex<ConnectionFactory>> =
+    Lazy::new(|| Mutex::new(Box::new(|| Connection::system().ok())));
 
 pub fn render_resume_unit(exec_path: &Path, state_path: &Path) -> String {
     format!(
@@ -40,6 +47,20 @@ pub fn request_reboot(dry_run: bool) -> Result<()> {
     }
     log::info!("Reboot requested (no-op scaffold).");
     Ok(())
+}
+
+pub fn connect_systemd() -> Option<Connection> {
+    (CONNECTION_FACTORY.lock().unwrap())()
+}
+
+#[cfg(test)]
+pub fn set_connection_factory(factory: impl Fn() -> Option<Connection> + Send + Sync + 'static) {
+    *CONNECTION_FACTORY.lock().unwrap() = Box::new(factory);
+}
+
+#[cfg(test)]
+pub fn reset_connection_factory() {
+    set_connection_factory(|| Connection::system().ok());
 }
 
 fn backup_if_exists(path: &Path) -> Result<()> {

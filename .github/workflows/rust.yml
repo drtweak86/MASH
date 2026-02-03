@@ -40,3 +40,17 @@ jobs:
       - name: Test
         working-directory: mash-installer
         run: cargo test
+
+  libdnf_feature:
+    runs-on: ubuntu-latest
+    container: fedora:41
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: dnf -y install rust cargo gcc-c++ make pkgconf-pkg-config libdnf5-devel
+
+      - name: Test mash-core with libdnf feature
+        run: cargo test -p mash-core --features libdnf

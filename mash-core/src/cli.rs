@@ -26,8 +26,8 @@ impl std::fmt::Display for PartitionScheme {
 #[command(name = "mash")]
 #[command(about = "🍠 MASH - Fedora KDE for Raspberry Pi 4B")]
 #[command(long_about = "🍠 MASH - Fedora KDE for Raspberry Pi 4B\n\n\
-    A friendly TUI wizard for installing Fedora KDE on Raspberry Pi 4 with UEFI boot.\n\n\
-    Run without arguments to launch the interactive TUI wizard (recommended! 🎉)\n\
+    A friendly Dojo UI (TUI) for installing Fedora KDE on Raspberry Pi 4 with UEFI boot.\n\n\
+    Run without arguments to launch the interactive Dojo UI (recommended! 🎉)\n\
     Or use subcommands for CLI scripting.")]
 pub struct Cli {
     #[command(subcommand)]

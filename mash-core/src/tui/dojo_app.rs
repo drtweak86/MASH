@@ -177,7 +177,7 @@ pub enum DownloadType {
 // TUI Install Steps
 // ============================================================================
 
-/// Defines the sequence of steps in the TUI wizard
+/// Defines the sequence of steps in the Dojo UI
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallStepType {
     Welcome,
@@ -523,7 +523,7 @@ impl App {
             backup_choice_index: 1,
             welcome_options: vec![
                 "Begin installation".to_string(),
-                "Review wizard steps".to_string(),
+                "Review Dojo steps".to_string(),
             ],
             welcome_index: 0,
             disks,

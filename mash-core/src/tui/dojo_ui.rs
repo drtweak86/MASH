@@ -1,7 +1,7 @@
 #![allow(clippy::items_after_test_module)]
-//! New UI module for the single-screen TUI
+//! Dojo UI module for the single-screen TUI
 
-use crate::tui::new_app::{App, InstallStepType};
+use crate::tui::dojo_app::{App, InstallStepType};
 use crate::tui::progress::{Phase, ProgressState};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
@@ -43,12 +43,12 @@ pub fn draw(f: &mut Frame, app: &App) {
     f.render_widget(title, chunks[0]);
 
     // Current Step Display
-    let wizard_lines = build_wizard_lines(app);
-    let list_items = wizard_lines
+    let dojo_lines = build_dojo_lines(app);
+    let list_items = dojo_lines
         .into_iter()
         .map(ListItem::new)
         .collect::<Vec<_>>();
-    let list = List::new(list_items).block(Block::default().borders(Borders::ALL).title("Wizard"));
+    let list = List::new(list_items).block(Block::default().borders(Borders::ALL).title("Dojo"));
     f.render_widget(list, chunks[1]);
 
     // Progress bar
@@ -84,14 +84,14 @@ pub fn draw(f: &mut Frame, app: &App) {
 
 pub fn dump_step(app: &App) -> String {
     let progress_state = app.progress_state_snapshot();
-    let wizard_lines = build_wizard_lines(app);
+    let dojo_lines = build_dojo_lines(app);
     let header = "MASH Installer";
-    let wizard_hint = wizard_lines
+    let dojo_hint = dojo_lines
         .first()
         .cloned()
         .unwrap_or_else(|| "🧭 Step: (unknown)".to_string());
-    let body_lines = if wizard_lines.len() > 1 {
-        wizard_lines[1..].join("\n")
+    let body_lines = if dojo_lines.len() > 1 {
+        dojo_lines[1..].join("\n")
     } else {
         "(no body content)".to_string()
     };
@@ -105,10 +105,10 @@ pub fn dump_step(app: &App) -> String {
     let actions = expected_actions(app.current_step_type);
 
     format!(
-        "STEP: {}\n\n- Header: {}\n- Wizard hint line: {}\n- Body contents:\n{}\n- Footer/progress/telemetry/status blocks:\nProgress: {}%\nTelemetry: {}\nStatus: {}\n- Expected user actions (keys): {}\n",
+        "STEP: {}\n\n- Header: {}\n- Dojo hint line: {}\n- Body contents:\n{}\n- Footer/progress/telemetry/status blocks:\nProgress: {}%\nTelemetry: {}\nStatus: {}\n- Expected user actions (keys): {}\n",
         app.current_step_type.title(),
         header,
-        wizard_hint,
+        dojo_hint,
         body_lines,
         percent,
         telemetry,
@@ -117,7 +117,7 @@ pub fn dump_step(app: &App) -> String {
     )
 }
 
-fn build_wizard_lines(app: &App) -> Vec<String> {
+fn build_dojo_lines(app: &App) -> Vec<String> {
     let current_step_title = app.current_step_type.title();
     let mut items = Vec::new();
     items.push(format!("🧭 Step: {}", current_step_title));
@@ -223,9 +223,9 @@ fn build_wizard_lines(app: &App) -> Vec<String> {
                 .enumerate()
                 .map(|(idx, option)| {
                     let field = match idx {
-                        0 => Some(crate::tui::new_app::CustomizeField::Efi),
-                        1 => Some(crate::tui::new_app::CustomizeField::Boot),
-                        2 => Some(crate::tui::new_app::CustomizeField::Root),
+                        0 => Some(crate::tui::dojo_app::CustomizeField::Efi),
+                        1 => Some(crate::tui::dojo_app::CustomizeField::Boot),
+                        2 => Some(crate::tui::dojo_app::CustomizeField::Root),
                         _ => None,
                     };
                     if field.is_some() && app.customize_error_field == field {
@@ -552,7 +552,7 @@ fn push_options(items: &mut Vec<String>, options: &[String], selected: usize) {
     }
 }
 
-fn build_plan_lines(app: &crate::tui::new_app::App) -> Vec<String> {
+fn build_plan_lines(app: &crate::tui::dojo_app::App) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(disk) = app.disks.get(app.disk_index) {
         lines.push(format!("Disk: {} ({})", disk.path, disk.size));
@@ -595,7 +595,7 @@ fn expected_actions(step: InstallStepType) -> String {
     }
 }
 
-fn format_disk_entry(disk: &crate::tui::new_app::DiskOption) -> String {
+fn format_disk_entry(disk: &crate::tui::dojo_app::DiskOption) -> String {
     let model = disk.model.as_deref().unwrap_or("Unknown model").trim();
     let mut tags = Vec::new();
     if disk.removable {
@@ -618,8 +618,8 @@ mod tests {
 
     #[test]
     fn plan_review_renders_summary() {
-        let mut app = crate::tui::new_app::App::new_with_flags(true);
-        app.current_step_type = crate::tui::new_app::InstallStepType::PlanReview;
+        let mut app = crate::tui::dojo_app::App::new_with_flags(true);
+        app.current_step_type = crate::tui::dojo_app::InstallStepType::PlanReview;
         let dump = dump_step(&app);
         assert!(dump.contains("Execution plan"));
         assert!(dump.contains("Reboots"));
