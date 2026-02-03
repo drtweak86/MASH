@@ -3,7 +3,8 @@
 # This file documents the TOML shape deserialized by `mash-core::dojo_catalogue`.
 #
 # Notes:
-# - Fedora-first guard: `supported_distros = ["fedora"]` is required for now.
+# - Fedora-first guard is applied in the UI by filtering to options whose
+#   `supported_distros` includes the detected distro (currently Fedora in Dojo).
 # - `conflicts_with` must be symmetric (A lists B and B lists A).
 #
 # This is a schema/example reference; the actual catalogue entries will live in
@@ -43,4 +44,3 @@ description = "Choose one shell (conflicts are enforced)."
   default_tier = "alternative"
   risk_level = "safe"
   supported_distros = ["fedora"]
-
