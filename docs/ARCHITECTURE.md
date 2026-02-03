@@ -25,7 +25,7 @@ The installer operates by:
 
 ### TUI Mode (Default)
 
-When run without subcommands, MASH launches an interactive terminal wizard:
+When run without subcommands, MASH launches an interactive terminal Dojo UI:
 
 ```bash
 sudo mash
@@ -36,7 +36,7 @@ The TUI uses Ratatui to render a single-screen interface showing:
 - Progress bar
 - Status messages
 
-**Entry point:** `tui::run()` → `new_app::App` + `new_ui::draw()`
+**Entry point:** `tui::run()` → `dojo_app::App` + `dojo_ui::draw()`
 
 ### TUI Evolution: Phase B1 → B3
 
@@ -45,12 +45,12 @@ The TUI has been built in phases to keep CI green while progressively replacing 
 #### Phase B1 - Stub-backed UI State (no real disk logic)
 
 What changed and why:
-- Goal: get a complete wizard flow on-screen quickly, with selectable options everywhere and no blank screens.
+- Goal: get a complete Dojo UI flow on-screen quickly, with selectable options everywhere and no blank screens.
 - Reason: enable UI iteration without any dependency on disk scanning, downloads, or flashing.
 
 How it was implemented:
-- Added a single-screen wizard state machine in `tui/new_app.rs` with explicit step types.
-- Built full step rendering in `tui/new_ui.rs` using in-memory stub lists.
+- Added a single-screen Dojo UI state machine in `tui/dojo_app.rs` with explicit step types.
+- Built full step rendering in `tui/dojo_ui.rs` using in-memory stub lists.
 - Added progress scaffolding in `tui/progress.rs` to render telemetry without depending on real operations.
 - Kept any flashing logic untouched; UI flow driven entirely by stub state.
 
@@ -61,7 +61,7 @@ Result:
 #### Phase B2 - TUI Flow Completion (stub-safe)
 
 What changed and why:
-- Goal: ensure every wizard step is reachable in sequence and selectable.
+- Goal: ensure every Dojo UI step is reachable in sequence and selectable.
 - Reason: eliminate dead ends and placeholder content before introducing real data sources.
 
 How it was implemented:
@@ -71,7 +71,7 @@ How it was implemented:
 - Expanded confirmation summary to include more selected values.
 
 Result:
-- The entire wizard path is traversable from Welcome to Complete using only stub state.
+- The entire Dojo UI path is traversable from Welcome to Complete using only stub state.
 - Download steps are simulated but selectable, with no side effects.
 
 #### Phase B3 - Read-only data plumbing behind feature flags
@@ -129,8 +129,8 @@ src/
 ├── logging.rs        # Log setup
 └── tui/
     ├── mod.rs        # Terminal setup, main loop
-    ├── new_app.rs    # App state, InstallStep, ProgressEvent
-    ├── new_ui.rs     # UI rendering
+    ├── dojo_app.rs   # App state, InstallStep, ProgressEvent
+    ├── dojo_ui.rs    # UI rendering
     ├── flash_config.rs # FlashConfig struct
     ├── progress.rs   # Phase tracking
     ├── input.rs      # Text input widget
@@ -316,7 +316,14 @@ The `tui/app.rs` and `tui/ui.rs` modules contain a previous multi-screen wizard 
 - Not the default entry point
 - Preserved for reference
 
-The current default uses `tui/new_app.rs` and `tui/new_ui.rs`.
+The current default uses `tui/dojo_app.rs` and `tui/dojo_ui.rs`.
+
+## Naming Map (Historical -> Current)
+
+| Old name | New name | Notes |
+|---|---|---|
+| `tui/new_app.rs` | `tui/dojo_app.rs` | “Dojo” = the primary interactive installer flow |
+| `tui/new_ui.rs` | `tui/dojo_ui.rs` | Rendering for Dojo UI |
 
 ---
 

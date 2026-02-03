@@ -91,7 +91,7 @@ impl ImageEditionOption {
     }
 }
 
-/// Flash configuration collected from the wizard
+/// Flash configuration collected from the Dojo UI
 #[derive(Debug, Clone)]
 pub struct FlashConfig {
     pub image: PathBuf,

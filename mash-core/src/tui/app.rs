@@ -1,4 +1,4 @@
-//! Application state machine for the TUI wizard
+//! Legacy application state machine for the multi-screen TUI wizard
 #![allow(dead_code)]
 #![allow(clippy::collapsible_else_if)]
 
@@ -13,7 +13,7 @@ use super::flash_config::{FlashConfig, ImageEditionOption, ImageSource, ImageVer
 use super::input::{InputField, InputMode};
 use super::progress::{Phase, ProgressState};
 use super::widgets::DiskInfo;
-use crate::tui::new_app::{DownloadType, InputResult};
+use crate::tui::dojo_app::{DownloadType, InputResult};
 
 // ============================================================================
 // Configuration Steps (user input phase)
@@ -316,7 +316,7 @@ impl Default for InstallationState {
 // Legacy InstallStep (retained for backward compatibility during transition)
 // ============================================================================
 
-/// Defines the sub-tasks or steps within the main installation wizard screen.
+/// Defines the sub-tasks or steps within the legacy installation wizard screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallStep {
     Welcome,
@@ -1402,7 +1402,7 @@ impl App {
         tx
     }
 
-    /// Get the flash configuration if wizard completed
+    /// Get the flash configuration if the wizard completed
     pub fn get_flash_config(&self) -> Option<FlashConfig> {
         // If not in flashing or complete state, config is not ready
         if self.current_step != InstallStep::Flashing && self.current_step != InstallStep::Complete

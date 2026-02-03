@@ -1,7 +1,7 @@
 //! 🍠 MASH - Fedora KDE for Raspberry Pi 4B
 //!
-//! A friendly TUI wizard for installing Fedora KDE on Raspberry Pi 4 with UEFI boot.
-//! Run without arguments to launch the interactive TUI wizard.
+//! A friendly Dojo UI (TUI) for installing Fedora KDE on Raspberry Pi 4 with UEFI boot.
+//! Run without arguments to launch the interactive Dojo UI.
 
 #![allow(dead_code)] // Future use
 #![allow(clippy::too_many_arguments)] // Installer config has many params
@@ -13,6 +13,7 @@ pub mod boot_config;
 mod cli;
 pub mod disk_ops;
 mod download;
+pub mod downloader;
 mod errors;
 mod flash;
 pub mod installer;
@@ -24,6 +25,9 @@ mod stages;
 pub mod state_manager;
 pub mod system_config;
 mod tui;
+
+#[cfg(test)]
+pub mod test_env;
 
 pub fn run() -> anyhow::Result<()> {
     logging::init();
@@ -41,15 +45,15 @@ pub fn run() -> anyhow::Result<()> {
     }
 
     match &cli.command {
-        // No subcommand = launch TUI wizard (default)
+        // No subcommand = launch Dojo UI (default)
         None => {
-            log::info!("🎉 Launching MASH TUI wizard...");
+            log::info!("🎉 Launching MASH Dojo UI...");
             tui::run(&cli, cli.watch, cli.dry_run)?;
         }
         // Preflight checks
         Some(cli::Command::Preflight) => {
             log::info!("🔍 Running preflight checks...");
-            preflight::run(cli.dry_run)?;
+            preflight::run(&preflight::PreflightConfig::default())?;
             return Ok(()); // Exit after preflight
         }
         // CLI flash mode (for scripting)
@@ -161,11 +165,18 @@ pub fn run() -> anyhow::Result<()> {
             mountinfo_path,
             by_uuid_path,
             reboots,
+            download_mirror,
+            download_checksum,
+            download_checksum_url,
+            download_timeout_secs,
+            download_retries,
+            download_dir,
         }) => {
             let mounts = mount
                 .iter()
                 .filter_map(|spec| parse_mount_spec(spec))
                 .collect::<Vec<_>>();
+            let download_dir = cli.mash_root.join(download_dir);
             let cfg = installer::pipeline::InstallConfig {
                 dry_run: *dry_run,
                 execute: *execute,
@@ -181,6 +192,17 @@ pub fn run() -> anyhow::Result<()> {
                 mountinfo_path: mountinfo_path.clone(),
                 by_uuid_path: by_uuid_path.clone(),
                 reboot_count: *reboots,
+                mash_root: cli.mash_root.clone(),
+                download_image: false,
+                download_uefi: false,
+                image_version: "43".to_string(),
+                image_edition: "KDE".to_string(),
+                download_mirror: download_mirror.clone(),
+                download_checksum: download_checksum.clone(),
+                download_checksum_url: download_checksum_url.clone(),
+                download_timeout_secs: *download_timeout_secs,
+                download_retries: *download_retries,
+                download_dir,
             };
 
             let plan = installer::pipeline::run_pipeline(&cfg)?;

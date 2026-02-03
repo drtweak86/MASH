@@ -26,8 +26,8 @@ impl std::fmt::Display for PartitionScheme {
 #[command(name = "mash")]
 #[command(about = "🍠 MASH - Fedora KDE for Raspberry Pi 4B")]
 #[command(long_about = "🍠 MASH - Fedora KDE for Raspberry Pi 4B\n\n\
-    A friendly TUI wizard for installing Fedora KDE on Raspberry Pi 4 with UEFI boot.\n\n\
-    Run without arguments to launch the interactive TUI wizard (recommended! 🎉)\n\
+    A friendly Dojo UI (TUI) for installing Fedora KDE on Raspberry Pi 4 with UEFI boot.\n\n\
+    Run without arguments to launch the interactive Dojo UI (recommended! 🎉)\n\
     Or use subcommands for CLI scripting.")]
 pub struct Cli {
     #[command(subcommand)]
@@ -195,5 +195,29 @@ pub enum Command {
         /// Expected reboot count
         #[arg(long, default_value_t = 1)]
         reboots: u32,
+
+        /// Mirror override for Fedora downloads
+        #[arg(long)]
+        download_mirror: Option<String>,
+
+        /// Inline checksum (SHA256) for the download override
+        #[arg(long)]
+        download_checksum: Option<String>,
+
+        /// URL to fetch the checksum from
+        #[arg(long)]
+        download_checksum_url: Option<String>,
+
+        /// Timeout for download HTTP operations (seconds)
+        #[arg(long, default_value_t = 120)]
+        download_timeout_secs: u64,
+
+        /// Number of retries for download attempts
+        #[arg(long, default_value_t = 3)]
+        download_retries: usize,
+
+        /// Directory (relative to mash root) for downloaded assets
+        #[arg(long, default_value = "downloads/images")]
+        download_dir: PathBuf,
     },
 }

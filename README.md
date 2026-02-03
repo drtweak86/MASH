@@ -23,7 +23,7 @@ MASH is an opinionated installer that automates Fedora KDE installation on Raspb
 
 ### 1. Interactive TUI Mode (Recommended)
 
-Launch the terminal wizard — it guides you through every step:
+Launch the Dojo UI — it guides you through every step:
 
 ```bash
 sudo mash

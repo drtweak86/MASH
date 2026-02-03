@@ -7,11 +7,37 @@ use std::path::{Path, PathBuf};
 type StageName = String;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DownloadArtifact {
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    pub checksum: String,
+    pub resumed: bool,
+}
+
+impl DownloadArtifact {
+    pub fn new(name: String, path: &Path, size: u64, checksum: String, resumed: bool) -> Self {
+        Self {
+            name,
+            path: path.to_string_lossy().into_owned(),
+            size,
+            checksum,
+            resumed,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InstallState {
     pub version: u32,
     pub dry_run: bool,
     pub current_stage: Option<StageName>,
     pub completed_stages: Vec<StageName>,
+    pub download_artifacts: Vec<DownloadArtifact>,
+    pub verified_checksums: Vec<String>,
+    pub formatted_devices: Vec<String>,
+    pub partial_ok_resume: bool,
+    pub boot_stage_completed: bool,
 }
 
 impl InstallState {
@@ -21,6 +47,11 @@ impl InstallState {
             dry_run,
             current_stage: None,
             completed_stages: Vec::new(),
+            download_artifacts: Vec::new(),
+            verified_checksums: Vec::new(),
+            formatted_devices: Vec::new(),
+            partial_ok_resume: false,
+            boot_stage_completed: false,
         }
     }
 
@@ -37,6 +68,37 @@ impl InstallState {
 
     pub fn set_current(&mut self, stage: &str) {
         self.current_stage = Some(stage.to_string());
+    }
+
+    pub fn record_download(&mut self, artifact: DownloadArtifact) {
+        self.download_artifacts.push(artifact);
+    }
+
+    pub fn record_formatted_device(&mut self, device: &Path) {
+        let name = device.display().to_string();
+        if !self.formatted_devices.iter().any(|entry| entry == &name) {
+            self.formatted_devices.push(name);
+        }
+    }
+
+    pub fn mark_boot_completed(&mut self) {
+        self.boot_stage_completed = true;
+    }
+
+    pub fn mark_checksum_verified(&mut self, checksum: &str) {
+        if !self
+            .verified_checksums
+            .iter()
+            .any(|entry| entry == checksum)
+        {
+            self.verified_checksums.push(checksum.to_string());
+        }
+    }
+
+    pub fn set_partial_resume(&mut self, partial: bool) {
+        if partial {
+            self.partial_ok_resume = true;
+        }
     }
 }
 
@@ -102,6 +164,15 @@ mod tests {
         let mut state = InstallState::new(true);
         state.set_current("stage-1");
         state.mark_completed("stage-0");
+        state.record_download(DownloadArtifact::new(
+            "disk.img".to_string(),
+            &dir.path().join("disk.img"),
+            1024,
+            "abc".to_string(),
+            false,
+        ));
+        state.mark_checksum_verified("abc");
+        state.set_partial_resume(true);
 
         save_state_atomic(&path, &state).unwrap();
         let loaded = load_state(&path).unwrap().unwrap();
