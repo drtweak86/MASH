@@ -331,7 +331,8 @@ fn resolve_image_path(cfg: &OsInstallConfig, state: &InstallState) -> Result<Pat
         ImageSource::Local(path) => Ok(path.clone()),
         ImageSource::Download => {
             let key = cfg.image_key();
-            let expected_name = downloader::DOWNLOAD_INDEX
+            let index = downloader::download_index()?;
+            let expected_name = index
                 .images
                 .iter()
                 .find(|s| s.os == key.os && s.variant == key.variant && s.arch == key.arch)

@@ -138,7 +138,10 @@ pub fn fetch_uefi_bundle(
 }
 
 pub(crate) fn cleanup_fedora_artifacts(base: &Path) {
-    if let Some(spec) = crate::downloader::DOWNLOAD_INDEX.images.iter().find(|img| {
+    let Ok(index) = crate::downloader::download_index() else {
+        return;
+    };
+    if let Some(spec) = index.images.iter().find(|img| {
         img.os == OsKind::Fedora && img.variant == "kde_mobile_disk" && img.arch == "aarch64"
     }) {
         let xz = base.join(&spec.file_name);

@@ -12,7 +12,7 @@ pub mod flash_config; // Declare the new module
 pub use flash_config::{ImageSource, TuiFlashConfig}; // Update the pub use statement
 
 use crate::progress::{Phase, ProgressUpdate};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -232,6 +232,19 @@ fn run_execution_pipeline(
             let _ = tx.send(update);
         }
     };
+
+    // Fail fast on download catalogue parse errors (WO-036.1). Avoid panics from static
+    // initialization and produce a user-visible error instead.
+    let needs_index = match config.os_distro {
+        flash_config::OsDistro::Fedora => {
+            config.image_source_selection == ImageSource::DownloadCatalogue
+                || config.download_uefi_firmware
+        }
+        _ => config.image_source_selection == ImageSource::DownloadCatalogue,
+    };
+    if needs_index {
+        mash_core::downloader::download_index().context("download catalogue unavailable")?;
+    }
 
     // Fedora uses the full-loop installer; other OS profiles flash upstream full-disk images.
     if matches!(config.os_distro, flash_config::OsDistro::Fedora) {

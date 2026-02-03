@@ -1660,7 +1660,14 @@ impl App {
     fn refresh_os_variants(&mut self) {
         let distro = self.selected_distro();
         let os_kind = distro.as_os_kind();
-        let mut variants = mash_core::downloader::DOWNLOAD_INDEX
+        let Ok(index) = mash_core::downloader::download_index() else {
+            self.os_variants.clear();
+            self.os_variant_index = 0;
+            self.status_message =
+                "❌ Download catalogue unavailable (failed to parse index).".to_string();
+            return;
+        };
+        let mut variants = index
             .images
             .iter()
             .filter(|img| img.os == os_kind && img.arch == "aarch64")
@@ -1722,13 +1729,19 @@ impl App {
         let image_path = match image_source {
             ImageSource::LocalFile => PathBuf::from(self.image_source_path.clone()),
             ImageSource::DownloadCatalogue => {
-                let file_name = mash_core::downloader::DOWNLOAD_INDEX
-                    .images
-                    .iter()
-                    .find(|img| {
-                        img.os == os_kind && img.variant == os_variant && img.arch == "aarch64"
+                let file_name = mash_core::downloader::download_index()
+                    .ok()
+                    .and_then(|index| {
+                        index
+                            .images
+                            .iter()
+                            .find(|img| {
+                                img.os == os_kind
+                                    && img.variant == os_variant
+                                    && img.arch == "aarch64"
+                            })
+                            .map(|img| img.file_name.clone())
                     })
-                    .map(|img| img.file_name.clone())
                     .unwrap_or_else(|| "missing-image-spec.img.xz".to_string());
                 image_download_dir.join(file_name)
             }

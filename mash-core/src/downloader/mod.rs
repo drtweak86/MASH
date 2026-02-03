@@ -69,10 +69,16 @@ pub struct ImageSpec {
     pub mirrors: Vec<String>,
 }
 
-pub static DOWNLOAD_INDEX: Lazy<DownloadIndex> = Lazy::new(|| {
+pub static DOWNLOAD_INDEX: Lazy<Result<DownloadIndex>> = Lazy::new(|| {
     let index = include_str!("../../../docs/os-download-links.toml");
-    toml::from_str(index).expect("failed to parse docs/os-download-links.toml (download index)")
+    parse_index(index).context("failed to parse docs/os-download-links.toml (download index)")
 });
+
+pub fn download_index() -> Result<&'static DownloadIndex> {
+    DOWNLOAD_INDEX
+        .as_ref()
+        .map_err(|err| anyhow::anyhow!("{:#}", err))
+}
 
 pub fn parse_index(toml_text: &str) -> Result<DownloadIndex> {
     toml::from_str(toml_text).context("failed to parse download index TOML")
@@ -166,7 +172,8 @@ impl DownloadArtifact {
 }
 
 fn pick_source(opts: &DownloadOptions) -> Result<ImageSpec> {
-    pick_source_from_index(&DOWNLOAD_INDEX, opts)
+    let index = download_index()?;
+    pick_source_from_index(index, opts)
 }
 
 fn pick_source_from_index(index: &DownloadIndex, opts: &DownloadOptions) -> Result<ImageSpec> {
@@ -255,7 +262,8 @@ fn create_http_client(timeout_secs: u64) -> Result<Client> {
 }
 
 pub fn download(opts: &DownloadOptions) -> Result<DownloadArtifact> {
-    download_from_index_with_progress(&DOWNLOAD_INDEX, opts, None)
+    let index = download_index()?;
+    download_from_index_with_progress(index, opts, None)
 }
 
 fn download_from_index(index: &DownloadIndex, opts: &DownloadOptions) -> Result<DownloadArtifact> {
@@ -266,7 +274,8 @@ pub fn download_with_progress(
     opts: &DownloadOptions,
     progress: &mut dyn FnMut(DownloadProgress) -> bool,
 ) -> Result<DownloadArtifact> {
-    download_from_index_with_progress(&DOWNLOAD_INDEX, opts, Some(progress))
+    let index = download_index()?;
+    download_from_index_with_progress(index, opts, Some(progress))
 }
 
 fn download_from_index_with_progress(
@@ -981,7 +990,7 @@ mod tests {
 
     #[test]
     fn toml_index_contains_ubuntu_entries() {
-        let index = &*DOWNLOAD_INDEX;
+        let index = download_index().unwrap();
         let ubuntu_server = index
             .images
             .iter()
@@ -1018,7 +1027,7 @@ mod tests {
 
     #[test]
     fn toml_index_contains_raspberry_pi_os_entry() {
-        let index = &*DOWNLOAD_INDEX;
+        let index = download_index().unwrap();
         let raspios = index
             .images
             .iter()
@@ -1038,7 +1047,7 @@ mod tests {
 
     #[test]
     fn toml_index_contains_manjaro_entries() {
-        let index = &*DOWNLOAD_INDEX;
+        let index = download_index().unwrap();
 
         let manjaro_minimal = index
             .images
@@ -1090,7 +1099,7 @@ mod tests {
 
     #[test]
     fn toml_index_all_images_have_valid_checksums() {
-        let index = &*DOWNLOAD_INDEX;
+        let index = download_index().unwrap();
         for img in &index.images {
             assert_eq!(
                 img.checksum_sha256.len(),
@@ -1108,7 +1117,7 @@ mod tests {
 
     #[test]
     fn toml_index_all_images_have_mirrors() {
-        let index = &*DOWNLOAD_INDEX;
+        let index = download_index().unwrap();
         for img in &index.images {
             assert!(
                 !img.mirrors.is_empty(),
