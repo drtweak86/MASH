@@ -38,6 +38,14 @@ pub struct InstallState {
     pub formatted_devices: Vec<String>,
     pub partial_ok_resume: bool,
     pub boot_stage_completed: bool,
+    #[serde(default)]
+    pub selected_os: Option<String>,
+    #[serde(default)]
+    pub selected_variant: Option<String>,
+    #[serde(default)]
+    pub flashed_devices: Vec<String>,
+    #[serde(default)]
+    pub post_boot_partition_expansion_required: bool,
 }
 
 impl InstallState {
@@ -52,6 +60,10 @@ impl InstallState {
             formatted_devices: Vec::new(),
             partial_ok_resume: false,
             boot_stage_completed: false,
+            selected_os: None,
+            selected_variant: None,
+            flashed_devices: Vec::new(),
+            post_boot_partition_expansion_required: false,
         }
     }
 

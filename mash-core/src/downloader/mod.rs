@@ -11,22 +11,66 @@ use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::Duration;
 
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum OsKind {
+    Fedora,
+    Ubuntu,
+    #[serde(rename = "raspberry_pi_os")]
+    RaspberryPiOS,
+    Manjaro,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DownloadIndex {
+    #[serde(default)]
+    pub images: Vec<ImageSpec>,
+
+    // Present for the scheduled health-check action (issue #45).
+    #[serde(default)]
+    pub health_checks: Vec<HealthCheckSpec>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HealthCheckSpec {
+    pub name: String,
+    pub url: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ImageSpec {
-    pub version: String,
-    pub edition: String,
+    pub os: OsKind,
+    pub variant: String,
     pub arch: String,
+    pub file_name: String,
     pub checksum_sha256: String,
+    #[serde(default)]
+    pub checksum_url: Option<String>,
     pub mirrors: Vec<String>,
 }
 
-pub static DOWNLOAD_INDEX: Lazy<Vec<ImageSpec>> = Lazy::new(|| {
+pub static DOWNLOAD_INDEX: Lazy<DownloadIndex> = Lazy::new(|| {
     let index = include_str!("../../../docs/os-download-links.toml");
-    toml::from_str(index).unwrap_or_default()
+    toml::from_str(index).unwrap_or(DownloadIndex {
+        images: Vec::new(),
+        health_checks: Vec::new(),
+    })
 });
+
+pub fn parse_index(toml_text: &str) -> Result<DownloadIndex> {
+    toml::from_str(toml_text).context("failed to parse download index TOML")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageKey {
+    pub os: OsKind,
+    pub variant: String,
+    pub arch: String,
+}
 
 #[derive(Debug, Clone)]
 pub struct DownloadOptions {
+    pub image: Option<ImageKey>,
     pub mirror_override: Option<String>,
     pub checksum_override: Option<String>,
     pub checksum_url: Option<String>,
@@ -39,6 +83,7 @@ pub struct DownloadOptions {
 impl Default for DownloadOptions {
     fn default() -> Self {
         Self {
+            image: None,
             mirror_override: None,
             checksum_override: None,
             checksum_url: None,
@@ -90,39 +135,71 @@ impl DownloadArtifact {
 }
 
 fn pick_source(opts: &DownloadOptions) -> Result<ImageSpec> {
+    pick_source_from_index(&DOWNLOAD_INDEX, opts)
+}
+
+fn pick_source_from_index(index: &DownloadIndex, opts: &DownloadOptions) -> Result<ImageSpec> {
     if let Some(ref override_url) = opts.mirror_override {
         let checksum = opts
             .checksum_override
             .clone()
             .context("override checksum required for download override")?;
         let spec = ImageSpec {
-            version: "override".to_string(),
-            edition: "override".to_string(),
+            os: OsKind::Fedora,
+            variant: "override".to_string(),
             arch: "aarch64".to_string(),
+            file_name: "override.img.xz".to_string(),
             checksum_sha256: checksum,
+            checksum_url: None,
             mirrors: vec![override_url.clone()],
         };
         return Ok(spec);
     }
-    DOWNLOAD_INDEX
-        .last()
+
+    let key = opts.image.as_ref().context(
+        "download selection required (set DownloadOptions.image or use mirror_override)",
+    )?;
+
+    index
+        .images
+        .iter()
+        .find(|spec| spec.os == key.os && spec.variant == key.variant && spec.arch == key.arch)
         .cloned()
-        .ok_or_else(|| anyhow::anyhow!("no download specs found"))
+        .with_context(|| {
+            format!(
+                "no download spec found for os={:?} variant={} arch={}",
+                key.os, key.variant, key.arch
+            )
+        })
 }
 
 fn download_checksum(opts: &DownloadOptions, client: &Client, spec: &ImageSpec) -> Result<String> {
     if let Some(ref checksum) = opts.checksum_override {
         return Ok(checksum.clone());
     }
-    if let Some(ref url) = opts.checksum_url {
+
+    let checksum_url = opts
+        .checksum_url
+        .clone()
+        .or_else(|| spec.checksum_url.clone());
+
+    if let Some(url) = checksum_url {
         let response = client
             .get(url)
             .send()
             .context("Failed to fetch checksum from URL")?
             .error_for_status()?;
         let checksum_text = response.text()?;
-        return Ok(checksum_text.trim().to_string());
+        if let Some(extracted) = extract_sha256_from_checksum_file(&checksum_text, &spec.file_name)
+        {
+            return Ok(extracted);
+        }
+        anyhow::bail!(
+            "checksum URL did not contain an entry for {}",
+            spec.file_name
+        );
     }
+
     Ok(spec.checksum_sha256.clone())
 }
 
@@ -134,19 +211,21 @@ fn create_http_client(timeout_secs: u64) -> Result<Client> {
 }
 
 pub fn download(opts: &DownloadOptions) -> Result<DownloadArtifact> {
-    let spec = pick_source(opts)?;
+    download_from_index(&DOWNLOAD_INDEX, opts)
+}
+
+fn download_from_index(index: &DownloadIndex, opts: &DownloadOptions) -> Result<DownloadArtifact> {
+    let spec = pick_source_from_index(index, opts)?;
     let client = create_http_client(opts.timeout_secs)?;
     let checksum = download_checksum(opts, &client, &spec)?;
     fs::create_dir_all(&opts.download_dir)?;
-    let filename = format!(
-        "Fedora-{}-{}-{}.raw.xz",
-        spec.edition, spec.version, spec.arch
-    );
-    let target = opts.download_dir.join(&filename);
+    let target = opts.download_dir.join(&spec.file_name);
     let mut last_err = None;
     let mut resumed = false;
+
     for attempt in 1..=opts.max_retries.max(1) {
         info!("Download attempt {}/{}", attempt, opts.max_retries.max(1));
+
         let result = if opts.resume && target.exists() {
             match download_with_resume(&client, &spec.mirrors, &target, attempt) {
                 Ok(size) => {
@@ -161,14 +240,14 @@ pub fn download(opts: &DownloadOptions) -> Result<DownloadArtifact> {
         } else {
             download_full(&client, &spec.mirrors, &target, attempt)
         };
+
         match result {
-            Ok(_) => {
-                let metadata = target.metadata().context("missing download artifact")?;
+            Ok(size) => {
                 let artifact = DownloadArtifact::new(
-                    filename.clone(),
+                    spec.file_name.clone(),
                     target.clone(),
                     checksum.clone(),
-                    metadata.len(),
+                    size,
                     resumed,
                 );
                 artifact.verify_checksum()?;
@@ -177,13 +256,54 @@ pub fn download(opts: &DownloadOptions) -> Result<DownloadArtifact> {
             Err(err) => {
                 last_err = Some(err);
                 if attempt < opts.max_retries.max(1) {
-                    let backoff = Duration::from_secs(1 << attempt.min(5));
-                    sleep(backoff);
+                    sleep(Duration::from_secs(2));
                 }
             }
         }
     }
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("download failed")))
+}
+
+fn extract_sha256_from_checksum_file(text: &str, file_name: &str) -> Option<String> {
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        if !line.contains(file_name) {
+            continue;
+        }
+
+        // Fedora CHECKSUM format:
+        //   SHA256 (filename) = <sha>
+        if let Some(rest) = line.strip_prefix("SHA256 (") {
+            if let Some((fname_part, sha_part)) = rest.split_once(") = ") {
+                if fname_part.trim() == file_name {
+                    let sha = sha_part.trim().to_ascii_lowercase();
+                    if is_valid_sha256(&sha) {
+                        return Some(sha);
+                    }
+                }
+            }
+        }
+
+        // Ubuntu/RPi formats:
+        //   <sha> *filename
+        //   <sha>  filename
+        let mut parts = line.split_whitespace();
+        let sha = parts.next()?.trim().to_ascii_lowercase();
+        if !is_valid_sha256(&sha) {
+            continue;
+        }
+
+        for token in parts {
+            let token = token.trim_start_matches('*');
+            if token == file_name {
+                return Some(sha);
+            }
+        }
+    }
+    None
+}
+
+fn is_valid_sha256(s: &str) -> bool {
+    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 fn download_full(
@@ -262,6 +382,11 @@ mod tests {
 
     fn make_opts(server: &MockServer, checksum: &str) -> DownloadOptions {
         DownloadOptions {
+            image: Some(ImageKey {
+                os: OsKind::Fedora,
+                variant: "override".to_string(),
+                arch: "aarch64".to_string(),
+            }),
             mirror_override: Some(server.url("/image")),
             checksum_override: Some(checksum.to_string()),
             max_retries: 2,
@@ -336,12 +461,464 @@ mod tests {
         });
         let opts = make_opts(&server, &checksum);
         fs::create_dir_all(&opts.download_dir).unwrap();
-        let partial = opts
-            .download_dir
-            .join("Fedora-override-override-aarch64.raw.xz");
+        let partial = opts.download_dir.join("override.img.xz");
         write(&partial, &body[..5]).unwrap();
         let artifact = download(&opts).unwrap();
         assert!(artifact.resumed);
         assert_eq!(artifact.size, body.len() as u64);
+    }
+
+    #[test]
+    fn checksum_url_parses_fedora_format() {
+        let checksum = "a615aa6ea7cba59215ec8e46b21df57494fb51b47b8f89c97b15ae31f8282696";
+        let text = format!(
+            "SHA256 (Fedora-KDE-Mobile-Disk-43-1.6.aarch64.raw.xz) = {}\n",
+            checksum
+        );
+        let extracted = extract_sha256_from_checksum_file(
+            &text,
+            "Fedora-KDE-Mobile-Disk-43-1.6.aarch64.raw.xz",
+        )
+        .unwrap();
+        assert_eq!(extracted, checksum);
+    }
+
+    #[test]
+    fn checksum_url_parses_ubuntu_format() {
+        let checksum = "9bb1799cee8965e6df0234c1c879dd35be1d87afe39b84951f278b6bd0433e56";
+        let text = format!(
+            "{} *ubuntu-24.04.3-preinstalled-server-arm64+raspi.img.xz\n",
+            checksum
+        );
+        let extracted = extract_sha256_from_checksum_file(
+            &text,
+            "ubuntu-24.04.3-preinstalled-server-arm64+raspi.img.xz",
+        )
+        .unwrap();
+        assert_eq!(extracted, checksum);
+    }
+
+    #[test]
+    fn checksum_url_parses_rpi_format() {
+        let checksum = "f7afb40e587746128538d84f217bf478a23af59484d4db77f2d06bf647f7c82e";
+        let text = format!("{}  2025-12-04-raspios-trixie-arm64.img.xz\n", checksum);
+        let extracted =
+            extract_sha256_from_checksum_file(&text, "2025-12-04-raspios-trixie-arm64.img.xz")
+                .unwrap();
+        assert_eq!(extracted, checksum);
+    }
+
+    fn make_index_spec(
+        os: OsKind,
+        variant: &str,
+        file_name: &str,
+        checksum_sha256: &str,
+        checksum_url: Option<String>,
+        mirrors: Vec<String>,
+    ) -> DownloadIndex {
+        DownloadIndex {
+            images: vec![ImageSpec {
+                os,
+                variant: variant.to_string(),
+                arch: "aarch64".to_string(),
+                file_name: file_name.to_string(),
+                checksum_sha256: checksum_sha256.to_string(),
+                checksum_url,
+                mirrors,
+            }],
+            health_checks: Vec::new(),
+        }
+    }
+
+    fn opts_for_key(dir: &Path, os: OsKind, variant: &str) -> DownloadOptions {
+        DownloadOptions {
+            image: Some(ImageKey {
+                os,
+                variant: variant.to_string(),
+                arch: "aarch64".to_string(),
+            }),
+            download_dir: dir.to_path_buf(),
+            max_retries: 1,
+            timeout_secs: 5,
+            resume: true,
+            ..Default::default()
+        }
+    }
+
+    // Required by issue #84: success + checksum failure + resume, per OS, CI-safe.
+
+    #[test]
+    fn fedora_downloader_success_checksum_url_and_resume() {
+        let server = MockServer::start();
+        let body = b"0123456789";
+        let checksum = format!("{:x}", Sha256::digest(body));
+        let file_name = "fedora.raw.xz";
+
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/image")
+                .header("range", "bytes=5-")
+                .header("x-mash-attempt", "1");
+            then.status(206).body(&body[5..]);
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/CHECKSUM");
+            then.status(200)
+                .body(format!("SHA256 ({}) = {}\n", file_name, checksum));
+        });
+
+        let tmp = tempdir().unwrap();
+        let downloads = tmp.path().join("dl");
+        fs::create_dir_all(&downloads).unwrap();
+        write(downloads.join(file_name), &body[..5]).unwrap();
+
+        let index = make_index_spec(
+            OsKind::Fedora,
+            "kde_mobile_disk",
+            file_name,
+            "ignored",
+            Some(server.url("/CHECKSUM")),
+            vec![server.url("/image")],
+        );
+        let opts = opts_for_key(&downloads, OsKind::Fedora, "kde_mobile_disk");
+        let artifact = download_from_index(&index, &opts).unwrap();
+        assert!(artifact.resumed);
+        assert_eq!(artifact.size, body.len() as u64);
+    }
+
+    #[test]
+    fn ubuntu_downloader_checksum_failure() {
+        let server = MockServer::start();
+        let body = b"ubuntu";
+        let checksum = format!("{:x}", Sha256::digest(body));
+        let file_name = "ubuntu.img.xz";
+
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/image")
+                .header("x-mash-attempt", "1");
+            then.status(200).body(body);
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/SHA256SUMS");
+            then.status(200)
+                .body(format!("{} *{}\n", checksum, file_name));
+        });
+
+        let tmp = tempdir().unwrap();
+        let downloads = tmp.path().join("dl");
+        let index = make_index_spec(
+            OsKind::Ubuntu,
+            "server",
+            file_name,
+            "ignored",
+            Some(server.url("/SHA256SUMS")),
+            vec![server.url("/image")],
+        );
+        let mut opts = opts_for_key(&downloads, OsKind::Ubuntu, "server");
+        opts.checksum_override = Some("deadbeef".to_string());
+        assert!(download_from_index(&index, &opts).is_err());
+    }
+
+    #[test]
+    fn ubuntu_downloader_success_and_resume() {
+        let server = MockServer::start();
+        let body = b"0123456789";
+        let checksum = format!("{:x}", Sha256::digest(body));
+        let file_name = "ubuntu.img.xz";
+
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/image")
+                .header("range", "bytes=3-")
+                .header("x-mash-attempt", "1");
+            then.status(206).body(&body[3..]);
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/SHA256SUMS");
+            then.status(200)
+                .body(format!("{} *{}\n", checksum, file_name));
+        });
+
+        let tmp = tempdir().unwrap();
+        let downloads = tmp.path().join("dl");
+        fs::create_dir_all(&downloads).unwrap();
+        write(downloads.join(file_name), &body[..3]).unwrap();
+
+        let index = make_index_spec(
+            OsKind::Ubuntu,
+            "server",
+            file_name,
+            "ignored",
+            Some(server.url("/SHA256SUMS")),
+            vec![server.url("/image")],
+        );
+        let opts = opts_for_key(&downloads, OsKind::Ubuntu, "server");
+        let artifact = download_from_index(&index, &opts).unwrap();
+        assert!(artifact.resumed);
+        assert_eq!(artifact.size, body.len() as u64);
+    }
+
+    #[test]
+    fn rpi_os_downloader_success_and_checksum_failure() {
+        let server = MockServer::start();
+        let body = b"rpi_os";
+        let checksum = format!("{:x}", Sha256::digest(body));
+        let file_name = "rpi.img.xz";
+
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/image")
+                .header("x-mash-attempt", "1");
+            then.status(200).body(body);
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/sha256");
+            then.status(200)
+                .body(format!("{}  {}\n", checksum, file_name));
+        });
+
+        let tmp = tempdir().unwrap();
+        let downloads = tmp.path().join("dl");
+        let index = make_index_spec(
+            OsKind::RaspberryPiOS,
+            "arm64_latest",
+            file_name,
+            "ignored",
+            Some(server.url("/sha256")),
+            vec![server.url("/image")],
+        );
+
+        let opts = opts_for_key(&downloads, OsKind::RaspberryPiOS, "arm64_latest");
+        let artifact = download_from_index(&index, &opts).unwrap();
+        assert_eq!(artifact.size, body.len() as u64);
+
+        let mut bad = opts_for_key(&downloads, OsKind::RaspberryPiOS, "arm64_latest");
+        bad.checksum_override = Some("deadbeef".to_string());
+        assert!(download_from_index(&index, &bad).is_err());
+    }
+
+    #[test]
+    fn rpi_os_downloader_resume() {
+        let server = MockServer::start();
+        let body = b"0123456789";
+        let checksum = format!("{:x}", Sha256::digest(body));
+        let file_name = "rpi.img.xz";
+
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/image")
+                .header("range", "bytes=6-")
+                .header("x-mash-attempt", "1");
+            then.status(206).body(&body[6..]);
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/sha256");
+            then.status(200)
+                .body(format!("{}  {}\n", checksum, file_name));
+        });
+
+        let tmp = tempdir().unwrap();
+        let downloads = tmp.path().join("dl");
+        fs::create_dir_all(&downloads).unwrap();
+        write(downloads.join(file_name), &body[..6]).unwrap();
+
+        let index = make_index_spec(
+            OsKind::RaspberryPiOS,
+            "arm64_latest",
+            file_name,
+            "ignored",
+            Some(server.url("/sha256")),
+            vec![server.url("/image")],
+        );
+        let opts = opts_for_key(&downloads, OsKind::RaspberryPiOS, "arm64_latest");
+        let artifact = download_from_index(&index, &opts).unwrap();
+        assert!(artifact.resumed);
+        assert_eq!(artifact.size, body.len() as u64);
+    }
+
+    #[test]
+    fn manjaro_downloader_success_checksum_failure_and_resume() {
+        let server = MockServer::start();
+        let body = b"0123456789";
+        let checksum = format!("{:x}", Sha256::digest(body));
+        let file_name = "manjaro.img.xz";
+
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/image")
+                .header("range", "bytes=5-")
+                .header("x-mash-attempt", "1");
+            then.status(206).body(&body[5..]);
+        });
+
+        let tmp = tempdir().unwrap();
+        let downloads = tmp.path().join("dl");
+        fs::create_dir_all(&downloads).unwrap();
+        write(downloads.join(file_name), &body[..5]).unwrap();
+
+        let index = make_index_spec(
+            OsKind::Manjaro,
+            "minimal_rpi4",
+            file_name,
+            &checksum,
+            None,
+            vec![server.url("/image")],
+        );
+        let opts = opts_for_key(&downloads, OsKind::Manjaro, "minimal_rpi4");
+        let artifact = download_from_index(&index, &opts).unwrap();
+        assert!(artifact.resumed);
+
+        let mut bad = opts_for_key(&downloads, OsKind::Manjaro, "minimal_rpi4");
+        bad.checksum_override = Some("deadbeef".to_string());
+        assert!(download_from_index(&index, &bad).is_err());
+    }
+
+    // TOML validation tests for WORK ORDER #84
+
+    #[test]
+    fn toml_index_contains_ubuntu_entries() {
+        let index = &*DOWNLOAD_INDEX;
+        let ubuntu_server = index
+            .images
+            .iter()
+            .find(|img| img.os == OsKind::Ubuntu && img.variant == "server_24_04_3");
+        assert!(
+            ubuntu_server.is_some(),
+            "Ubuntu Server 24.04.3 entry should exist in TOML"
+        );
+        let ubuntu_server = ubuntu_server.unwrap();
+        assert_eq!(ubuntu_server.arch, "aarch64");
+        assert_eq!(
+            ubuntu_server.file_name,
+            "ubuntu-24.04.3-preinstalled-server-arm64+raspi.img.xz"
+        );
+        assert_eq!(
+            ubuntu_server.checksum_sha256,
+            "9bb1799cee8965e6df0234c1c879dd35be1d87afe39b84951f278b6bd0433e56"
+        );
+
+        let ubuntu_desktop = index
+            .images
+            .iter()
+            .find(|img| img.os == OsKind::Ubuntu && img.variant == "desktop_24_04_3");
+        assert!(
+            ubuntu_desktop.is_some(),
+            "Ubuntu Desktop 24.04.3 entry should exist in TOML"
+        );
+        let ubuntu_desktop = ubuntu_desktop.unwrap();
+        assert_eq!(
+            ubuntu_desktop.checksum_sha256,
+            "04a87330d2dfbe29c29f69d2113d92bbde44daa516054074ff4b96c7ee3c528b"
+        );
+    }
+
+    #[test]
+    fn toml_index_contains_raspberry_pi_os_entry() {
+        let index = &*DOWNLOAD_INDEX;
+        let raspios = index
+            .images
+            .iter()
+            .find(|img| img.os == OsKind::RaspberryPiOS && img.variant == "arm64_latest");
+        assert!(
+            raspios.is_some(),
+            "Raspberry Pi OS entry should exist in TOML"
+        );
+        let raspios = raspios.unwrap();
+        assert_eq!(raspios.arch, "aarch64");
+        assert_eq!(raspios.file_name, "2025-12-04-raspios-trixie-arm64.img.xz");
+        assert_eq!(
+            raspios.checksum_sha256,
+            "f7afb40e587746128538d84f217bf478a23af59484d4db77f2d06bf647f7c82e"
+        );
+    }
+
+    #[test]
+    fn toml_index_contains_manjaro_entries() {
+        let index = &*DOWNLOAD_INDEX;
+
+        let manjaro_minimal = index
+            .images
+            .iter()
+            .find(|img| img.os == OsKind::Manjaro && img.variant == "minimal_rpi4_20260126");
+        assert!(
+            manjaro_minimal.is_some(),
+            "Manjaro Minimal 20260126 entry should exist in TOML"
+        );
+        let manjaro_minimal = manjaro_minimal.unwrap();
+        assert_eq!(manjaro_minimal.arch, "aarch64");
+        assert_eq!(
+            manjaro_minimal.file_name,
+            "Manjaro-ARM-minimal-rpi4-20260126.img.xz"
+        );
+        assert_eq!(
+            manjaro_minimal.checksum_sha256,
+            "a37bdc5b53e7b0e8ca0b0a3524aade58c58d3d07da226dfe79fcdf0388671ad5"
+        );
+
+        let manjaro_kde = index
+            .images
+            .iter()
+            .find(|img| img.os == OsKind::Manjaro && img.variant == "kde_plasma_rpi4_20260126");
+        assert!(
+            manjaro_kde.is_some(),
+            "Manjaro KDE Plasma 20260126 entry should exist in TOML"
+        );
+        let manjaro_kde = manjaro_kde.unwrap();
+        assert_eq!(
+            manjaro_kde.checksum_sha256,
+            "5080615cd4beabea377f83ffd705300596848410d99a927bfc55bfddfd111412"
+        );
+
+        let manjaro_xfce = index
+            .images
+            .iter()
+            .find(|img| img.os == OsKind::Manjaro && img.variant == "xfce_rpi4_20260126");
+        assert!(
+            manjaro_xfce.is_some(),
+            "Manjaro XFCE 20260126 entry should exist in TOML"
+        );
+        let manjaro_xfce = manjaro_xfce.unwrap();
+        assert_eq!(
+            manjaro_xfce.checksum_sha256,
+            "5e3c46025c825cff1bf9c6331b908e01488b6f934bbc749dfe3184e5f298ac48"
+        );
+    }
+
+    #[test]
+    fn toml_index_all_images_have_valid_checksums() {
+        let index = &*DOWNLOAD_INDEX;
+        for img in &index.images {
+            assert_eq!(
+                img.checksum_sha256.len(),
+                64,
+                "Image {} should have valid SHA256 checksum (64 hex chars)",
+                img.file_name
+            );
+            assert!(
+                img.checksum_sha256.chars().all(|c| c.is_ascii_hexdigit()),
+                "Image {} checksum should be hex digits",
+                img.file_name
+            );
+        }
+    }
+
+    #[test]
+    fn toml_index_all_images_have_mirrors() {
+        let index = &*DOWNLOAD_INDEX;
+        for img in &index.images {
+            assert!(
+                !img.mirrors.is_empty(),
+                "Image {} should have at least one mirror",
+                img.file_name
+            );
+            for mirror in &img.mirrors {
+                assert!(
+                    mirror.starts_with("http://") || mirror.starts_with("https://"),
+                    "Mirror for {} should be HTTP/HTTPS URL",
+                    img.file_name
+                );
+            }
+        }
     }
 }

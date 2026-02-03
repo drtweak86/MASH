@@ -181,7 +181,15 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
             let disk = app.disks.get(app.disk_index);
             if let Some(disk) = disk {
                 let is_boot_disk = disk.boot_confidence.is_boot();
-                let model = disk.model.as_deref().unwrap_or("Unknown model").trim();
+                let disk_info = match &disk.identity {
+                    Some(identity) => identity.display_string(),
+                    None => {
+                        items.push("❌ IDENTITY FAILED - Cannot proceed".to_string());
+                        items.push("Disk identity could not be resolved.".to_string());
+                        items.push("Press Esc to go back and select a different disk.".to_string());
+                        return items;
+                    }
+                };
 
                 if is_boot_disk {
                     items.push("⚠️⚠️⚠️ CRITICAL WARNING: BOOT DISK SELECTED ⚠️⚠️⚠️".to_string());
@@ -195,18 +203,15 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                     );
                     items.push("".to_string());
                     items.push(format!(
-                        "BOOT DEVICE TO BE WIPED: {} ({}, {})",
-                        disk.path, model, disk.size
+                        "BOOT DEVICE TO BE WIPED: {} ({})",
+                        disk.path, disk_info
                     ));
                     items.push("".to_string());
                     items.push("Type 'DESTROY BOOT DISK' to confirm • Esc to go back.".to_string());
                 } else {
                     items.push("⚠️ Confirm disk destruction:".to_string());
                     items.push("Type DESTROY to confirm • Esc to go back.".to_string());
-                    items.push(format!(
-                        "TARGET TO BE WIPED: {} ({}, {})",
-                        disk.path, model, disk.size
-                    ));
+                    items.push(format!("TARGET TO BE WIPED: {} ({})", disk.path, disk_info));
                     items.push("Type DESTROY to confirm.".to_string());
                 }
 
@@ -323,14 +328,25 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                 .map(|distro| distro.display().to_string())
                 .collect::<Vec<_>>();
             push_options(&mut items, &options, app.os_distro_index);
+            items.push("".to_string());
+            items.push("Next: pick a variant (server/desktop/etc).".to_string());
+        }
+        InstallStepType::VariantSelection => {
+            items.push("🎛️ Select OS variant:".to_string());
+            items
+                .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
 
-            // Show availability warning for non-Fedora distros
-            if let Some(distro) = app.os_distros.get(app.os_distro_index) {
-                if !distro.is_available() {
-                    items.push("".to_string());
-                    items.push("⚠️ This distribution is not yet available.".to_string());
-                    items.push("Please select Fedora for now.".to_string());
-                }
+            if app.os_variants.is_empty() {
+                items.push("".to_string());
+                items.push("❌ Missing metadata: no variants found for this OS.".to_string());
+                items.push("Press Esc to go back and choose a different OS.".to_string());
+            } else {
+                let options = app
+                    .os_variants
+                    .iter()
+                    .map(|v| v.label.clone())
+                    .collect::<Vec<_>>();
+                push_options(&mut items, &options, app.os_variant_index);
             }
         }
         InstallStepType::EfiImage => {
@@ -426,8 +442,11 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                 PathBuf::from(app.uefi_source_path.clone())
             };
             if let Some(disk) = app.disks.get(app.disk_index) {
-                items.push(format!("Disk: {} ({})", disk.path, disk.size));
-                items.push(format!("Disk label: {}", disk.label));
+                let disk_info = match &disk.identity {
+                    Some(identity) => identity.display_string(),
+                    None => "❌ IDENTITY FAILED".to_string(),
+                };
+                items.push(format!("Disk: {} - {}", disk.path, disk_info));
             }
             if let Some(scheme) = app.partition_schemes.get(app.scheme_index) {
                 items.push(format!("Scheme: {}", scheme));
@@ -599,39 +618,52 @@ fn push_options(items: &mut Vec<String>, options: &[String], selected: usize) {
 fn build_plan_lines(app: &crate::tui::dojo_app::App) -> Vec<String> {
     let mut lines = Vec::new();
 
-    // OS Distribution
-    if let Some(distro) = app.os_distros.get(app.os_distro_index) {
+    let distro = app.os_distros.get(app.os_distro_index).copied();
+    if let Some(distro) = distro {
         lines.push(format!("OS: {}", distro.display()));
     } else {
         lines.push("OS: <not selected>".to_string());
     }
 
-    // Target disk
+    if let Some(variant) = app.os_variants.get(app.os_variant_index) {
+        lines.push(format!("Variant: {}", variant.label));
+    } else {
+        lines.push("Variant: <not selected>".to_string());
+    }
+
     if let Some(disk) = app.disks.get(app.disk_index) {
-        lines.push(format!("Disk: {} ({})", disk.path, disk.size));
+        let disk_info = match &disk.identity {
+            Some(identity) => identity.display_string(),
+            None => "❌ IDENTITY FAILED".to_string(),
+        };
+        lines.push(format!("Disk: {} - {}", disk.path, disk_info));
     } else {
         lines.push("Disk: <not selected>".to_string());
     }
 
-    // EFI image source
-    if let Some(uefi_source) = app.uefi_sources.get(app.uefi_source_index) {
-        match uefi_source {
-            crate::tui::flash_config::EfiSource::LocalEfiImage => {
-                lines.push(format!("EFI: Local ({})", app.uefi_source_path));
+    if matches!(distro, Some(crate::tui::flash_config::OsDistro::Fedora)) {
+        if let Some(uefi_source) = app.uefi_sources.get(app.uefi_source_index) {
+            match uefi_source {
+                crate::tui::flash_config::EfiSource::LocalEfiImage => {
+                    lines.push(format!("EFI: Local ({})", app.uefi_source_path));
+                }
+                crate::tui::flash_config::EfiSource::DownloadEfiImage => {
+                    lines.push("EFI: Download image".to_string());
+                }
             }
-            crate::tui::flash_config::EfiSource::DownloadEfiImage => {
-                lines.push("EFI: Download image".to_string());
-            }
+        } else {
+            lines.push("EFI: <not selected>".to_string());
         }
+        lines.push("Action: install Fedora with custom partition layout".to_string());
+        lines.push("Reboots: 1".to_string());
     } else {
-        lines.push("EFI: <not selected>".to_string());
+        lines.push("Action: flash upstream full-disk image (no repartition)".to_string());
+        if matches!(distro, Some(crate::tui::flash_config::OsDistro::Manjaro)) {
+            lines.push("Note: post-boot partition expansion required".to_string());
+        }
+        lines.push("Reboots: 0".to_string());
     }
 
-    lines.push("Mounts: /boot/efi, /boot, / (root), /data".to_string());
-    lines.push("Formats: EFI=fat32, BOOT=ext4, ROOT=btrfs, DATA=btrfs".to_string());
-    lines.push("Packages: (not selected)".to_string());
-    lines.push("Kernel fix: USB-root alignment check".to_string());
-    lines.push("Reboots: 1".to_string());
     lines
 }
 
@@ -656,6 +688,7 @@ fn expected_actions(step: InstallStepType) -> String {
         InstallStepType::DisarmSafeMode => "Type DESTROY, Enter, Esc, q".to_string(),
         InstallStepType::DiskSelection
         | InstallStepType::ImageSelection
+        | InstallStepType::VariantSelection
         | InstallStepType::LocaleSelection
         | InstallStepType::FirstBootUser => "Up/Down/Tab, Enter, Esc, q".to_string(),
         InstallStepType::DownloadSourceSelection | InstallStepType::EfiImage => {
@@ -667,14 +700,14 @@ fn expected_actions(step: InstallStepType) -> String {
 fn format_disk_entry(disk: &crate::tui::dojo_app::DiskOption) -> String {
     use crate::tui::data_sources::BootConfidence;
 
-    // Build human-readable identity from label (which already includes size + vendor/model)
-    let mut identity = disk.label.clone();
-
-    // Add transport hint if available
-    let transport_hint = disk.transport.hint();
-    if !transport_hint.is_empty() {
-        identity.push_str(&format!(" ({})", transport_hint));
-    }
+    // CRITICAL: Use DiskIdentity::display_string() exclusively - no UI-side reconstruction
+    let identity_str = match &disk.identity {
+        Some(identity) => identity.display_string(),
+        None => {
+            // Identity resolution failed - show error (should be blocked from selection)
+            return format!("{} - ❌ IDENTITY FAILED - Cannot proceed", disk.path);
+        }
+    };
 
     // Build tags
     let mut tags = Vec::new();
@@ -699,7 +732,7 @@ fn format_disk_entry(disk: &crate::tui::dojo_app::DiskOption) -> String {
         format!(" - {}", tags.join(", "))
     };
 
-    format!("{} - {}{}", disk.path, identity, tag_str)
+    format!("{} - {}{}", disk.path, identity_str, tag_str)
 }
 
 #[cfg(test)]

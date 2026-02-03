@@ -1,13 +1,94 @@
-# Fedora Image Download Index
-# Maintained by MASH team
-# Schema: [[images]] with version, edition, arch, checksum_sha256, mirrors[]
+# OS Image Download Index (Canonical)
+#
+# Maintained by MASH team.
+#
+# Schema: `[[images]]` entries with:
+# - os: "fedora" | "ubuntu" | "raspberry_pi_os" | "manjaro"
+# - variant: distro-specific string (selected after OS selection)
+# - arch: currently "aarch64" (aka "arm64" for Ubuntu naming)
+# - file_name: expected local filename
+# - checksum_sha256: SHA256 checksum of the *downloaded* file (typically the .img.xz)
+# - checksum_url (optional): upstream checksum file containing checksum for `file_name`
+# - mirrors: list of direct download URLs (order matters)
+#
+# Notes:
+# - Mirrors may redirect; the downloader follows redirects.
+# - For checksum_url formats (Ubuntu/Fedora/RPiOS) the downloader extracts the
+#   checksum corresponding to `file_name`.
 
 [[images]]
-version = "43"
-edition = "KDE"
+os = "fedora"
+variant = "kde_mobile_disk"
 arch = "aarch64"
-checksum_sha256 = ""
-mirrors = []
+file_name = "Fedora-KDE-Mobile-Disk-43-1.6.aarch64.raw.xz"
+checksum_sha256 = "a615aa6ea7cba59215ec8e46b21df57494fb51b47b8f89c97b15ae31f8282696"
+checksum_url = "https://download.fedoraproject.org/pub/fedora/linux/releases/43/Spins/aarch64/images/Fedora-Spins-43-1.6-aarch64-CHECKSUM"
+mirrors = [
+  "https://download.fedoraproject.org/pub/fedora/linux/releases/43/Spins/aarch64/images/Fedora-KDE-Mobile-Disk-43-1.6.aarch64.raw.xz",
+]
+
+[[images]]
+os = "ubuntu"
+variant = "server_24_04_3"
+arch = "aarch64"
+file_name = "ubuntu-24.04.3-preinstalled-server-arm64+raspi.img.xz"
+checksum_sha256 = "9bb1799cee8965e6df0234c1c879dd35be1d87afe39b84951f278b6bd0433e56"
+checksum_url = "https://cdimage.ubuntu.com/releases/24.04/release/SHA256SUMS"
+mirrors = [
+  "https://cdimage.ubuntu.com/releases/24.04/release/ubuntu-24.04.3-preinstalled-server-arm64+raspi.img.xz",
+]
+
+[[images]]
+os = "ubuntu"
+variant = "desktop_24_04_3"
+arch = "aarch64"
+file_name = "ubuntu-24.04.3-preinstalled-desktop-arm64+raspi.img.xz"
+checksum_sha256 = "04a87330d2dfbe29c29f69d2113d92bbde44daa516054074ff4b96c7ee3c528b"
+checksum_url = "https://cdimage.ubuntu.com/releases/24.04/release/SHA256SUMS"
+mirrors = [
+  "https://cdimage.ubuntu.com/releases/24.04/release/ubuntu-24.04.3-preinstalled-desktop-arm64+raspi.img.xz",
+]
+
+[[images]]
+os = "raspberry_pi_os"
+variant = "arm64_latest"
+arch = "aarch64"
+file_name = "2025-12-04-raspios-trixie-arm64.img.xz"
+checksum_sha256 = "f7afb40e587746128538d84f217bf478a23af59484d4db77f2d06bf647f7c82e"
+checksum_url = "https://downloads.raspberrypi.com/raspios_arm64_latest.sha256"
+mirrors = [
+  "https://downloads.raspberrypi.com/raspios_arm64/images/raspios_arm64-2025-12-04/2025-12-04-raspios-trixie-arm64.img.xz",
+]
+
+[[images]]
+os = "manjaro"
+variant = "minimal_rpi4_20260126"
+arch = "aarch64"
+file_name = "Manjaro-ARM-minimal-rpi4-20260126.img.xz"
+checksum_sha256 = "a37bdc5b53e7b0e8ca0b0a3524aade58c58d3d07da226dfe79fcdf0388671ad5"
+mirrors = [
+  "https://github.com/manjaro-arm/rpi4-images/releases/download/20260126/Manjaro-ARM-minimal-rpi4-20260126.img.xz",
+]
+
+[[images]]
+os = "manjaro"
+variant = "kde_plasma_rpi4_20260126"
+arch = "aarch64"
+file_name = "Manjaro-ARM-kde-plasma-rpi4-20260126.img.xz"
+checksum_sha256 = "5080615cd4beabea377f83ffd705300596848410d99a927bfc55bfddfd111412"
+mirrors = [
+  "https://github.com/manjaro-arm/rpi4-images/releases/download/20260126/Manjaro-ARM-kde-plasma-rpi4-20260126.img.xz",
+]
+
+[[images]]
+os = "manjaro"
+variant = "xfce_rpi4_20260126"
+arch = "aarch64"
+file_name = "Manjaro-ARM-xfce-rpi4-20260126.img.xz"
+checksum_sha256 = "5e3c46025c825cff1bf9c6331b908e01488b6f934bbc749dfe3184e5f298ac48"
+mirrors = [
+  "https://github.com/manjaro-arm/rpi4-images/releases/download/20260126/Manjaro-ARM-xfce-rpi4-20260126.img.xz",
+]
 
 # -----------------------------------------------------------------------------
 # Link Health Checks

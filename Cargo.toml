@@ -7,6 +7,12 @@ members = [
     "tools/mash-release",
     "tools/mash-tools",
 ]
+default-members = [
+    "mash-core",
+    "mash-installer",
+    "tools/mash-release",
+    "tools/mash-tools",
+]
 
 [workspace.package]
 version = "1.2.14"

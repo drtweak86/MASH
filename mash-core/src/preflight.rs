@@ -60,9 +60,9 @@ impl PreflightConfig {
         if !requires_network {
             cfg.network_endpoint = None;
         }
-        if !required_binaries.is_empty() {
-            cfg.required_binaries = required_binaries;
-        }
+        // The pipeline computes the exact set of binaries required for the selected stages.
+        // An empty list explicitly means "no binary requirements".
+        cfg.required_binaries = required_binaries;
         cfg
     }
 }

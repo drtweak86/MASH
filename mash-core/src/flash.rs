@@ -12,7 +12,7 @@
 use anyhow::{bail, Context, Result};
 use log::{debug, info};
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -24,6 +24,47 @@ use crate::cli::PartitionScheme;
 use crate::errors::MashError;
 use crate::locale::LocaleConfig;
 use crate::tui::progress::{Phase, ProgressUpdate};
+
+/// Flash a full-disk image to a target block device.
+///
+/// - Supports raw images and `.xz`-compressed images.
+/// - Uses streaming decompression for `.xz` so it does not require an intermediate uncompressed file.
+///
+/// This is used for non-Fedora OS profiles (Ubuntu, Raspberry Pi OS, Manjaro) which ship as full
+/// disk images with their own partition tables.
+pub fn flash_raw_image_to_disk(image_path: &Path, target_disk: &Path) -> Result<()> {
+    info!(
+        "💾 Flashing image {} -> {}",
+        image_path.display(),
+        target_disk.display()
+    );
+
+    let input = fs::File::open(image_path)
+        .with_context(|| format!("Failed to open image: {}", image_path.display()))?;
+
+    let mut reader: Box<dyn Read> = if image_path.extension().is_some_and(|e| e == "xz") {
+        Box::new(xz2::read::XzDecoder::new(input))
+    } else {
+        Box::new(input)
+    };
+
+    let mut out = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(target_disk)
+        .with_context(|| format!("Failed to open target disk: {}", target_disk.display()))?;
+
+    // For regular files (CI tests), truncate; for block devices, this may fail and is fine.
+    let _ = out.set_len(0);
+    let _ = out.seek(SeekFrom::Start(0));
+
+    io::copy(&mut reader, &mut out).context("Failed to write image to target disk")?;
+
+    // Best-effort flush (block devices may ignore).
+    out.sync_all().ok();
+    Ok(())
+}
 
 /// Mount points for the installation
 struct MountPoints {

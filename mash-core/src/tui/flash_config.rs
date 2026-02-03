@@ -9,14 +9,14 @@ use super::progress::ProgressUpdate;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageSource {
     LocalFile,
-    DownloadFedora,
+    DownloadCatalogue,
 }
 
 impl ImageSource {
     pub fn display(&self) -> &'static str {
         match self {
             ImageSource::LocalFile => "Local Image File (.raw)",
-            ImageSource::DownloadFedora => "Download Fedora Image",
+            ImageSource::DownloadCatalogue => "Download OS Image",
         }
     }
 }
@@ -54,14 +54,14 @@ impl OsDistro {
     pub fn display(&self) -> &'static str {
         match self {
             OsDistro::Fedora => "Fedora KDE (recommended)",
-            OsDistro::Ubuntu => "Ubuntu Desktop (coming soon)",
-            OsDistro::RaspberryPiOS => "Raspberry Pi OS (coming soon)",
-            OsDistro::Manjaro => "Manjaro (coming soon)",
+            OsDistro::Ubuntu => "Ubuntu",
+            OsDistro::RaspberryPiOS => "Raspberry Pi OS",
+            OsDistro::Manjaro => "Manjaro",
         }
     }
 
     pub fn is_available(&self) -> bool {
-        matches!(self, OsDistro::Fedora)
+        true
     }
 
     pub fn all() -> &'static [OsDistro] {
@@ -71,6 +71,15 @@ impl OsDistro {
             OsDistro::RaspberryPiOS,
             OsDistro::Manjaro,
         ]
+    }
+
+    pub fn as_os_kind(&self) -> crate::downloader::OsKind {
+        match self {
+            OsDistro::Fedora => crate::downloader::OsKind::Fedora,
+            OsDistro::Ubuntu => crate::downloader::OsKind::Ubuntu,
+            OsDistro::RaspberryPiOS => crate::downloader::OsKind::RaspberryPiOS,
+            OsDistro::Manjaro => crate::downloader::OsKind::Manjaro,
+        }
     }
 }
 
@@ -147,6 +156,10 @@ impl ImageEditionOption {
 /// Flash configuration collected from the Dojo UI
 #[derive(Debug, Clone)]
 pub struct TuiFlashConfig {
+    pub mash_root: PathBuf,
+    pub state_path: PathBuf,
+    pub os_distro: OsDistro,
+    pub os_variant: String,
     pub image: PathBuf,
     pub disk: String,
     pub scheme: PartitionScheme,

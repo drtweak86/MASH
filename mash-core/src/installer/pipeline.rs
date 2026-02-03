@@ -247,6 +247,12 @@ fn run_download_stage(
     }
 
     let opts = downloader::DownloadOptions {
+        image: Some(downloader::ImageKey {
+            os: downloader::OsKind::Fedora,
+            // This pipeline is currently Fedora-oriented; default to the canonical Fedora entry.
+            variant: "kde_mobile_disk".to_string(),
+            arch: "aarch64".to_string(),
+        }),
         mirror_override: cfg.mirror_override.clone(),
         checksum_override: cfg.checksum_override.clone(),
         checksum_url: cfg.checksum_url.clone(),
@@ -995,7 +1001,7 @@ mod tests {
 
         let plan = run_pipeline(&cfg).unwrap();
         assert_eq!(plan.stages[1].name, "Download assets");
-        let artifact_path = downloads.join("Fedora-override-override-aarch64.raw.xz");
+        let artifact_path = downloads.join("override.img.xz");
         assert!(!artifact_path.exists());
     }
 
@@ -1026,7 +1032,7 @@ mod tests {
         );
 
         run_pipeline(&cfg).unwrap();
-        let artifact_path = downloads.join("Fedora-override-override-aarch64.raw.xz");
+        let artifact_path = downloads.join("override.img.xz");
         let metadata = artifact_path.metadata().unwrap();
         assert_eq!(metadata.len(), body.len() as u64);
     }
@@ -1049,7 +1055,7 @@ mod tests {
         let state_path = tmp.path().join("state.json");
         let downloads = tmp.path().join("downloads").join("images");
         fs::create_dir_all(&downloads).unwrap();
-        let partial = downloads.join("Fedora-override-override-aarch64.raw.xz");
+        let partial = downloads.join("override.img.xz");
         fs::write(&partial, &body[..5]).unwrap();
 
         let cfg = make_download_config_internal(
@@ -1063,7 +1069,7 @@ mod tests {
         );
 
         run_pipeline(&cfg).unwrap();
-        let artifact_path = downloads.join("Fedora-override-override-aarch64.raw.xz");
+        let artifact_path = downloads.join("override.img.xz");
         assert_eq!(fs::read(&artifact_path).unwrap(), body);
     }
 

@@ -21,6 +21,7 @@ mod flash;
 pub mod installer;
 mod locale;
 mod logging;
+pub mod partitioning;
 mod preflight;
 pub mod stage_runner;
 mod stages;

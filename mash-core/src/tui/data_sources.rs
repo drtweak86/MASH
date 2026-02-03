@@ -53,14 +53,57 @@ impl BootConfidence {
     }
 }
 
+/// Disk identity - mandatory hardware identification
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiskIdentity {
+    pub vendor: String,
+    pub model: String,
+    pub size_bytes: u64,
+    pub transport: TransportType,
+}
+
+impl DiskIdentity {
+    /// Create disk identity - returns None if vendor/model cannot be resolved
+    pub fn new(
+        vendor: Option<String>,
+        model: Option<String>,
+        size_bytes: u64,
+        transport: TransportType,
+    ) -> Option<Self> {
+        // Require both vendor and model - no fallbacks allowed
+        match (vendor, model) {
+            (Some(v), Some(m)) if !v.trim().is_empty() && !m.trim().is_empty() => {
+                Some(DiskIdentity {
+                    vendor: v.trim().to_string(),
+                    model: m.trim().to_string(),
+                    size_bytes,
+                    transport,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Display string for UI rendering - the ONLY way to render disk identity
+    pub fn display_string(&self) -> String {
+        let size = human_size(self.size_bytes);
+        let transport_hint = self.transport.hint();
+
+        if transport_hint.is_empty() {
+            format!("{} {} - {}", self.vendor, self.model, size)
+        } else {
+            format!(
+                "{} {} ({}) - {}",
+                self.vendor, self.model, transport_hint, size
+            )
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DiskInfo {
-    pub name: String, // Human-readable disk identity (never "sda")
-    pub path: String, // /dev/sda
-    pub size_bytes: u64,
-    pub vendor: Option<String>,
-    pub model: Option<String>,
-    pub transport: TransportType,
+    pub identity: Option<DiskIdentity>, // None = identity resolution failed
+    pub path: String,                   // /dev/sda
     pub removable: bool,
     pub boot_confidence: BootConfidence,
 }
@@ -111,11 +154,11 @@ pub fn scan_disks() -> Vec<DiskInfo> {
         let vendor = read_trimmed(&sysfs_base.join("device/vendor"));
         let model = read_trimmed(&sysfs_base.join("device/model"));
 
-        // Build human-readable disk identity (never just "sda")
-        let identity = build_disk_identity(&dev_name, &vendor, &model, size_bytes);
-
         // Detect transport type
         let transport = detect_transport_type(&dev_name, &sysfs_base);
+
+        // Create disk identity - returns None if vendor/model cannot be resolved
+        let identity = DiskIdentity::new(vendor, model, size_bytes, transport);
 
         // Check if removable
         let removable = read_u64(&sysfs_base.join("removable")).unwrap_or(0) == 1;
@@ -131,12 +174,8 @@ pub fn scan_disks() -> Vec<DiskInfo> {
         };
 
         disks.push(DiskInfo {
-            name: identity,
+            identity,
             path: disk_path,
-            size_bytes,
-            vendor,
-            model,
-            transport,
             removable,
             boot_confidence,
         });
@@ -146,25 +185,6 @@ pub fn scan_disks() -> Vec<DiskInfo> {
 }
 
 /// Build human-readable disk identity - never returns just device name
-fn build_disk_identity(
-    _dev_name: &str,
-    vendor: &Option<String>,
-    model: &Option<String>,
-    size_bytes: u64,
-) -> String {
-    let hw_identity = match (vendor.as_ref(), model.as_ref()) {
-        (Some(v), Some(m)) => format!("{} {}", v.trim(), m.trim()),
-        (Some(v), None) => v.trim().to_string(),
-        (None, Some(m)) => m.trim().to_string(),
-        (None, None) => {
-            // No vendor/model - use size + generic label
-            format!("{} Disk", human_size(size_bytes))
-        }
-    };
-
-    hw_identity
-}
-
 /// Detect transport type from device name and sysfs path
 fn detect_transport_type(dev_name: &str, sysfs_base: &Path) -> TransportType {
     // Check device name patterns first

@@ -80,14 +80,6 @@ mod tests {
                 name: "stage-1",
                 run: Box::new(move |_state, _dry_run| {
                     calls_stage_1.lock().unwrap().push("stage-1".to_string());
-                    // TODO(larry): Re-enable when DownloadRecord is implemented
-                    // state.record_download(crate::state_manager::DownloadRecord {
-                    //     name: "dummy1".to_string(),
-                    //     path: "/tmp/dummy1".to_string(),
-                    //     size: 1,
-                    //     checksum: "c1".to_string(),
-                    //     resumed: false,
-                    // });
                     Ok(())
                 }),
             },
