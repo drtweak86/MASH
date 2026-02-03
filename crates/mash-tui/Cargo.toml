@@ -1,0 +1,11 @@
+[package]
+name = "mash-tui"
+version = "0.1.0"
+edition = "2021"
+
+description = "Terminal UI for MASH installer (scaffold)"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+mash-workflow = { path = "../mash-workflow" }

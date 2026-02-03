@@ -1,0 +1,11 @@
+[package]
+name = "mash-workflow"
+version = "0.1.0"
+edition = "2021"
+
+description = "Installer workflow orchestration for MASH (scaffold)"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+mash-hal = { path = "../mash-hal" }
