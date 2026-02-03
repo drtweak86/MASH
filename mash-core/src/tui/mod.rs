@@ -4,7 +4,6 @@
 //! - Single-screen install flow
 //! - Live progress dashboard
 
-mod app;
 mod data_sources;
 mod dojo_app;
 mod dojo_ui;
@@ -16,7 +15,8 @@ mod widgets;
 pub mod flash_config; // Declare the new module
 pub use flash_config::{FlashConfig, ImageSource}; // Update the pub use statement
 
-use crate::download;
+use crate::download::DownloadProgress;
+use crate::download_manager;
 use crate::tui::progress::{Phase, ProgressUpdate};
 use crate::{cli::Cli, errors::Result, flash};
 use crossterm::{
@@ -209,11 +209,10 @@ fn run_execution_pipeline(
         send(ProgressUpdate::Status(
             "⬇️ Downloading Fedora image...".to_string(),
         ));
-        let images_dir = download_root.join("images");
         let mut stage = |msg: &str| {
             send(ProgressUpdate::Status(msg.to_string()));
         };
-        let mut progress = |progress: download::DownloadProgress| {
+        let mut progress = |progress: DownloadProgress| {
             if let Some(total) = progress.total {
                 let percent = (progress.downloaded as f64 / total as f64) * 100.0;
                 let speed_mbps = progress.speed_bytes_per_sec as f64 / (1024.0 * 1024.0);
@@ -226,8 +225,8 @@ fn run_execution_pipeline(
             }
             !cancel_flag.load(std::sync::atomic::Ordering::Relaxed)
         };
-        match download::download_fedora_image_with_progress(
-            &images_dir,
+        match download_manager::fetch_fedora_image(
+            &download_root,
             &config.image_version,
             &config.image_edition,
             &mut progress,
@@ -240,7 +239,6 @@ fn run_execution_pipeline(
             }
             Err(err) => {
                 send(ProgressUpdate::Status("🧹 Cleaning up...".to_string()));
-                cleanup_fedora_artifacts(&images_dir, &config.image_version, &config.image_edition);
                 if err.to_string().to_lowercase().contains("cancel") {
                     send(ProgressUpdate::Error("Cancelled".to_string()));
                     return Ok(DownloadOutcome {
@@ -262,11 +260,10 @@ fn run_execution_pipeline(
         send(ProgressUpdate::Status(
             "⬇️ Downloading UEFI bundle...".to_string(),
         ));
-        let uefi_dir = download_root.join("uefi");
         let mut stage = |msg: &str| {
             send(ProgressUpdate::Status(msg.to_string()));
         };
-        let mut progress = |progress: download::DownloadProgress| {
+        let mut progress = |progress: DownloadProgress| {
             if let Some(total) = progress.total {
                 let percent = (progress.downloaded as f64 / total as f64) * 100.0;
                 let speed_mbps = progress.speed_bytes_per_sec as f64 / (1024.0 * 1024.0);
@@ -279,8 +276,8 @@ fn run_execution_pipeline(
             }
             !cancel_flag.load(std::sync::atomic::Ordering::Relaxed)
         };
-        match download::download_uefi_firmware_with_progress(
-            &uefi_dir,
+        match download_manager::fetch_uefi_bundle(
+            &download_root,
             &mut progress,
             &mut stage,
             Some(cancel_flag.as_ref()),
@@ -291,7 +288,6 @@ fn run_execution_pipeline(
             }
             Err(err) => {
                 send(ProgressUpdate::Status("🧹 Cleaning up...".to_string()));
-                cleanup_uefi_artifacts(&uefi_dir);
                 if err.to_string().to_lowercase().contains("cancel") {
                     send(ProgressUpdate::Error("Cancelled".to_string()));
                     return Ok(DownloadOutcome {
@@ -343,16 +339,4 @@ fn run_execution_pipeline(
         }),
         Err(err) => Err(err),
     }
-}
-
-fn cleanup_fedora_artifacts(base: &std::path::Path, version: &str, edition: &str) {
-    let arch = "aarch64";
-    let raw_name = format!("Fedora-{}-{}-{}.raw", edition, version, arch);
-    let xz_name = format!("Fedora-{}-{}-{}.raw.xz", edition, version, arch);
-    let _ = std::fs::remove_file(base.join(raw_name));
-    let _ = std::fs::remove_file(base.join(xz_name));
-}
-
-fn cleanup_uefi_artifacts(base: &std::path::Path) {
-    let _ = std::fs::remove_dir_all(base);
 }

@@ -13,6 +13,7 @@ pub mod boot_config;
 mod cli;
 pub mod disk_ops;
 mod download;
+mod download_manager;
 pub mod downloader;
 mod errors;
 mod flash;
