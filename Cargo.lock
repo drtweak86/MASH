@@ -1633,6 +1633,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mash-hal"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "mash-installer"
 version = "1.2.14"
 dependencies = [
@@ -1673,6 +1680,22 @@ dependencies = [
  "serde",
  "toml",
  "toml_edit 0.22.27",
+]
+
+[[package]]
+name = "mash-tui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "mash-workflow",
+]
+
+[[package]]
+name = "mash-workflow"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "mash-hal",
 ]
 
 [[package]]

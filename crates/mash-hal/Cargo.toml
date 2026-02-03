@@ -1,0 +1,10 @@
+[package]
+name = "mash-hal"
+version = "0.1.0"
+edition = "2021"
+
+description = "Hardware abstraction layer interfaces for MASH (scaffold)"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"

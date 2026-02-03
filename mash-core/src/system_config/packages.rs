@@ -94,7 +94,7 @@ fn skip_dnf_commands() -> bool {
 }
 
 #[cfg(feature = "libdnf")]
-pub trait LibDnfBackend: Send + Sync {
+pub trait LibDnfBackend: Send + Sync + std::fmt::Debug {
     fn install(&self, pkgs: &[String]) -> Result<()>;
     fn update(&self) -> Result<()>;
 }
@@ -125,7 +125,7 @@ pub struct LibDnfPackageManager {
 impl LibDnfPackageManager {
     pub fn new(dry_run: bool) -> Self {
         Self {
-            backend: Box::new(LibDnfSysBackend::default()),
+            backend: Box::new(LibDnfSysBackend),
             dry_run,
         }
     }
@@ -207,7 +207,7 @@ mod libdnf_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    #[derive(Default)]
+    #[derive(Debug, Default)]
     struct MockState {
         install_calls: Mutex<Vec<Vec<String>>>,
         update_calls: AtomicUsize,
@@ -215,7 +215,7 @@ mod libdnf_tests {
         fail_update: bool,
     }
 
-    #[derive(Clone, Default)]
+    #[derive(Debug, Clone, Default)]
     struct MockBackend {
         state: Arc<MockState>,
     }
