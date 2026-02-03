@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use mash_hal::procfs::mountinfo;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -19,28 +20,8 @@ pub fn apply_usb_root_fix(root: &Path, mountinfo: &str, by_uuid_dir: &Path) -> R
 }
 
 pub fn root_device_from_mountinfo(mountinfo: &str) -> Result<String> {
-    for line in mountinfo.lines() {
-        let mut parts = line.split(" - ");
-        let pre = parts.next().unwrap_or("");
-        let post = parts.next().unwrap_or("");
-
-        let pre_fields: Vec<&str> = pre.split_whitespace().collect();
-        if pre_fields.len() < 5 {
-            continue;
-        }
-        let mount_point = pre_fields[4];
-        if mount_point != "/" {
-            continue;
-        }
-
-        let post_fields: Vec<&str> = post.split_whitespace().collect();
-        if post_fields.len() < 2 {
-            continue;
-        }
-        let source = post_fields[1];
-        return Ok(source.to_string());
-    }
-    Err(anyhow!("Failed to locate root mount in mountinfo"))
+    mountinfo::root_mount_source(mountinfo)
+        .ok_or_else(|| anyhow!("Failed to locate root mount in mountinfo"))
 }
 
 pub fn uuid_for_device(by_uuid_dir: &Path, device: &str) -> Result<String> {

@@ -1616,6 +1616,7 @@ dependencies = [
  "libc",
  "libdnf-sys",
  "log",
+ "mash-hal",
  "nix 0.27.1",
  "once_cell",
  "ratatui",
@@ -1637,6 +1638,7 @@ name = "mash-hal"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "tempfile",
 ]
 
 [[package]]

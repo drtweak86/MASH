@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use libc::statvfs;
 use log::info;
+use mash_hal::{os_release, procfs, sysfs};
 use std::env;
 use std::ffi::CString;
 use std::fs;
@@ -92,7 +93,7 @@ pub fn run(cfg: &PreflightConfig) -> Result<()> {
 fn check_ram(min_mb: u64) -> Result<()> {
     let content = fs::read_to_string("/proc/meminfo")
         .context("failed to read /proc/meminfo for RAM check")?;
-    let available_kb = parse_mem_available(&content)
+    let available_kb = procfs::meminfo::parse_mem_available_kb(&content)
         .ok_or_else(|| anyhow!("failed to determine available RAM"))?;
     let available_mb = available_kb / 1024;
     if available_mb < min_mb {
@@ -130,7 +131,7 @@ fn check_target_disk(path: &Path, min_target_disk_gb: u64) -> Result<()> {
     }
 
     // Reject partitions when a full-disk device is expected (e.g. /dev/sda not /dev/sda1).
-    let name = device_basename(path)?;
+    let name = sysfs::block::device_basename(path)?;
     let sys_path = Path::new(SYS_BLOCK).join(&name);
     if !sys_path.exists() {
         anyhow::bail!(
@@ -149,7 +150,7 @@ fn check_target_disk(path: &Path, min_target_disk_gb: u64) -> Result<()> {
     // Fail fast if anything from this disk is currently mounted.
     let mountinfo = fs::read_to_string("/proc/self/mountinfo")
         .context("failed to read /proc/self/mountinfo")?;
-    let mounted = mounted_under_device(&mountinfo, path);
+    let mounted = procfs::mountinfo::mounted_under_device(&mountinfo, path);
     if !mounted.is_empty() {
         anyhow::bail!(
             "Target disk {} has mounted filesystems: {}. Unmount them before continuing.",
@@ -159,7 +160,7 @@ fn check_target_disk(path: &Path, min_target_disk_gb: u64) -> Result<()> {
     }
 
     // Avoid clobbering the host system disk (rootfs).
-    if let Some(root_source) = root_mount_source(&mountinfo) {
+    if let Some(root_source) = procfs::mountinfo::root_mount_source(&mountinfo) {
         if root_source.starts_with(&path.to_string_lossy().to_string()) {
             anyhow::bail!(
                 "Target disk {} appears to be the current root device ({}); refusing to continue.",
@@ -170,7 +171,7 @@ fn check_target_disk(path: &Path, min_target_disk_gb: u64) -> Result<()> {
     }
 
     // Minimum target device capacity check (read-only, via sysfs).
-    let size_bytes = block_device_size_bytes(&sys_path)
+    let size_bytes = sysfs::block::block_device_size_bytes(&sys_path)
         .with_context(|| format!("failed to read size for {}", path.display()))?;
     let size_gib = size_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
     if size_gib < min_target_disk_gb as f64 {
@@ -187,7 +188,7 @@ fn check_target_disk(path: &Path, min_target_disk_gb: u64) -> Result<()> {
 fn check_os_release() -> Result<()> {
     let content = fs::read_to_string("/etc/os-release")
         .context("failed to read /etc/os-release for Fedora verification")?;
-    let (id, version) = parse_os_release(&content)?;
+    let (id, version) = os_release::parse_os_release(&content)?;
     if id != "fedora" {
         anyhow::bail!("Preflight requires Fedora, found {}", id);
     }
@@ -264,135 +265,6 @@ fn find_in_paths(binary: &str, paths: &[PathBuf]) -> Option<PathBuf> {
     None
 }
 
-fn parse_mem_available(content: &str) -> Option<u64> {
-    for line in content.lines() {
-        if let Some(value) = line.strip_prefix("MemAvailable:") {
-            return value
-                .split_whitespace()
-                .next()
-                .and_then(|num| num.parse().ok());
-        }
-    }
-    for line in content.lines() {
-        if let Some(value) = line.strip_prefix("MemTotal:") {
-            return value
-                .split_whitespace()
-                .next()
-                .and_then(|num| num.parse().ok());
-        }
-    }
-    None
-}
-
-fn parse_os_id(content: &str) -> Option<String> {
-    content.lines().find_map(|line| {
-        if let Some(value) = line.strip_prefix("ID=") {
-            return Some(value.trim().trim_matches('"').to_lowercase());
-        }
-        if let Some(value) = line.strip_prefix("NAME=") {
-            return Some(value.trim().trim_matches('"').to_lowercase());
-        }
-        None
-    })
-}
-
-fn parse_os_release(content: &str) -> Result<(String, Option<u32>)> {
-    let mut id: Option<String> = None;
-    let mut version_id: Option<u32> = None;
-
-    for line in content.lines() {
-        if let Some(value) = line.strip_prefix("ID=") {
-            id = Some(value.trim().trim_matches('"').to_lowercase());
-        } else if let Some(value) = line.strip_prefix("VERSION_ID=") {
-            let raw = value.trim().trim_matches('"');
-            version_id = raw.parse::<u32>().ok();
-        }
-    }
-
-    let id = id
-        .or_else(|| parse_os_id(content))
-        .unwrap_or_else(|| "unknown".to_string());
-    Ok((id, version_id))
-}
-
-fn device_basename(path: &Path) -> Result<String> {
-    let name = path
-        .file_name()
-        .ok_or_else(|| anyhow!("invalid device path {}", path.display()))?
-        .to_string_lossy()
-        .to_string();
-    Ok(name)
-}
-
-fn block_device_size_bytes(sys_path: &Path) -> Result<u64> {
-    // /sys/class/block/<dev>/size is in 512-byte sectors.
-    let sectors_str = fs::read_to_string(sys_path.join("size"))?;
-    let sectors: u64 = sectors_str.trim().parse()?;
-    Ok(sectors.saturating_mul(512))
-}
-
-fn mounted_under_device(mountinfo: &str, dev_path: &Path) -> Vec<String> {
-    let prefix = dev_path.to_string_lossy().to_string();
-    let mut mounts = Vec::new();
-
-    for line in mountinfo.lines() {
-        // mountinfo format:
-        //   <pre fields...> <mount point> <...> - <fstype> <source> <superopts>
-        let (pre, post) = match line.split_once(" - ") {
-            Some(v) => v,
-            None => continue,
-        };
-        let mut pre_fields = pre.split_whitespace();
-        let _mount_id = pre_fields.next();
-        let _parent_id = pre_fields.next();
-        let _major_minor = pre_fields.next();
-        let _root = pre_fields.next();
-        let mount_point = match pre_fields.next() {
-            Some(v) => unescape_mount_path(v),
-            None => continue,
-        };
-        let mut post_fields = post.split_whitespace();
-        let _fstype = post_fields.next();
-        let source = match post_fields.next() {
-            Some(v) => v,
-            None => continue,
-        };
-        if source.starts_with(&prefix) {
-            mounts.push(mount_point);
-        }
-    }
-
-    mounts.sort();
-    mounts.dedup();
-    mounts
-}
-
-fn root_mount_source(mountinfo: &str) -> Option<String> {
-    for line in mountinfo.lines() {
-        let (pre, post) = line.split_once(" - ")?;
-        let pre_fields: Vec<&str> = pre.split_whitespace().collect();
-        if pre_fields.len() < 5 {
-            continue;
-        }
-        let mount_point = unescape_mount_path(pre_fields[4]);
-        if mount_point != "/" {
-            continue;
-        }
-        let mut post_fields = post.split_whitespace();
-        let _fstype = post_fields.next()?;
-        let source = post_fields.next()?.to_string();
-        return Some(source);
-    }
-    None
-}
-
-fn unescape_mount_path(raw: &str) -> String {
-    raw.replace("\\040", " ")
-        .replace("\\011", "\t")
-        .replace("\\012", "\n")
-        .replace("\\134", "\\")
-}
-
 #[allow(clippy::unnecessary_cast)]
 fn available_bytes(path: &Path) -> Result<u64> {
     let c_path = CString::new(path.as_os_str().as_bytes())
@@ -436,32 +308,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_mem_available_prefers_available() {
-        let data = "MemTotal: 16384000 kB\nMemAvailable: 8000000 kB\n";
-        assert_eq!(parse_mem_available(data), Some(8000000));
-    }
-
-    #[test]
-    fn parse_mem_available_uses_total_when_available_missing() {
-        let data = "MemTotal: 16384000 kB\n";
-        assert_eq!(parse_mem_available(data), Some(16384000));
-    }
-
-    #[test]
-    fn parse_os_id_handles_name() {
-        let release = "NAME=\"Fedora Linux\"\nID=fedora\n";
-        assert_eq!(parse_os_id(release), Some("fedora linux".to_string()));
-    }
-
-    #[test]
-    fn parse_os_release_extracts_version_id() {
-        let release = "NAME=\"Fedora Linux\"\nID=fedora\nVERSION_ID=\"43\"\n";
-        let (id, version) = parse_os_release(release).unwrap();
-        assert_eq!(id, "fedora");
-        assert_eq!(version, Some(43));
-    }
-
-    #[test]
     fn find_in_paths_ignores_missing_binary() {
         let paths = env::split_paths(&env::var_os("PATH").unwrap_or_default())
             .take(1)
@@ -498,21 +344,6 @@ mod tests {
         let _guard = EnvVarGuard::new("PATH", bin_dir.as_os_str());
         let err = check_binaries(&["dnf".to_string()]).unwrap_err();
         assert!(err.to_string().contains("not executable"));
-    }
-
-    #[test]
-    fn mounted_under_device_finds_matching_sources() {
-        let mi = "36 28 0:31 / / rw,relatime - ext4 /dev/sda3 rw\n\
-                  37 28 0:32 / /mnt/boot rw,relatime - ext4 /dev/sda1 rw\n\
-                  38 28 0:33 / /mnt/other rw,relatime - ext4 /dev/sdb1 rw\n";
-        let mounts = mounted_under_device(mi, Path::new("/dev/sda"));
-        assert_eq!(mounts, vec!["/".to_string(), "/mnt/boot".to_string()]);
-    }
-
-    #[test]
-    fn root_mount_source_extracts_device() {
-        let mi = "36 28 0:31 / / rw,relatime - ext4 /dev/sda3 rw\n";
-        assert_eq!(root_mount_source(mi), Some("/dev/sda3".to_string()));
     }
 
     #[test]
