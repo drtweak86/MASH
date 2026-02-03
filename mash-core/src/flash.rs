@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, OnceLock};
+use tempfile::Builder as TempDirBuilder;
 
 use crate::cli::PartitionScheme;
 use crate::config_states::{
@@ -428,12 +429,13 @@ fn run_full_loop_from_config(
     )
     .ok();
 
-    // Create work directory
-    let work_dir = PathBuf::from("/tmp/mash-install");
-    if work_dir.exists() {
-        fs::remove_dir_all(&work_dir)?;
-    }
-    fs::create_dir_all(&work_dir)?;
+    // Create a secure, unique work directory for this run.
+    // Avoids TOCTOU/link attacks against a fixed path in privileged contexts.
+    let _work_dir_guard = TempDirBuilder::new()
+        .prefix("mash-install-")
+        .tempdir_in("/tmp")
+        .context("failed to create secure temporary work directory")?;
+    let work_dir = _work_dir_guard.path().to_path_buf();
 
     // Normalize UEFI input into a directory suitable for VFAT-safe rsync.
     // If a file is provided, stage it into a temp dir as RPI_EFI.fd.
@@ -482,7 +484,6 @@ fn run_full_loop_from_config(
         None => run_installation_dry_run(&mut ctx),
     };
     cleanup(&ctx);
-    let _ = fs::remove_dir_all(&work_dir);
     result
 }
 
