@@ -6,9 +6,9 @@
 
 mod app;
 mod data_sources;
-mod input;
 mod dojo_app;
 mod dojo_ui;
+mod input;
 pub mod progress;
 
 mod widgets;

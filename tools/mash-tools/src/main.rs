@@ -213,8 +213,8 @@ fn check_links(repo_root: &Path, rel_path: &Path, timeout_secs: u64) -> Result<(
     } else {
         repo_root.join(rel_path)
     };
-    let content = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let content =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
     let parsed: LinkHealthFile =
         toml::from_str(&content).with_context(|| format!("failed to parse {}", path.display()))?;
     if parsed.health_checks.is_empty() {

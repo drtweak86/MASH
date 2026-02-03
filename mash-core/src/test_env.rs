@@ -12,6 +12,9 @@ pub struct EnvLockGuard(MutexGuard<'static, ()>);
 
 #[cfg(test)]
 pub fn lock() -> EnvLockGuard {
-    EnvLockGuard(ENV_LOCK.lock().expect("ENV_LOCK poisoned"))
+    let guard = match ENV_LOCK.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    EnvLockGuard(guard)
 }
-

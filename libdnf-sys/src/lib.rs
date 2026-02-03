@@ -23,9 +23,11 @@ pub fn update() -> Result<(), String> {
 pub fn install(pkgs: &[String]) -> Result<(), String> {
     let mut c_strings = Vec::with_capacity(pkgs.len());
     for pkg in pkgs {
-        c_strings.push(CString::new(pkg.as_str()).map_err(|_| {
-            format!("libdnf5 backend received package with interior NUL: {pkg}")
-        })?);
+        c_strings.push(
+            CString::new(pkg.as_str()).map_err(|_| {
+                format!("libdnf5 backend received package with interior NUL: {pkg}")
+            })?,
+        );
     }
     let mut pointers: Vec<*const c_char> = c_strings.iter().map(|c| c.as_ptr()).collect();
     let code = unsafe { mash_libdnf5_install(pointers.as_mut_ptr(), pointers.len()) };

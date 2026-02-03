@@ -69,6 +69,47 @@ impl BootStageConfig {
     }
 }
 
+#[derive(Clone)]
+pub struct MountStageConfig {
+    pub mounts: Vec<MountSpec>,
+}
+
+impl MountStageConfig {
+    fn from_install_config(cfg: &InstallConfig) -> Self {
+        Self {
+            mounts: cfg.mounts.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct PackageStageConfig {
+    pub packages: Vec<String>,
+}
+
+impl PackageStageConfig {
+    fn from_install_config(cfg: &InstallConfig) -> Self {
+        Self {
+            packages: cfg.packages.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ResumeStageConfig {
+    pub mash_root: PathBuf,
+    pub state_path: PathBuf,
+}
+
+impl ResumeStageConfig {
+    fn from_install_config(cfg: &InstallConfig) -> Self {
+        Self {
+            mash_root: cfg.mash_root.clone(),
+            state_path: cfg.state_path.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct InstallConfig {
     pub dry_run: bool,
@@ -160,12 +201,12 @@ pub fn build_plan(cfg: &InstallConfig) -> InstallPlan {
             description: format!("Target: {}", disk),
         },
         StagePlan {
-            name: "Mount plan",
-            description: format!("{} mount operations", mount_count),
-        },
-        StagePlan {
             name: "Format plan",
             description: format!("{} format operations", format_count),
+        },
+        StagePlan {
+            name: "Mount plan",
+            description: format!("{} mount operations", mount_count),
         },
         StagePlan {
             name: "Package plan",
@@ -178,6 +219,10 @@ pub fn build_plan(cfg: &InstallConfig) -> InstallPlan {
             } else {
                 "Skipped".to_string()
             },
+        },
+        StagePlan {
+            name: "Resume unit",
+            description: "Install resume unit + request reboot (if required)".to_string(),
         },
     ];
 
@@ -291,14 +336,95 @@ fn run_boot_stage(
     Ok(())
 }
 
+fn run_mount_stage(
+    _state: &mut state_manager::InstallState,
+    cfg: &MountStageConfig,
+    dry_run: bool,
+) -> Result<()> {
+    if cfg.mounts.is_empty() {
+        log::info!("Mount stage skipped; no mounts configured");
+        return Ok(());
+    }
+
+    for spec in &cfg.mounts {
+        let target = PathBuf::from(&spec.target);
+        if disk_ops::mounts::is_mounted(&target).unwrap_or(false) {
+            log::info!("Mount already present: {}", target.display());
+            continue;
+        }
+        if dry_run {
+            log::info!("DRY RUN: mount {} -> {}", spec.device, target.display());
+            continue;
+        }
+        std::fs::create_dir_all(&target)?;
+        disk_ops::mounts::mount_device(
+            PathBuf::from(&spec.device).as_path(),
+            &target,
+            spec.fstype.as_deref(),
+            nix::mount::MsFlags::empty(),
+            dry_run,
+        )?;
+    }
+    Ok(())
+}
+
+fn run_package_stage(
+    _state: &mut state_manager::InstallState,
+    cfg: &PackageStageConfig,
+    dry_run: bool,
+) -> Result<()> {
+    if cfg.packages.is_empty() {
+        log::info!("Package stage skipped; no packages configured");
+        return Ok(());
+    }
+    let pkg_mgr = system_config::packages::default_package_manager(dry_run);
+    pkg_mgr.update()?;
+    pkg_mgr.install(&cfg.packages)?;
+    Ok(())
+}
+
+fn run_resume_stage(
+    state: &mut state_manager::InstallState,
+    cfg: &ResumeStageConfig,
+    dry_run: bool,
+) -> Result<()> {
+    if !state.boot_stage_completed {
+        log::info!("Resume stage skipped; boot stage not completed");
+        return Ok(());
+    }
+
+    if dry_run {
+        log::info!("DRY RUN: would install resume unit + request reboot");
+        return Ok(());
+    }
+
+    let exec_path = env::current_exe().context("Failed to determine current executable path")?;
+    let unit_content = system_config::resume::render_resume_unit(&exec_path, &cfg.state_path);
+    system_config::resume::install_resume_unit(&cfg.mash_root, &unit_content)?;
+    if let Some(conn) = system_config::resume::connect_systemd() {
+        system_config::resume::enable_resume_unit(&conn)?;
+    } else {
+        log::warn!("No systemd connection available; skipping resume unit enable");
+    }
+    system_config::resume::request_reboot(dry_run)?;
+
+    Ok(())
+}
+
 pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
     let plan = build_plan(cfg);
     if cfg.execute && !cfg.confirmed {
         anyhow::bail!("Execution requires explicit confirmation");
     }
+    if !cfg.execute {
+        return Ok(plan);
+    }
     let requires_network = !cfg.packages.is_empty() || cfg.download_image || cfg.download_uefi;
     let required_binaries = {
-        let mut bins = vec!["dnf".to_string()];
+        let mut bins = Vec::new();
+        if !cfg.packages.is_empty() {
+            bins.push("dnf".to_string());
+        }
         if !cfg.format_ext4.is_empty() {
             bins.push("mkfs.ext4".to_string());
         }
@@ -312,6 +438,9 @@ pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
         requires_network,
         required_binaries,
     ));
+    let mount_cfg = Arc::new(MountStageConfig::from_install_config(cfg));
+    let package_cfg = Arc::new(PackageStageConfig::from_install_config(cfg));
+    let resume_cfg = Arc::new(ResumeStageConfig::from_install_config(cfg));
     let stage_defs = plan
         .stages
         .iter()
@@ -332,6 +461,13 @@ pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
                     }),
                 }
             }
+            "Mount plan" => {
+                let cfg = Arc::clone(&mount_cfg);
+                StageDefinition {
+                    name: stage.name,
+                    run: Box::new(move |state, dry_run| run_mount_stage(state, &cfg, dry_run)),
+                }
+            }
             "Format plan" => {
                 let disk_cfg = DiskStageConfig::from_install_config(cfg);
                 StageDefinition {
@@ -339,11 +475,25 @@ pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
                     run: Box::new(move |state, dry_run| run_disk_stage(state, &disk_cfg, dry_run)),
                 }
             }
+            "Package plan" => {
+                let cfg = Arc::clone(&package_cfg);
+                StageDefinition {
+                    name: stage.name,
+                    run: Box::new(move |state, dry_run| run_package_stage(state, &cfg, dry_run)),
+                }
+            }
             "Kernel fix check" => {
                 let boot_cfg = BootStageConfig::from_install_config(cfg);
                 StageDefinition {
                     name: stage.name,
                     run: Box::new(move |state, dry_run| run_boot_stage(state, &boot_cfg, dry_run)),
+                }
+            }
+            "Resume unit" => {
+                let cfg = Arc::clone(&resume_cfg);
+                StageDefinition {
+                    name: stage.name,
+                    run: Box::new(move |state, dry_run| run_resume_stage(state, &cfg, dry_run)),
                 }
             }
             name => {
@@ -363,49 +513,8 @@ pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
         })
         .collect::<Vec<_>>();
 
-    let runner = if cfg.execute {
-        StageRunner::new(cfg.state_path.clone(), cfg.dry_run)
-    } else {
-        StageRunner::new_with_persist(cfg.state_path.clone(), cfg.dry_run, false)
-    };
-    let final_state = runner.run(&stage_defs)?;
-
-    if !cfg.execute {
-        return Ok(plan);
-    }
-
-    if cfg.dry_run {
-        return Ok(plan);
-    }
-
-    if final_state.boot_stage_completed {
-        let exec_path =
-            env::current_exe().context("Failed to determine current executable path")?;
-        let unit_content = system_config::resume::render_resume_unit(&exec_path, &cfg.state_path);
-        system_config::resume::install_resume_unit(&cfg.mash_root, &unit_content)?;
-        if let Some(conn) = system_config::resume::connect_systemd() {
-            system_config::resume::enable_resume_unit(&conn)?;
-        } else {
-            log::warn!("No systemd connection available; skipping resume unit enable");
-        }
-        system_config::resume::request_reboot(cfg.dry_run)?;
-    }
-
-    for spec in &cfg.mounts {
-        let target = PathBuf::from(&spec.target);
-        std::fs::create_dir_all(&target)?;
-        disk_ops::mounts::mount_device(
-            PathBuf::from(&spec.device).as_path(),
-            &target,
-            spec.fstype.as_deref(),
-            nix::mount::MsFlags::empty(),
-            cfg.dry_run,
-        )?;
-    }
-
-    let pkg_mgr = system_config::packages::default_package_manager(cfg.dry_run);
-    pkg_mgr.update()?;
-    pkg_mgr.install(&cfg.packages)?;
+    let runner = StageRunner::new(cfg.state_path.clone(), cfg.dry_run);
+    runner.run(&stage_defs)?;
 
     Ok(plan)
 }
@@ -564,10 +673,11 @@ mod tests {
             download_dir: PathBuf::from("downloads/images"),
         };
         let plan = build_plan(&cfg);
-        assert_eq!(plan.stages.len(), 7);
+        assert_eq!(plan.stages.len(), 8);
         assert_eq!(plan.stages[0].name, "Preflight");
         assert_eq!(plan.stages[1].name, "Download assets");
         assert_eq!(plan.stages[6].name, "Kernel fix check");
+        assert_eq!(plan.stages[7].name, "Resume unit");
     }
 
     fn make_download_config_internal(
@@ -911,7 +1021,7 @@ mod tests {
             downloads.clone(),
             server.url("/image"),
             checksum.clone(),
-            false,
+            true,
             false,
         );
 
@@ -948,7 +1058,7 @@ mod tests {
             downloads.clone(),
             server.url("/image"),
             checksum,
-            false,
+            true,
             false,
         );
 

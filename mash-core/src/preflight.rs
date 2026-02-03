@@ -48,7 +48,11 @@ impl Default for PreflightConfig {
 }
 
 impl PreflightConfig {
-    pub fn for_install(disk: Option<PathBuf>, requires_network: bool, required_binaries: Vec<String>) -> Self {
+    pub fn for_install(
+        disk: Option<PathBuf>,
+        requires_network: bool,
+        required_binaries: Vec<String>,
+    ) -> Self {
         let mut cfg = Self::default();
         if let Some(target) = disk {
             cfg.target_disk = Some(target);
@@ -143,8 +147,8 @@ fn check_target_disk(path: &Path, min_target_disk_gb: u64) -> Result<()> {
     }
 
     // Fail fast if anything from this disk is currently mounted.
-    let mountinfo =
-        fs::read_to_string("/proc/self/mountinfo").context("failed to read /proc/self/mountinfo")?;
+    let mountinfo = fs::read_to_string("/proc/self/mountinfo")
+        .context("failed to read /proc/self/mountinfo")?;
     let mounted = mounted_under_device(&mountinfo, path);
     if !mounted.is_empty() {
         anyhow::bail!(

@@ -225,11 +225,7 @@ mod libdnf_tests {
             if self.state.fail_install {
                 return Err(anyhow!("install failed"));
             }
-            self.state
-                .install_calls
-                .lock()
-                .unwrap()
-                .push(pkgs.to_vec());
+            self.state.install_calls.lock().unwrap().push(pkgs.to_vec());
             Ok(())
         }
 
