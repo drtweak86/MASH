@@ -1617,6 +1617,7 @@ dependencies = [
  "libdnf-sys",
  "log",
  "mash-hal",
+ "mash-workflow",
  "nix 0.27.1",
  "once_cell",
  "ratatui",
@@ -1689,7 +1690,6 @@ name = "mash-tui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "mash-workflow",
 ]
 
 [[package]]
@@ -1697,7 +1697,6 @@ name = "mash-workflow"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "mash-hal",
 ]
 
 [[package]]

@@ -8,4 +8,3 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1.0"
-mash-hal = { path = "../mash-hal" }

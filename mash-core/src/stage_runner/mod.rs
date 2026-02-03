@@ -1,59 +1,61 @@
 use crate::state_manager::{load_state, save_state_atomic, InstallState};
 use anyhow::Result;
+use mash_workflow::stage_runner as wf;
 use std::path::PathBuf;
 
-pub type StageFn<'a> = Box<dyn Fn(&mut InstallState, bool) -> Result<()> + 'a>;
+pub type StageFn<'a> = wf::StageFn<'a, InstallState>;
+pub type StageDefinition<'a> = wf::StageDefinition<'a, InstallState>;
 
-pub struct StageDefinition<'a> {
-    pub name: &'a str,
-    pub run: StageFn<'a>,
+#[derive(Clone)]
+struct InstallStateFileStore {
+    state_path: PathBuf,
+}
+
+impl wf::StateStore<InstallState> for InstallStateFileStore {
+    fn load(&self) -> Result<Option<InstallState>> {
+        load_state(&self.state_path)
+    }
+
+    fn save(&self, state: &InstallState) -> Result<()> {
+        save_state_atomic(&self.state_path, state)
+    }
+}
+
+impl wf::WorkflowState for InstallState {
+    fn is_completed(&self, stage: &str) -> bool {
+        self.is_completed(stage)
+    }
+
+    fn set_current(&mut self, stage: &str) {
+        self.set_current(stage);
+    }
+
+    fn mark_completed(&mut self, stage: &str) {
+        self.mark_completed(stage);
+    }
 }
 
 pub struct StageRunner {
-    state_path: PathBuf,
-    dry_run: bool,
-    persist: bool,
+    inner: wf::StageRunner<InstallState, InstallStateFileStore>,
 }
 
 impl StageRunner {
     pub fn new(state_path: PathBuf, dry_run: bool) -> Self {
+        let store = InstallStateFileStore { state_path };
         Self {
-            state_path,
-            dry_run,
-            persist: true,
+            inner: wf::StageRunner::new(store, dry_run, InstallState::new),
         }
     }
 
     pub fn new_with_persist(state_path: PathBuf, dry_run: bool, persist: bool) -> Self {
+        let store = InstallStateFileStore { state_path };
         Self {
-            state_path,
-            dry_run,
-            persist,
+            inner: wf::StageRunner::new_with_persist(store, dry_run, persist, InstallState::new),
         }
     }
 
     pub fn run(&self, stages: &[StageDefinition<'_>]) -> Result<InstallState> {
-        let mut state =
-            load_state(&self.state_path)?.unwrap_or_else(|| InstallState::new(self.dry_run));
-
-        for stage in stages {
-            if state.is_completed(stage.name) {
-                continue;
-            }
-            state.set_current(stage.name);
-            if self.persist {
-                save_state_atomic(&self.state_path, &state)?;
-            }
-
-            (stage.run)(&mut state, self.dry_run)?;
-
-            state.mark_completed(stage.name);
-            if self.persist {
-                save_state_atomic(&self.state_path, &state)?;
-            }
-        }
-
-        Ok(state)
+        self.inner.run(stages)
     }
 }
 
@@ -72,8 +74,8 @@ mod tests {
         save_state_atomic(&state_path, &state).unwrap();
 
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let calls_stage_1 = calls.clone();
-        let calls_stage_2 = calls.clone();
+        let calls_stage_1 = Arc::clone(&calls);
+        let calls_stage_2 = Arc::clone(&calls);
 
         let stages = vec![
             StageDefinition {
