@@ -4,7 +4,7 @@
 
 use crate::cli::PartitionScheme;
 use crate::locale::{LocaleConfig, LOCALES};
-use crate::tui::flash_config::{FlashConfig, ImageSource};
+use crate::tui::flash_config::{ImageSource, TuiFlashConfig};
 use clap::ValueEnum;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers}; // New import for KeyEvent
 use std::path::PathBuf;
@@ -157,7 +157,7 @@ pub enum InputResult {
     Continue,
     Quit,
     Complete,
-    StartFlash(FlashConfig),
+    StartFlash(TuiFlashConfig),
     StartDownload(DownloadType),
 }
 
@@ -1351,11 +1351,11 @@ impl App {
     }
 
     /// Build flash configuration from current app state
-    pub fn build_flash_config(&self) -> Option<FlashConfig> {
+    pub fn build_flash_config(&self) -> Option<TuiFlashConfig> {
         // These values will eventually come from user selections in the TUI.
         // For now, we use placeholders to get it compiling.
         // The actual values would come from fields in the App struct (e.g., self.selected_disk, etc.)
-        // This is a minimal implementation to allow FlashConfig construction.
+        // This is a minimal implementation to allow TuiFlashConfig construction.
 
         let download_uefi_firmware = self
             .options
@@ -1364,7 +1364,7 @@ impl App {
             .map(|option| option.enabled)
             .unwrap_or(false);
 
-        Some(FlashConfig {
+        Some(TuiFlashConfig {
             image: self
                 .downloaded_image_path
                 .clone()

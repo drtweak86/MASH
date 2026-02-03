@@ -24,7 +24,6 @@ use crate::cli::PartitionScheme;
 use crate::errors::MashError;
 use crate::locale::LocaleConfig;
 use crate::tui::progress::{Phase, ProgressUpdate};
-use crate::tui::FlashConfig;
 
 /// Mount points for the installation
 struct MountPoints {
@@ -112,10 +111,6 @@ pub struct FlashContext {
     pub efi_size: String,
     pub boot_size: String,
     pub root_end: String,
-    pub download_uefi_firmware: bool,                    // Add this
-    pub image_source_selection: crate::tui::ImageSource, // Add this
-    pub image_version: String,                           // Add this
-    pub image_edition: String,                           // Add this
 }
 
 impl FlashContext {
@@ -158,6 +153,50 @@ impl FlashContext {
     }
 }
 
+/// Core flashing configuration.
+///
+/// This is the validated, non-UI-specific input required to execute a flash.
+/// (UI-only selections like "download Fedora" belong in the TUI layer.)
+#[derive(Debug, Clone)]
+pub struct FlashConfig {
+    pub image: PathBuf,
+    pub disk: String,
+    pub scheme: PartitionScheme,
+    pub uefi_dir: PathBuf,
+    pub dry_run: bool,
+    pub auto_unmount: bool,
+    pub locale: Option<LocaleConfig>,
+    pub early_ssh: bool,
+    pub progress_tx: Option<Sender<ProgressUpdate>>,
+    pub efi_size: String,
+    pub boot_size: String,
+    pub root_end: String,
+}
+
+impl FlashConfig {
+    pub(crate) fn validate(&self) -> Result<()> {
+        if !self.image.exists() {
+            bail!("Image file not found: {}", self.image.display());
+        }
+        if !self.uefi_dir.exists() {
+            bail!("UEFI directory not found: {}", self.uefi_dir.display());
+        }
+
+        // Check for required UEFI files
+        let rpi_efi = self.uefi_dir.join("RPI_EFI.fd");
+        if !rpi_efi.exists() {
+            bail!("Missing required UEFI file: {}", rpi_efi.display());
+        }
+
+        let disk = normalize_disk(&self.disk);
+        if !Path::new(&disk).exists() {
+            bail!("Disk device not found: {}", disk);
+        }
+
+        Ok(())
+    }
+}
+
 /// Simple run function for CLI compatibility
 pub fn run(
     image: &Path,
@@ -181,17 +220,12 @@ pub fn run(
         uefi_dir: uefi_dir.to_path_buf(),
         dry_run,
         auto_unmount,
-        watch: false, // No watch mode for CLI
         locale,
         early_ssh,
         progress_tx: None, // No progress reporting for simple CLI run
         efi_size: efi_size.to_string(),
         boot_size: boot_size.to_string(),
         root_end: root_end.to_string(),
-        download_uefi_firmware: false, // Not applicable for direct CLI flash
-        image_source_selection: crate::tui::ImageSource::LocalFile, // Not applicable for direct CLI flash
-        image_version: String::new(), // Not applicable for direct CLI flash
-        image_edition: String::new(), // Not applicable for direct CLI flash
     };
 
     run_with_progress(
@@ -208,6 +242,8 @@ pub fn run_with_progress(
     info!("🍠 MASH Full-Loop Installer: Fedora KDE + UEFI Boot for RPi4");
     info!("📋 GPT layout with 4 partitions (EFI, BOOT, ROOT/btrfs, DATA)");
 
+    config.validate()?;
+
     let disk = normalize_disk(&config.disk);
     info!("💾 Target disk: {}", disk);
     info!("📀 Image: {}", config.image.display());
@@ -215,22 +251,6 @@ pub fn run_with_progress(
     info!("📏 EFI size: {}", config.efi_size);
     info!("📏 BOOT size: {}", config.boot_size);
     info!("📏 ROOT end: {}", config.root_end);
-
-    // Validate inputs
-    if !config.image.exists() {
-        bail!("Image file not found: {}", config.image.display());
-    }
-    if !config.uefi_dir.exists() {
-        bail!("UEFI directory not found: {}", config.uefi_dir.display());
-    }
-    // Check for required UEFI files
-    let rpi_efi = config.uefi_dir.join("RPI_EFI.fd");
-    if !rpi_efi.exists() {
-        bail!("Missing required UEFI file: {}", rpi_efi.display());
-    }
-    if !Path::new(&disk).exists() {
-        bail!("Disk device not found: {}", disk);
-    }
 
     // Safety check
     if !yes_i_know && !config.dry_run {
@@ -261,10 +281,6 @@ pub fn run_with_progress(
         efi_size: config.efi_size.clone(),
         boot_size: config.boot_size.clone(),
         root_end: config.root_end.clone(),
-        download_uefi_firmware: config.download_uefi_firmware,
-        image_source_selection: config.image_source_selection,
-        image_version: config.image_version.clone(),
-        image_edition: config.image_edition.clone(),
     };
 
     // If the image is an .xz file, decompress it
@@ -1611,10 +1627,6 @@ mod tests {
             efi_size: "512M".to_string(),
             boot_size: "1G".to_string(),
             root_end: "100%".to_string(),
-            download_uefi_firmware: false,
-            image_source_selection: crate::tui::ImageSource::LocalFile,
-            image_version: String::new(),
-            image_edition: String::new(),
         };
         assert_eq!(ctx.partition_path(1), "/dev/sda1");
         assert_eq!(ctx.partition_path(4), "/dev/sda4");

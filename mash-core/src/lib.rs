@@ -105,7 +105,7 @@ pub fn run() -> anyhow::Result<()> {
                 None
             };
 
-            let cli_flash_config = tui::FlashConfig {
+            let cli_flash_config = flash::FlashConfig {
                 image: final_image_path
                     .as_ref()
                     .context("Image path is required (provide --image or use --download-image)")?
@@ -120,21 +120,12 @@ pub fn run() -> anyhow::Result<()> {
                     .clone(),
                 dry_run: cli.dry_run,
                 auto_unmount: *auto_unmount,
-                watch: cli.watch,
                 locale: parsed_locale,
                 early_ssh: *_early_ssh,
                 progress_tx: None,
                 efi_size: efi_size.clone(),
                 boot_size: boot_size.clone(),
                 root_end: root_end.clone(),
-                download_uefi_firmware: *download_uefi,
-                image_source_selection: if *download_image {
-                    tui::ImageSource::DownloadFedora
-                } else {
-                    tui::ImageSource::LocalFile
-                },
-                image_version: image_version.clone(),
-                image_edition: image_edition.clone(),
             };
 
             flash::run_with_progress(&cli_flash_config, *yes_i_know)?;

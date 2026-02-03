@@ -93,7 +93,7 @@ impl ImageEditionOption {
 
 /// Flash configuration collected from the Dojo UI
 #[derive(Debug, Clone)]
-pub struct FlashConfig {
+pub struct TuiFlashConfig {
     pub image: PathBuf,
     pub disk: String,
     pub scheme: PartitionScheme,
@@ -111,4 +111,27 @@ pub struct FlashConfig {
     pub image_source_selection: ImageSource, // New field to indicate image source
     pub image_version: String,        // New field for selected Fedora version
     pub image_edition: String,        // New field for selected Fedora edition
+}
+
+impl TryFrom<TuiFlashConfig> for crate::flash::FlashConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(cfg: TuiFlashConfig) -> std::result::Result<Self, Self::Error> {
+        let flash = crate::flash::FlashConfig {
+            image: cfg.image,
+            disk: cfg.disk,
+            scheme: cfg.scheme,
+            uefi_dir: cfg.uefi_dir,
+            dry_run: cfg.dry_run,
+            auto_unmount: cfg.auto_unmount,
+            locale: cfg.locale,
+            early_ssh: cfg.early_ssh,
+            progress_tx: cfg.progress_tx,
+            efi_size: cfg.efi_size,
+            boot_size: cfg.boot_size,
+            root_end: cfg.root_end,
+        };
+        flash.validate()?;
+        Ok(flash)
+    }
 }

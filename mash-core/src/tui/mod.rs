@@ -13,7 +13,7 @@ pub mod progress;
 mod widgets;
 
 pub mod flash_config; // Declare the new module
-pub use flash_config::{FlashConfig, ImageSource}; // Update the pub use statement
+pub use flash_config::{ImageSource, TuiFlashConfig}; // Update the pub use statement
 
 use crate::download::DownloadProgress;
 use crate::download_manager;
@@ -188,7 +188,7 @@ struct DownloadOutcome {
 }
 
 fn run_execution_pipeline(
-    mut config: FlashConfig,
+    mut config: TuiFlashConfig,
     yes_i_know: bool,
     cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<DownloadOutcome> {
@@ -328,7 +328,8 @@ fn run_execution_pipeline(
         config.uefi_dir = path;
     }
 
-    let flash_result = flash::run_with_progress(&config, yes_i_know);
+    let flash_cfg: flash::FlashConfig = config.clone().try_into()?;
+    let flash_result = flash::run_with_progress(&flash_cfg, yes_i_know);
     flash::clear_cancel_flag();
 
     match flash_result {
