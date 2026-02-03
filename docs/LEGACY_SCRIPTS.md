@@ -20,7 +20,7 @@ They are **not used** by the current installer. They are preserved for historica
 
 Legacy scripts are stored in:
 ```
-legacy_scripts/
+archive/legacy_scripts/
 ├── HISTORY/           # Detailed diffs and analysis
 │   ├── ninja.py.md
 │   ├── holy-loop-fedora.sh.md
@@ -126,10 +126,9 @@ These are useful when:
 ## Note on the `legacy/` Directory
 
 There's also a `legacy/` directory at the repository root containing:
-- `legacy/scripts/` — Older script copies
 - `legacy/README.md` — Basic overview
 
-This predates the organized `legacy_scripts/HISTORY/` structure and may contain duplicates.
+The script copies that used to live in `legacy/scripts/` were consolidated into `archive/legacy_scripts/`.
 
 ---
 

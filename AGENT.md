@@ -24,7 +24,7 @@ Larry MUST NOT:
 - Port or modify scripts unless the issue explicitly says so
 - Design solutions
 - Change scope
-- Touch `legacy/` or `legacy_scripts/`
+- Touch `archive/legacy_scripts/`
 
 Larry ignores all skills except:
 - `mash-rust-ratatui-implementation`
@@ -79,7 +79,7 @@ An agent MUST STOP if:
 - Instructions are ambiguous
 - A file is referenced but not in scope
 - CI cannot be run
-- A task touches `legacy/` or `legacy_scripts/`
+- A task touches `archive/legacy_scripts/`
 - Work is requested without a GitHub Issue
 
 Stopping is success. Guessing is failure.

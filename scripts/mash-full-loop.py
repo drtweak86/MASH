@@ -4,11 +4,11 @@
 #
 # Source-of-truth repo: drtweak86/MASH
 #
-# This file is copied from: legacy/scripts/holy-loop-fedora-ninja-final.py
+# This file is copied from: archive/legacy_scripts/holy-loop-fedora-ninja-final.py
 # and is intended as the single "battle-tested" end-to-end flashing workflow:
 # partition → mkfs → loop-mount image → copy → UEFI → dracut → dojo staging.
 #
-# Historical variants are preserved in: legacy/scripts/
+# Historical variants are preserved in: archive/legacy_scripts/
 # ==============================================================================
 """
 holy-loop-fedora-ninja-final.py

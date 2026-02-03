@@ -8,7 +8,7 @@
 1.  **One Issue:** Work on ONE GitHub issue at a time.
 2.  **Green CI:** CI must stay green at all times.
 3.  **No Refactors:** No refactors unless the issue explicitly allows it.
-4.  **No Drive-bys:** No drive-by improvements or touching `legacy_scripts/` / `bak/`.
+4.  **No Drive-bys:** No drive-by improvements or touching `archive/legacy_scripts/` / `bak/`.
 5.  **Ask First:** If unsure, STOP and ask before coding.
 6.  **ABB:** Every meaningful step ends with a commit.
 

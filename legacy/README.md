@@ -12,3 +12,7 @@ It exists for:
 If you’re looking for the active implementation, start here:
 - `install.sh`
 - `mash-installer/`
+
+## Legacy Scripts
+
+The historical script archive lives at `archive/legacy_scripts/`.

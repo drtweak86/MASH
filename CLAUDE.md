@@ -136,4 +136,4 @@ Options:
 
 - `main` branch is the source of truth
 - Backup files go in `bak/` directory
-- Legacy scripts preserved in `legacy_scripts/HISTORY/`
+- Legacy scripts preserved in `archive/legacy_scripts/HISTORY/`

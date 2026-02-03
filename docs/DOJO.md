@@ -13,7 +13,7 @@ These are non-negotiable. Every contributor must follow them.
 - All code changes go through the main repository
 - No separate forks with divergent features
 - Backups go in `bak/` directory
-- Legacy scripts preserved in `legacy_scripts/HISTORY/`
+- Legacy scripts preserved in `archive/legacy_scripts/HISTORY/`
 
 ### 2. Destructive Actions Must Be Explicit
 
