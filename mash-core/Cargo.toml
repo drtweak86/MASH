@@ -28,6 +28,7 @@ xz2 = "0.1"
 libdnf-sys = { path = "../libdnf-sys", optional = true }
 mash-hal = { path = "../crates/mash-hal" }
 mash-workflow = { path = "../crates/mash-workflow" }
+mash-tui = { path = "../crates/mash-tui" }
 
 [features]
 default = []

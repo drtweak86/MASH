@@ -1617,6 +1617,7 @@ dependencies = [
  "libdnf-sys",
  "log",
  "mash-hal",
+ "mash-tui",
  "mash-workflow",
  "nix 0.27.1",
  "once_cell",
@@ -1690,6 +1691,7 @@ name = "mash-tui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crossterm",
 ]
 
 [[package]]
