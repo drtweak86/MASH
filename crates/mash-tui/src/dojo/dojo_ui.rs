@@ -1,8 +1,8 @@
 #![allow(clippy::items_after_test_module)]
 //! Dojo UI module for the single-screen TUI
 
-use crate::tui::dojo_app::{App, InstallStepType};
-use crate::tui::progress::{Phase, ProgressState};
+use super::dojo_app::{App, InstallStepType};
+use crate::progress::{Phase, ProgressState};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
@@ -144,7 +144,7 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                 .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
 
             // Show warning banner if boot detection failed
-            use crate::tui::data_sources::BootConfidence;
+            use super::data_sources::BootConfidence;
             if app
                 .disks
                 .iter()
@@ -279,9 +279,9 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                 .enumerate()
                 .map(|(idx, option)| {
                     let field = match idx {
-                        0 => Some(crate::tui::dojo_app::CustomizeField::Efi),
-                        1 => Some(crate::tui::dojo_app::CustomizeField::Boot),
-                        2 => Some(crate::tui::dojo_app::CustomizeField::Root),
+                        0 => Some(super::dojo_app::CustomizeField::Efi),
+                        1 => Some(super::dojo_app::CustomizeField::Boot),
+                        2 => Some(super::dojo_app::CustomizeField::Root),
                         _ => None,
                     };
                     if field.is_some() && app.customize_error_field == field {
@@ -309,7 +309,7 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
             if app
                 .image_sources
                 .get(app.image_source_index)
-                .map(|source| source.value == crate::tui::flash_config::ImageSource::LocalFile)
+                .map(|source| source.value == super::flash_config::ImageSource::LocalFile)
                 .unwrap_or(false)
             {
                 items.push("Local image path:".to_string());
@@ -357,7 +357,7 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
             let uefi_source = app.uefi_sources.get(app.uefi_source_index);
             let is_local = matches!(
                 uefi_source,
-                Some(crate::tui::flash_config::EfiSource::LocalEfiImage)
+                Some(super::flash_config::EfiSource::LocalEfiImage)
             );
 
             // Show EFI source options (intent-only)
@@ -434,7 +434,7 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                 .unwrap_or_else(|| PathBuf::from(app.image_source_path.clone()));
             let download_efi = matches!(
                 app.uefi_sources.get(app.uefi_source_index),
-                Some(crate::tui::flash_config::EfiSource::DownloadEfiImage)
+                Some(super::flash_config::EfiSource::DownloadEfiImage)
             );
             let effective_efi = if download_efi {
                 PathBuf::from("/tmp/mash-downloads/uefi")
@@ -615,7 +615,7 @@ fn push_options(items: &mut Vec<String>, options: &[String], selected: usize) {
     }
 }
 
-fn build_plan_lines(app: &crate::tui::dojo_app::App) -> Vec<String> {
+fn build_plan_lines(app: &super::dojo_app::App) -> Vec<String> {
     let mut lines = Vec::new();
 
     let distro = app.os_distros.get(app.os_distro_index).copied();
@@ -641,13 +641,13 @@ fn build_plan_lines(app: &crate::tui::dojo_app::App) -> Vec<String> {
         lines.push("Disk: <not selected>".to_string());
     }
 
-    if matches!(distro, Some(crate::tui::flash_config::OsDistro::Fedora)) {
+    if matches!(distro, Some(super::flash_config::OsDistro::Fedora)) {
         if let Some(uefi_source) = app.uefi_sources.get(app.uefi_source_index) {
             match uefi_source {
-                crate::tui::flash_config::EfiSource::LocalEfiImage => {
+                super::flash_config::EfiSource::LocalEfiImage => {
                     lines.push(format!("EFI: Local ({})", app.uefi_source_path));
                 }
-                crate::tui::flash_config::EfiSource::DownloadEfiImage => {
+                super::flash_config::EfiSource::DownloadEfiImage => {
                     lines.push("EFI: Download image".to_string());
                 }
             }
@@ -658,7 +658,7 @@ fn build_plan_lines(app: &crate::tui::dojo_app::App) -> Vec<String> {
         lines.push("Reboots: 1".to_string());
     } else {
         lines.push("Action: flash upstream full-disk image (no repartition)".to_string());
-        if matches!(distro, Some(crate::tui::flash_config::OsDistro::Manjaro)) {
+        if matches!(distro, Some(super::flash_config::OsDistro::Manjaro)) {
             lines.push("Note: post-boot partition expansion required".to_string());
         }
         lines.push("Reboots: 0".to_string());
@@ -697,8 +697,8 @@ fn expected_actions(step: InstallStepType) -> String {
     }
 }
 
-fn format_disk_entry(disk: &crate::tui::dojo_app::DiskOption) -> String {
-    use crate::tui::data_sources::BootConfidence;
+fn format_disk_entry(disk: &super::dojo_app::DiskOption) -> String {
+    use super::data_sources::BootConfidence;
 
     // CRITICAL: Use DiskIdentity::display_string() exclusively - no UI-side reconstruction
     let identity_str = match &disk.identity {
@@ -741,8 +741,8 @@ mod tests {
 
     #[test]
     fn plan_review_renders_summary() {
-        let mut app = crate::tui::dojo_app::App::new_with_flags(true);
-        app.current_step_type = crate::tui::dojo_app::InstallStepType::PlanReview;
+        let mut app = crate::dojo::dojo_app::App::new_with_flags(true);
+        app.current_step_type = crate::dojo::dojo_app::InstallStepType::PlanReview;
         let dump = dump_step(&app);
         assert!(dump.contains("Execution plan"));
         assert!(dump.contains("Reboots"));
@@ -758,10 +758,10 @@ fn status_message(app: &App, progress_state: &ProgressState) -> String {
     ensure_emoji_prefix(message)
 }
 
-fn format_partition_scheme(scheme: &crate::cli::PartitionScheme) -> String {
+fn format_partition_scheme(scheme: &mash_core::cli::PartitionScheme) -> String {
     match scheme {
-        crate::cli::PartitionScheme::Mbr => "MBR — compatibility & simplicity".to_string(),
-        crate::cli::PartitionScheme::Gpt => "GPT — modern, UEFI-oriented".to_string(),
+        mash_core::cli::PartitionScheme::Mbr => "MBR — compatibility & simplicity".to_string(),
+        mash_core::cli::PartitionScheme::Gpt => "GPT — modern, UEFI-oriented".to_string(),
     }
 }
 

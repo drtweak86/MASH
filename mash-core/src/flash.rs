@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use crate::cli::PartitionScheme;
 use crate::errors::MashError;
 use crate::locale::LocaleConfig;
-use crate::tui::progress::{Phase, ProgressUpdate};
+use crate::progress::{Phase, ProgressUpdate};
 
 /// Flash a full-disk image to a target block device.
 ///
@@ -215,7 +215,7 @@ pub struct FlashConfig {
 }
 
 impl FlashConfig {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if !self.image.exists() {
             bail!("Image file not found: {}", self.image.display());
         }

@@ -1,9 +1,9 @@
-use crate::cli::PartitionScheme;
-use crate::locale::LocaleConfig;
+use mash_core::cli::PartitionScheme;
+use mash_core::locale::LocaleConfig;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
-use super::progress::ProgressUpdate;
+use crate::progress::ProgressUpdate;
 
 /// Options for image source selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,12 +73,12 @@ impl OsDistro {
         ]
     }
 
-    pub fn as_os_kind(&self) -> crate::downloader::OsKind {
+    pub fn as_os_kind(&self) -> mash_core::downloader::OsKind {
         match self {
-            OsDistro::Fedora => crate::downloader::OsKind::Fedora,
-            OsDistro::Ubuntu => crate::downloader::OsKind::Ubuntu,
-            OsDistro::RaspberryPiOS => crate::downloader::OsKind::RaspberryPiOS,
-            OsDistro::Manjaro => crate::downloader::OsKind::Manjaro,
+            OsDistro::Fedora => mash_core::downloader::OsKind::Fedora,
+            OsDistro::Ubuntu => mash_core::downloader::OsKind::Ubuntu,
+            OsDistro::RaspberryPiOS => mash_core::downloader::OsKind::RaspberryPiOS,
+            OsDistro::Manjaro => mash_core::downloader::OsKind::Manjaro,
         }
     }
 }
@@ -179,11 +179,11 @@ pub struct TuiFlashConfig {
     pub image_edition: String,        // New field for selected Fedora edition
 }
 
-impl TryFrom<TuiFlashConfig> for crate::flash::FlashConfig {
+impl TryFrom<TuiFlashConfig> for mash_core::flash::FlashConfig {
     type Error = anyhow::Error;
 
     fn try_from(cfg: TuiFlashConfig) -> std::result::Result<Self, Self::Error> {
-        let flash = crate::flash::FlashConfig {
+        let flash = mash_core::flash::FlashConfig {
             image: cfg.image,
             disk: cfg.disk,
             scheme: cfg.scheme,

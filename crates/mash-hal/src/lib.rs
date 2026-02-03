@@ -2,9 +2,19 @@
 //!
 //! This crate is the boundary for "world-touching" code (Linux `/proc`, `/sys`,
 //! filesystem interactions, etc.) and the parsing helpers that support those operations.
+//!
+//! # HAL Traits
+//!
+//! The HAL provides traits for system operations that can be implemented by:
+//! - `LinuxHal`: Real implementation for production use
+//! - `FakeHal`: Mock implementation for CI-safe testing
 
 pub mod os_release;
 pub mod procfs;
 pub mod sysfs;
 
-// HAL backends (Linux, mock) will be introduced as WO-020 progresses.
+pub mod hal;
+pub use hal::*;
+
+// Re-export commonly used types
+pub use procfs::mountinfo::MountInfo;

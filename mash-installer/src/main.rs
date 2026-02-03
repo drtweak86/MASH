@@ -1,3 +1,3 @@
 fn main() -> anyhow::Result<()> {
-    mash_core::run()
+    mash_installer::run()
 }

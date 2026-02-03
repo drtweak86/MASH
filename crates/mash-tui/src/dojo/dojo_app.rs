@@ -2,11 +2,11 @@
 
 #![allow(dead_code)]
 
-use crate::cli::PartitionScheme;
-use crate::locale::{LocaleConfig, LOCALES};
-use crate::tui::flash_config::{ImageSource, TuiFlashConfig};
+use super::flash_config::{ImageSource, TuiFlashConfig};
 use clap::ValueEnum;
 use crossterm::event::{KeyCode, KeyEvent}; // New import for KeyEvent
+use mash_core::cli::PartitionScheme;
+use mash_core::locale::{LocaleConfig, LOCALES};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -32,10 +32,10 @@ pub enum StepState {
 
 #[derive(Debug, Clone)]
 pub struct DiskOption {
-    pub identity: Option<crate::tui::data_sources::DiskIdentity>, // None = identity failed
+    pub identity: Option<super::data_sources::DiskIdentity>, // None = identity failed
     pub path: String,
     pub removable: bool,
-    pub boot_confidence: crate::tui::data_sources::BootConfidence,
+    pub boot_confidence: super::data_sources::BootConfidence,
 }
 
 #[derive(Debug, Clone)]
@@ -341,7 +341,7 @@ impl InstallStepType {
 // ============================================================================
 
 use super::data_sources;
-use super::progress::ProgressState; // New import
+use crate::progress::ProgressState; // New import
 
 // ...
 
@@ -353,8 +353,8 @@ pub struct App {
     pub cleanup: Cleanup,
     pub progress_rx: Option<Receiver<ProgressEvent>>, // Existing
     pub progress_tx: Option<Sender<ProgressEvent>>,   // Existing
-    pub flash_progress_sender: Option<Sender<super::progress::ProgressUpdate>>, // NEW
-    pub flash_progress_receiver: Option<Receiver<super::progress::ProgressUpdate>>, // NEW
+    pub flash_progress_sender: Option<Sender<crate::progress::ProgressUpdate>>, // NEW
+    pub flash_progress_receiver: Option<Receiver<crate::progress::ProgressUpdate>>, // NEW
     pub progress_state: Arc<Mutex<ProgressState>>,
     pub backup_confirmed: bool,
     pub backup_choice_index: usize,
@@ -373,7 +373,7 @@ pub struct App {
     pub efi_size: String,
     pub boot_size: String,
     pub root_end: String,
-    pub os_distros: Vec<crate::tui::flash_config::OsDistro>,
+    pub os_distros: Vec<super::flash_config::OsDistro>,
     pub os_distro_index: usize,
     pub os_variants: Vec<OsVariantOption>,
     pub os_variant_index: usize,
@@ -381,7 +381,7 @@ pub struct App {
     pub image_source_index: usize,
     pub images: Vec<ImageOption>,
     pub image_index: usize,
-    pub uefi_sources: Vec<crate::tui::flash_config::EfiSource>,
+    pub uefi_sources: Vec<super::flash_config::EfiSource>,
     pub uefi_source_index: usize,
     pub locales: Vec<String>,
     pub locale_index: usize,
@@ -582,7 +582,7 @@ impl App {
             efi_size: "1024MiB".to_string(),
             boot_size: "2048MiB".to_string(),
             root_end: "1800GiB".to_string(),
-            os_distros: crate::tui::flash_config::OsDistro::all().to_vec(),
+            os_distros: super::flash_config::OsDistro::all().to_vec(),
             os_distro_index: 0, // Default to Fedora
             os_variants: Vec::new(),
             os_variant_index: 0,
@@ -599,7 +599,7 @@ impl App {
             image_source_index: 0,
             images,
             image_index: 0,
-            uefi_sources: crate::tui::flash_config::EfiSource::all().to_vec(),
+            uefi_sources: super::flash_config::EfiSource::all().to_vec(),
             uefi_source_index: 1, // Default to local EFI image
             locales,
             locale_index: 0,
@@ -1185,7 +1185,7 @@ impl App {
     fn handle_uefi_source_selection_input(&mut self, key: KeyEvent) -> InputResult {
         let is_local = matches!(
             self.uefi_sources.get(self.uefi_source_index),
-            Some(crate::tui::flash_config::EfiSource::LocalEfiImage)
+            Some(super::flash_config::EfiSource::LocalEfiImage)
         );
 
         // If local directory is selected, accept text input for path
@@ -1257,7 +1257,7 @@ impl App {
             S::ImageSelection => Some(S::VariantSelection),
             S::VariantSelection => Some(S::DownloadSourceSelection),
             S::DownloadSourceSelection => {
-                if matches!(distro, crate::tui::flash_config::OsDistro::Fedora) {
+                if matches!(distro, super::flash_config::OsDistro::Fedora) {
                     Some(S::PartitionScheme)
                 } else {
                     Some(S::LocaleSelection)
@@ -1291,7 +1291,7 @@ impl App {
             S::PartitionCustomize => Some(S::PartitionLayout),
             S::EfiImage => Some(S::PartitionCustomize),
             S::LocaleSelection => {
-                if matches!(distro, crate::tui::flash_config::OsDistro::Fedora) {
+                if matches!(distro, super::flash_config::OsDistro::Fedora) {
                     Some(S::EfiImage)
                 } else {
                     Some(S::DownloadSourceSelection)
@@ -1605,21 +1605,21 @@ impl App {
     fn requires_uefi_download(&self) -> bool {
         matches!(
             self.uefi_sources.get(self.uefi_source_index),
-            Some(crate::tui::flash_config::EfiSource::DownloadEfiImage)
+            Some(super::flash_config::EfiSource::DownloadEfiImage)
         )
     }
 
-    fn selected_distro(&self) -> crate::tui::flash_config::OsDistro {
+    fn selected_distro(&self) -> super::flash_config::OsDistro {
         self.os_distros
             .get(self.os_distro_index)
             .copied()
-            .unwrap_or(crate::tui::flash_config::OsDistro::Fedora)
+            .unwrap_or(super::flash_config::OsDistro::Fedora)
     }
 
     fn refresh_os_variants(&mut self) {
         let distro = self.selected_distro();
         let os_kind = distro.as_os_kind();
-        let mut variants = crate::downloader::DOWNLOAD_INDEX
+        let mut variants = mash_core::downloader::DOWNLOAD_INDEX
             .images
             .iter()
             .filter(|img| img.os == os_kind && img.arch == "aarch64")
@@ -1661,7 +1661,7 @@ impl App {
     pub fn build_flash_config(&self) -> Option<TuiFlashConfig> {
         let download_uefi_firmware = matches!(
             self.uefi_sources.get(self.uefi_source_index),
-            Some(crate::tui::flash_config::EfiSource::DownloadEfiImage)
+            Some(super::flash_config::EfiSource::DownloadEfiImage)
         );
 
         let os_distro = self.selected_distro();
@@ -1681,7 +1681,7 @@ impl App {
         let image_path = match image_source {
             ImageSource::LocalFile => PathBuf::from(self.image_source_path.clone()),
             ImageSource::DownloadCatalogue => {
-                let file_name = crate::downloader::DOWNLOAD_INDEX
+                let file_name = mash_core::downloader::DOWNLOAD_INDEX
                     .images
                     .iter()
                     .find(|img| {
@@ -1746,21 +1746,21 @@ impl App {
     }
 }
 
-fn format_variant_label(os: crate::downloader::OsKind, variant: &str) -> String {
+fn format_variant_label(os: mash_core::downloader::OsKind, variant: &str) -> String {
     match (os, variant) {
-        (crate::downloader::OsKind::Fedora, "kde_mobile_disk") => {
+        (mash_core::downloader::OsKind::Fedora, "kde_mobile_disk") => {
             "Fedora KDE Mobile Disk (F43, aarch64)".to_string()
         }
-        (crate::downloader::OsKind::Ubuntu, "server_24_04_3") => {
+        (mash_core::downloader::OsKind::Ubuntu, "server_24_04_3") => {
             "Ubuntu 24.04.3 Server (arm64+raspi)".to_string()
         }
-        (crate::downloader::OsKind::Ubuntu, "desktop_24_04_3") => {
+        (mash_core::downloader::OsKind::Ubuntu, "desktop_24_04_3") => {
             "Ubuntu 24.04.3 Desktop (arm64+raspi)".to_string()
         }
-        (crate::downloader::OsKind::RaspberryPiOS, "arm64_latest") => {
+        (mash_core::downloader::OsKind::RaspberryPiOS, "arm64_latest") => {
             "Raspberry Pi OS (arm64) Latest".to_string()
         }
-        (crate::downloader::OsKind::Manjaro, "minimal_rpi4_23_02") => {
+        (mash_core::downloader::OsKind::Manjaro, "minimal_rpi4_23_02") => {
             "Manjaro ARM Minimal (RPI4) 23.02".to_string()
         }
         _ => variant.to_string(),
@@ -1962,7 +1962,7 @@ mod tests {
 
     #[test]
     fn disk_confirmation_requires_destroy() {
-        use crate::tui::data_sources::{BootConfidence, TransportType};
+        use super::data_sources::{BootConfidence, TransportType};
 
         let mut app = App::new();
         app.current_step_type = InstallStepType::DiskConfirmation;
@@ -1990,7 +1990,7 @@ mod tests {
 
     #[test]
     fn boot_disk_confirmation_requires_stronger_text() {
-        use crate::tui::data_sources::{BootConfidence, TransportType};
+        use super::data_sources::{BootConfidence, TransportType};
 
         let mut app = App::new();
         app.current_step_type = InstallStepType::DiskConfirmation;
@@ -2149,7 +2149,10 @@ mod tests {
         let app = App::new();
         assert_eq!(app.os_distro_index, 0);
         if let Some(distro) = app.os_distros.get(app.os_distro_index) {
-            assert!(matches!(distro, crate::tui::flash_config::OsDistro::Fedora));
+            assert!(matches!(
+                distro,
+                crate::dojo::flash_config::OsDistro::Fedora
+            ));
             assert!(distro.is_available());
         }
     }
@@ -2159,7 +2162,10 @@ mod tests {
         let app = App::new();
         // Ubuntu is index 1
         if let Some(distro) = app.os_distros.get(1) {
-            assert!(matches!(distro, crate::tui::flash_config::OsDistro::Ubuntu));
+            assert!(matches!(
+                distro,
+                crate::dojo::flash_config::OsDistro::Ubuntu
+            ));
             assert!(distro.is_available());
         }
     }
@@ -2171,7 +2177,7 @@ mod tests {
         if let Some(source) = app.uefi_sources.get(app.uefi_source_index) {
             assert!(matches!(
                 source,
-                crate::tui::flash_config::EfiSource::LocalEfiImage
+                crate::dojo::flash_config::EfiSource::LocalEfiImage
             ));
         }
     }
@@ -2213,7 +2219,7 @@ mod tests {
 
     #[test]
     fn app_prefers_removable_media_when_safe() {
-        use crate::tui::data_sources::{BootConfidence, TransportType};
+        use super::data_sources::{BootConfidence, TransportType};
 
         // Create app-like disk list
         let disks = [
@@ -2271,7 +2277,7 @@ mod tests {
 
     #[test]
     fn disk_selection_prevents_selecting_boot_disk() {
-        use crate::tui::data_sources::{BootConfidence, TransportType};
+        use super::data_sources::{BootConfidence, TransportType};
 
         let mut app = App::new();
         app.current_step_type = InstallStepType::DiskSelection;
@@ -2323,7 +2329,7 @@ mod tests {
 
     #[test]
     fn disk_selection_requires_boot_override() {
-        use crate::tui::data_sources::{BootConfidence, TransportType};
+        use super::data_sources::{BootConfidence, TransportType};
 
         let mut app = App::new();
         app.current_step_type = InstallStepType::DiskSelection;
@@ -2366,7 +2372,7 @@ mod tests {
 
     #[test]
     fn disk_selection_allows_non_boot_disk() {
-        use crate::tui::data_sources::{BootConfidence, TransportType};
+        use super::data_sources::{BootConfidence, TransportType};
 
         let mut app = App::new();
         app.current_step_type = InstallStepType::DiskSelection;
@@ -2396,7 +2402,7 @@ mod tests {
 
     #[test]
     fn adjust_disk_index_skips_boot_disks() {
-        use crate::tui::data_sources::{BootConfidence, TransportType};
+        use super::data_sources::{BootConfidence, TransportType};
 
         let mut app = App::new();
 
