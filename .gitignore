@@ -1,6 +1,5 @@
 # Rust
 target/
-Cargo.lock
 **/*.rs.bk
 *.pdb
 
@@ -25,6 +24,8 @@ cmake_install.cmake
 dist/
 release/
 bundle/
+release-structure/
+mash-installer-*-unknown-linux-gnu/
 *.tar
 *.tar.gz
 *.zip
@@ -49,6 +50,7 @@ COMMIT.txt
 STATUS.txt
 RUSTIFICATION_AUDIT_*.md
 RUSTIFICATION_PLAN.md
+OPEN_ISSUES_REPORT.md
 install.sh.bak
 install.sh.backup
 install-fix.patch
@@ -76,17 +78,12 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-target/
 # --- /MASH Merge Toolkit ---
 .aider*
 mash-installer/*.bak.*
 
 # local agent junk
 .claude/
-.docker/
-.github/skills/
-
-# local agent junk
-.claude/
+.codex/
 .docker/
 .github/skills/
