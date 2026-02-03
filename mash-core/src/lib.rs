@@ -12,6 +12,7 @@ use clap::Parser;
 pub mod boot_config;
 mod cli;
 pub mod disk_ops;
+pub mod dojo_catalogue;
 mod download;
 mod download_manager;
 pub mod downloader;

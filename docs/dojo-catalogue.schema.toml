@@ -1,0 +1,46 @@
+# Dojo Programme Catalogue (schema reference)
+#
+# This file documents the TOML shape deserialized by `mash-core::dojo_catalogue`.
+#
+# Notes:
+# - Fedora-first guard: `supported_distros = ["fedora"]` is required for now.
+# - `conflicts_with` must be symmetric (A lists B and B lists A).
+#
+# This is a schema/example reference; the actual catalogue entries will live in
+# a separate file (see issue #79).
+
+schema_version = 1
+
+[[categories]]
+id = "shell"
+label = "Shell"
+description = "Choose one shell (conflicts are enforced)."
+
+  [[categories.programs]]
+  id = "zsh"
+  label = "Zsh"
+  description = "Z shell"
+  reason_why = "Widely used; good completion ecosystem."
+  install_method = "dnf"
+  packages = { fedora = ["zsh"] }
+  requires = []
+  conflicts_with = ["fish"]
+  alternatives = ["fish"]
+  default_tier = "core_default"
+  risk_level = "safe"
+  supported_distros = ["fedora"]
+
+  [[categories.programs]]
+  id = "fish"
+  label = "Fish"
+  description = "Friendly interactive shell"
+  reason_why = "Great defaults for interactive use."
+  install_method = "dnf"
+  packages = { fedora = ["fish"] }
+  requires = []
+  conflicts_with = ["zsh"]
+  alternatives = ["zsh"]
+  default_tier = "alternative"
+  risk_level = "safe"
+  supported_distros = ["fedora"]
+
