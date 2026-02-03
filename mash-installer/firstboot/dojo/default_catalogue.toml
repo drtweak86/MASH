@@ -1,0 +1,83 @@
+schema_version = 1
+
+[[categories]]
+id = "shell"
+label = "Shell"
+description = "Pick a shell. Defaults show CoreDefault + Champion + Alternative (up to 5)."
+
+  [[categories.programs]]
+  id = "bash"
+  label = "Bash (baseline)"
+  description = "The default shell."
+  install_method = "manual"
+  default_tier = "core_default"
+  risk_level = "safe"
+  supported_distros = ["fedora", "debian", "ubuntu", "arch"]
+
+  [[categories.programs]]
+  id = "zsh"
+  label = "Zsh"
+  description = "Powerful shell with broad ecosystem."
+  install_method = "dnf"
+  packages = { fedora = ["zsh"] }
+  conflicts_with = ["fish"]
+  alternatives = ["fish"]
+  default_tier = "champion"
+  risk_level = "safe"
+  supported_distros = ["fedora"]
+
+  [[categories.programs]]
+  id = "fish"
+  label = "Fish"
+  description = "Friendly interactive shell."
+  install_method = "dnf"
+  packages = { fedora = ["fish"] }
+  conflicts_with = ["zsh"]
+  alternatives = ["zsh"]
+  default_tier = "alternative"
+  risk_level = "safe"
+  supported_distros = ["fedora"]
+
+  [[categories.programs]]
+  id = "debian_shell_only"
+  label = "Debian-only shell (hidden on Fedora)"
+  description = "Example of a non-Fedora entry."
+  install_method = "manual"
+  default_tier = "optional"
+  risk_level = "safe"
+  supported_distros = ["debian"]
+
+[[categories]]
+id = "terminal_extras"
+label = "Terminal Extras"
+description = "Nice-to-have terminal tools."
+
+  [[categories.programs]]
+  id = "starship"
+  label = "Starship prompt"
+  description = "Fast, cross-shell prompt."
+  install_method = "dnf"
+  packages = { fedora = ["starship"] }
+  default_tier = "core_default"
+  risk_level = "safe"
+  supported_distros = ["fedora"]
+
+  [[categories.programs]]
+  id = "tldr"
+  label = "tldr"
+  description = "Simplified man pages."
+  install_method = "dnf"
+  packages = { fedora = ["tldr"] }
+  default_tier = "optional"
+  risk_level = "safe"
+  supported_distros = ["fedora"]
+
+  [[categories.programs]]
+  id = "kernel_tweaks"
+  label = "Kernel tweaks (example)"
+  description = "Example Spicy option."
+  install_method = "manual"
+  default_tier = "optional"
+  risk_level = "spicy"
+  supported_distros = ["fedora"]
+

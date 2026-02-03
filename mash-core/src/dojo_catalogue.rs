@@ -11,6 +11,9 @@ use std::collections::{HashMap, HashSet};
 #[serde(rename_all = "snake_case")]
 pub enum SupportedDistro {
     Fedora,
+    Debian,
+    Ubuntu,
+    Arch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -121,7 +124,7 @@ impl DojoCatalogue {
 
         // Validate each spec's internal invariants and references.
         for spec in specs_by_id.values() {
-            validate_spec_fedora_first(spec)?;
+            validate_spec(spec)?;
             validate_ref_list("requires", &spec.id, &spec.requires, &specs_by_id)?;
             validate_ref_list(
                 "conflicts_with",
@@ -201,22 +204,14 @@ fn validate_spec_fedora_first(spec: &InstallSpec) -> Result<()> {
         return Err(anyhow!("spec {} must list supported_distros", spec.id));
     }
 
-    for distro in &spec.supported_distros {
-        match distro {
-            SupportedDistro::Fedora => {}
-        }
-    }
-
-    // Fedora-first guard: until non-Fedora backends exist, enforce Fedora-only.
-    if spec.supported_distros != vec![SupportedDistro::Fedora] {
-        return Err(anyhow!(
-            "spec {} supported_distros must be [\"fedora\"] for now",
-            spec.id
-        ));
-    }
-
     match spec.install_method {
         InstallMethod::Dnf => {
+            if !spec.supported_distros.contains(&SupportedDistro::Fedora) {
+                return Err(anyhow!(
+                    "spec {} uses install_method=dnf but supported_distros does not include fedora",
+                    spec.id
+                ));
+            }
             if spec.packages.fedora.is_empty() {
                 return Err(anyhow!(
                     "spec {} uses install_method=dnf but packages.fedora is empty",
@@ -228,6 +223,62 @@ fn validate_spec_fedora_first(spec: &InstallSpec) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn validate_spec(spec: &InstallSpec) -> Result<()> {
+    validate_spec_fedora_first(spec)
+}
+
+impl InstallSpec {
+    pub fn supports_distro(&self, distro: SupportedDistro) -> bool {
+        self.supported_distros.contains(&distro)
+    }
+}
+
+impl CategorySpec {
+    pub fn filtered_programs(&self, distro: SupportedDistro) -> Vec<&InstallSpec> {
+        self.programs
+            .iter()
+            .filter(|spec| spec.supports_distro(distro))
+            .collect()
+    }
+
+    /// Visible program list for a given distro.
+    ///
+    /// - Default view: CoreDefault + Champion + Alternative (capped at 5).
+    /// - Expanded view: top 5 programs (in catalogue order) after distro filtering.
+    pub fn visible_programs(&self, distro: SupportedDistro, expanded: bool) -> Vec<&InstallSpec> {
+        let filtered = self.filtered_programs(distro);
+        if expanded {
+            return filtered.into_iter().take(5).collect();
+        }
+
+        let mut visible = Vec::new();
+        for spec in &filtered {
+            if spec.default_tier == DefaultTier::CoreDefault {
+                visible.push(*spec);
+            }
+        }
+        if let Some(champion) = filtered
+            .iter()
+            .find(|spec| spec.default_tier == DefaultTier::Champion)
+        {
+            if !visible.iter().any(|s| s.id == champion.id) {
+                visible.push(*champion);
+            }
+        }
+        if let Some(alt) = filtered
+            .iter()
+            .find(|spec| spec.default_tier == DefaultTier::Alternative)
+        {
+            if !visible.iter().any(|s| s.id == alt.id) {
+                visible.push(*alt);
+            }
+        }
+
+        visible.truncate(5);
+        visible
+    }
 }
 
 pub fn parse_catalogue_toml(toml_str: &str) -> Result<DojoCatalogue> {
@@ -377,5 +428,65 @@ label = "Shell"
 "#;
         let err = parse_catalogue_toml(doc).unwrap_err().to_string();
         assert!(err.contains("duplicate install spec id"));
+    }
+
+    #[test]
+    fn filters_programs_by_distro_and_respects_default_view() {
+        let doc = r#"
+schema_version = 1
+
+[[categories]]
+id = "shell"
+label = "Shell"
+
+  [[categories.programs]]
+  id = "core"
+  label = "Core tool"
+  description = "Core tool"
+  install_method = "dnf"
+  packages = { fedora = ["coreutils"] }
+  default_tier = "core_default"
+  risk_level = "safe"
+  supported_distros = ["fedora", "debian"]
+
+  [[categories.programs]]
+  id = "champ"
+  label = "Champion"
+  description = "Champion"
+  install_method = "dnf"
+  packages = { fedora = ["zsh"] }
+  default_tier = "champion"
+  risk_level = "safe"
+  supported_distros = ["fedora"]
+
+  [[categories.programs]]
+  id = "alt"
+  label = "Alternative"
+  description = "Alternative"
+  install_method = "dnf"
+  packages = { fedora = ["fish"] }
+  default_tier = "alternative"
+  risk_level = "safe"
+  supported_distros = ["fedora"]
+
+  [[categories.programs]]
+  id = "debian_only"
+  label = "Debian only"
+  description = "Debian only"
+  install_method = "manual"
+  default_tier = "optional"
+  risk_level = "safe"
+  supported_distros = ["debian"]
+"#;
+        let catalogue = parse_catalogue_toml(doc).unwrap();
+        let cat = &catalogue.categories[0];
+
+        let visible = cat.visible_programs(SupportedDistro::Fedora, false);
+        let ids: Vec<&str> = visible.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["core", "champ", "alt"]);
+
+        let expanded = cat.visible_programs(SupportedDistro::Fedora, true);
+        let expanded_ids: Vec<&str> = expanded.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(expanded_ids, vec!["core", "champ", "alt"]);
     }
 }
