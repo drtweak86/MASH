@@ -8,6 +8,7 @@
 
 pub mod boot_config;
 pub mod cli;
+pub mod config_states;
 pub mod disk_ops;
 pub mod dojo_catalogue;
 pub mod download;

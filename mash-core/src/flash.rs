@@ -19,7 +19,9 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::cli::PartitionScheme;
-use crate::errors::MashError;
+use crate::config_states::{
+    ArmedConfig, ExecuteArmToken, HasRunMode, UnvalidatedConfig, ValidateConfig, ValidatedConfig,
+};
 use crate::install_report::{DiskIdentityReport, InstallReportWriter, RunMode, SelectionReport};
 use crate::locale::LocaleConfig;
 use crate::progress::{Phase, ProgressUpdate};
@@ -130,7 +132,6 @@ pub struct FlashContext {
     pub scheme: PartitionScheme,
     pub uefi_dir: PathBuf,
     pub dry_run: bool,
-    pub confirmed: bool,
     pub auto_unmount: bool,
     pub locale: Option<LocaleConfig>,
     pub early_ssh: bool,
@@ -249,6 +250,18 @@ impl FlashConfig {
     }
 }
 
+impl ValidateConfig for FlashConfig {
+    fn validate_cfg(&self) -> Result<()> {
+        self.validate()
+    }
+}
+
+impl HasRunMode for FlashConfig {
+    fn is_dry_run(&self) -> bool {
+        self.dry_run
+    }
+}
+
 /// Simple run function for CLI compatibility
 pub fn run(
     image: &Path,
@@ -316,10 +329,70 @@ pub fn run_with_progress_with_confirmation_with_hal(
     typed_confirmation: bool,
     hal: Arc<dyn InstallerHal>,
 ) -> Result<()> {
+    let validated = UnvalidatedConfig::new(config.clone()).validate()?;
+
+    if validated.0.dry_run {
+        return run_full_loop_dry_run(validated, hal);
+    }
+
+    // CLI compatibility: safe-mode disarm is a TUI concept; we treat `yes_i_know` as the caller's
+    // explicit arming signal for non-TUI contexts.
+    let token = ExecuteArmToken::try_new(yes_i_know, yes_i_know, typed_confirmation)?;
+    let armed = validated.arm_execute(token)?;
+    run_full_loop_execute(armed, hal)
+}
+
+fn run_full_loop_dry_run(
+    validated: ValidatedConfig<FlashConfig>,
+    hal: Arc<dyn InstallerHal>,
+) -> Result<()> {
+    validated.require_dry_run()?;
+    run_full_loop_from_config(validated.0, hal, RunMode::DryRun, false, false, None)
+}
+
+fn run_full_loop_execute(
+    armed: ArmedConfig<FlashConfig>,
+    hal: Arc<dyn InstallerHal>,
+) -> Result<()> {
+    let executing = armed.into_executing();
+    run_full_loop_from_config(
+        executing.cfg,
+        hal,
+        RunMode::Execute,
+        true,
+        true,
+        Some(executing.token),
+    )
+}
+
+/// Execute a validated flash config in dry-run mode. This is used by the TUI to enforce the
+/// validation -> (optional) arming type-state pipeline at the call site.
+pub fn run_dry_run_with_hal(
+    validated: ValidatedConfig<FlashConfig>,
+    hal: Arc<dyn InstallerHal>,
+) -> Result<()> {
+    run_full_loop_dry_run(validated, hal)
+}
+
+/// Execute an explicitly-armed flash config in execute mode. This is used by the TUI to enforce
+/// the validation -> arming type-state pipeline at the call site.
+pub fn run_execute_with_hal(
+    armed: ArmedConfig<FlashConfig>,
+    hal: Arc<dyn InstallerHal>,
+) -> Result<()> {
+    run_full_loop_execute(armed, hal)
+}
+
+fn run_full_loop_from_config(
+    config: FlashConfig,
+    hal: Arc<dyn InstallerHal>,
+    mode: RunMode,
+    report_yes_i_know: bool,
+    report_typed_confirmation: bool,
+    token: Option<ExecuteArmToken>,
+) -> Result<()> {
     info!("🍠 MASH Full-Loop Installer: Fedora KDE + UEFI Boot for RPi4");
     info!("📋 GPT layout with 4 partitions (EFI, BOOT, ROOT/btrfs, DATA)");
-
-    config.validate()?;
 
     let disk = normalize_disk(&config.disk);
     info!("💾 Target disk: {}", disk);
@@ -329,19 +402,9 @@ pub fn run_with_progress_with_confirmation_with_hal(
     info!("📏 BOOT size: {}", config.boot_size);
     info!("📏 ROOT end: {}", config.root_end);
 
-    // Safety check
-    if !yes_i_know && !config.dry_run {
-        return Err(MashError::MissingYesIKnow.into());
-    }
-
     show_lsblk(&*hal, &disk)?;
 
     // Persistent install report artifact (always).
-    let mode = if config.dry_run {
-        RunMode::DryRun
-    } else {
-        RunMode::Execute
-    };
     let selection = SelectionReport {
         distro: config
             .os_distro
@@ -357,7 +420,13 @@ pub fn run_with_progress_with_confirmation_with_hal(
         efi_source: config.efi_source.clone(),
         efi_path: Some(config.uefi_dir.display().to_string()),
     };
-    let report = InstallReportWriter::new(mode, yes_i_know, typed_confirmation, selection).ok();
+    let report = InstallReportWriter::new(
+        mode,
+        report_yes_i_know,
+        report_typed_confirmation,
+        selection,
+    )
+    .ok();
 
     // Create work directory
     let work_dir = PathBuf::from("/tmp/mash-install");
@@ -390,11 +459,10 @@ pub fn run_with_progress_with_confirmation_with_hal(
         scheme: config.scheme,
         uefi_dir: effective_uefi_dir,
         dry_run: config.dry_run,
-        confirmed: yes_i_know,
         auto_unmount: config.auto_unmount,
         locale: config.locale.clone(),
         early_ssh: config.early_ssh,
-        progress_tx: config.progress_tx.clone(), // Use the progress_tx from config
+        progress_tx: config.progress_tx.clone(),
         work_dir: work_dir.clone(),
         loop_device: None,
         efi_size: config.efi_size.clone(),
@@ -409,27 +477,33 @@ pub fn run_with_progress_with_confirmation_with_hal(
         ctx.image = decompressed_image;
     }
 
-    let result = run_installation(&mut ctx);
+    let result = match token {
+        Some(t) => run_installation_execute(&mut ctx, t),
+        None => run_installation_dry_run(&mut ctx),
+    };
     cleanup(&ctx);
     let _ = fs::remove_dir_all(&work_dir);
     result
 }
 
 /// Main installation sequence
-fn run_installation(ctx: &mut FlashContext) -> Result<()> {
+fn run_installation_dry_run(ctx: &mut FlashContext) -> Result<()> {
     let mounts = MountPoints::new(&ctx.work_dir);
 
-    if ctx.dry_run {
-        info!("🧪 DRY-RUN MODE - No changes will be made");
-        ctx.check_cancel()?;
-        simulate_installation(ctx)?;
-        return Ok(());
-    }
+    info!("🧪 DRY-RUN MODE - No changes will be made");
+    ctx.check_cancel()?;
+    simulate_installation(ctx)?;
+    drop(mounts);
+    Ok(())
+}
+
+fn run_installation_execute(ctx: &mut FlashContext, token: ExecuteArmToken) -> Result<()> {
+    let mounts = MountPoints::new(&ctx.work_dir);
 
     prepare_mount_points(ctx, &mounts)?;
 
-    execute_partition_phase(ctx)?;
-    execute_format_phase(ctx)?;
+    execute_partition_phase(ctx, &token)?;
+    execute_format_phase(ctx, &token)?;
 
     setup_image_loop_phase(ctx)?;
     let subvols = mount_source_phase(ctx, &mounts)?;
@@ -457,22 +531,23 @@ fn prepare_mount_points(ctx: &FlashContext, mounts: &MountPoints) -> Result<()> 
     Ok(())
 }
 
-fn execute_partition_phase(ctx: &FlashContext) -> Result<()> {
+fn execute_partition_phase(ctx: &FlashContext, token: &ExecuteArmToken) -> Result<()> {
     ctx.check_cancel()?;
     ctx.start_phase(Phase::Partition);
+    let _ = token;
     unmount_disk_partitions(&*ctx.hal, &ctx.disk, ctx.auto_unmount, ctx.dry_run)?;
     match ctx.scheme {
-        PartitionScheme::Mbr => partition_disk_mbr(ctx)?,
-        PartitionScheme::Gpt => partition_disk_gpt(ctx)?,
+        PartitionScheme::Mbr => partition_disk_mbr(ctx, token)?,
+        PartitionScheme::Gpt => partition_disk_gpt(ctx, token)?,
     };
     ctx.complete_phase(Phase::Partition);
     Ok(())
 }
 
-fn execute_format_phase(ctx: &FlashContext) -> Result<()> {
+fn execute_format_phase(ctx: &FlashContext, token: &ExecuteArmToken) -> Result<()> {
     ctx.check_cancel()?;
     ctx.start_phase(Phase::Format);
-    format_partitions(ctx)?;
+    format_partitions(ctx, token)?;
     ctx.complete_phase(Phase::Format);
     Ok(())
 }
@@ -665,14 +740,12 @@ fn unmount_disk_partitions(
 }
 
 /// Partition disk with MBR (msdos) using parted
-fn partition_disk_mbr(ctx: &FlashContext) -> Result<()> {
+fn partition_disk_mbr(ctx: &FlashContext, _token: &ExecuteArmToken) -> Result<()> {
     ctx.status("🔪 Creating MBR (msdos) partition table with parted...");
 
     // Wipe existing
-    ctx.hal.wipefs_all(
-        Path::new(&ctx.disk),
-        &WipeFsOptions::new(ctx.dry_run, ctx.confirmed),
-    )?;
+    ctx.hal
+        .wipefs_all(Path::new(&ctx.disk), &WipeFsOptions::new(ctx.dry_run, true))?;
     let _ = ctx.hal.udev_settle();
 
     let efi_start = "4MiB";
@@ -688,7 +761,7 @@ fn partition_disk_mbr(ctx: &FlashContext) -> Result<()> {
         PartedOp::MkLabel {
             label: "msdos".to_string(),
         },
-        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+        &PartedOptions::new(ctx.dry_run, true),
     )?;
 
     // p1: EFI (fat32) — mark bootable for broad Pi UEFI compatibility
@@ -700,7 +773,7 @@ fn partition_disk_mbr(ctx: &FlashContext) -> Result<()> {
             start: efi_start.to_string(),
             end: efi_end.clone(),
         },
-        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+        &PartedOptions::new(ctx.dry_run, true),
     )?;
     // On msdos, "esp" isn't always supported; boot flag is the reliable choice.
     let _ = ctx.hal.parted(
@@ -710,7 +783,7 @@ fn partition_disk_mbr(ctx: &FlashContext) -> Result<()> {
             flag: "boot".to_string(),
             state: "on".to_string(),
         },
-        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+        &PartedOptions::new(ctx.dry_run, true),
     );
 
     // p2: BOOT (ext4)
@@ -722,7 +795,7 @@ fn partition_disk_mbr(ctx: &FlashContext) -> Result<()> {
             start: efi_end.clone(),
             end: boot_end.clone(),
         },
-        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+        &PartedOptions::new(ctx.dry_run, true),
     )?;
 
     // p3: ROOT (btrfs) — keep filesystem consistent with pipeline; only the table differs.
@@ -734,7 +807,7 @@ fn partition_disk_mbr(ctx: &FlashContext) -> Result<()> {
             start: boot_end.clone(),
             end: ctx.root_end.clone(),
         },
-        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+        &PartedOptions::new(ctx.dry_run, true),
     )?;
 
     // p4: DATA (btrfs)
@@ -746,13 +819,13 @@ fn partition_disk_mbr(ctx: &FlashContext) -> Result<()> {
             start: ctx.root_end.clone(),
             end: "100%".to_string(),
         },
-        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+        &PartedOptions::new(ctx.dry_run, true),
     )?;
 
     let _ = ctx.hal.parted(
         Path::new(&ctx.disk),
         PartedOp::Print,
-        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+        &PartedOptions::new(ctx.dry_run, true),
     )?;
     let _ = ctx.hal.udev_settle();
 
@@ -760,14 +833,12 @@ fn partition_disk_mbr(ctx: &FlashContext) -> Result<()> {
     Ok(())
 }
 
-fn partition_disk_gpt(ctx: &FlashContext) -> Result<()> {
+fn partition_disk_gpt(ctx: &FlashContext, _token: &ExecuteArmToken) -> Result<()> {
     ctx.status("🔪 Creating GPT partition table with parted...");
 
     // Wipe existing
-    ctx.hal.wipefs_all(
-        Path::new(&ctx.disk),
-        &WipeFsOptions::new(ctx.dry_run, ctx.confirmed),
-    )?;
+    ctx.hal
+        .wipefs_all(Path::new(&ctx.disk), &WipeFsOptions::new(ctx.dry_run, true))?;
     let _ = ctx.hal.udev_settle();
 
     // Calculate partition boundaries
@@ -784,7 +855,7 @@ fn partition_disk_gpt(ctx: &FlashContext) -> Result<()> {
         PartedOp::MkLabel {
             label: "gpt".to_string(),
         },
-        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+        &PartedOptions::new(ctx.dry_run, true),
     )?;
 
     // p1: EFI (fat32) with esp flag
@@ -796,7 +867,7 @@ fn partition_disk_gpt(ctx: &FlashContext) -> Result<()> {
             start: efi_start.to_string(),
             end: efi_end.clone(),
         },
-        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+        &PartedOptions::new(ctx.dry_run, true),
     )?;
     ctx.hal.parted(
         Path::new(&ctx.disk),
@@ -805,7 +876,7 @@ fn partition_disk_gpt(ctx: &FlashContext) -> Result<()> {
             flag: "esp".to_string(),
             state: "on".to_string(),
         },
-        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+        &PartedOptions::new(ctx.dry_run, true),
     )?;
 
     // p2: BOOT (ext4)
@@ -817,7 +888,7 @@ fn partition_disk_gpt(ctx: &FlashContext) -> Result<()> {
             start: efi_end.clone(),
             end: boot_end.clone(),
         },
-        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+        &PartedOptions::new(ctx.dry_run, true),
     )?;
 
     // p3: ROOT (btrfs) - from boot_end to ROOT_END
@@ -829,7 +900,7 @@ fn partition_disk_gpt(ctx: &FlashContext) -> Result<()> {
             start: boot_end.clone(),
             end: ctx.root_end.clone(),
         },
-        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+        &PartedOptions::new(ctx.dry_run, true),
     )?;
 
     // p4: DATA (btrfs) - from ROOT_END to 100%
@@ -841,14 +912,14 @@ fn partition_disk_gpt(ctx: &FlashContext) -> Result<()> {
             start: ctx.root_end.clone(),
             end: "100%".to_string(),
         },
-        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+        &PartedOptions::new(ctx.dry_run, true),
     )?;
 
     // Show result
     let _ = ctx.hal.parted(
         Path::new(&ctx.disk),
         PartedOp::Print,
-        &PartedOptions::new(ctx.dry_run, ctx.confirmed),
+        &PartedOptions::new(ctx.dry_run, true),
     )?;
     let _ = ctx.hal.udev_settle();
 
@@ -856,7 +927,7 @@ fn partition_disk_gpt(ctx: &FlashContext) -> Result<()> {
     Ok(())
 }
 
-fn format_partitions(ctx: &FlashContext) -> Result<()> {
+fn format_partitions(ctx: &FlashContext, _token: &ExecuteArmToken) -> Result<()> {
     let p1 = ctx.partition_path(1);
     let p2 = ctx.partition_path(2);
     let p3 = ctx.partition_path(3);
@@ -866,13 +937,13 @@ fn format_partitions(ctx: &FlashContext) -> Result<()> {
     ctx.hal.format_vfat(
         Path::new(&p1),
         "EFI",
-        &FormatOptions::new(ctx.dry_run, ctx.confirmed),
+        &FormatOptions::new(ctx.dry_run, true),
     )?;
 
     ctx.status("✨ Formatting BOOT partition (ext4)...");
     ctx.hal.format_ext4(
         Path::new(&p2),
-        &FormatOptions::new(ctx.dry_run, ctx.confirmed).with_args(vec![
+        &FormatOptions::new(ctx.dry_run, true).with_args(vec![
             "-F".to_string(),
             "-L".to_string(),
             "BOOT".to_string(),
@@ -882,7 +953,7 @@ fn format_partitions(ctx: &FlashContext) -> Result<()> {
     ctx.status("✨ Formatting ROOT partition (btrfs)...");
     ctx.hal.format_btrfs(
         Path::new(&p3),
-        &FormatOptions::new(ctx.dry_run, ctx.confirmed).with_args(vec![
+        &FormatOptions::new(ctx.dry_run, true).with_args(vec![
             "-f".to_string(),
             "-L".to_string(),
             "FEDORA".to_string(),
@@ -892,7 +963,7 @@ fn format_partitions(ctx: &FlashContext) -> Result<()> {
     ctx.status("✨ Formatting DATA partition (btrfs)...");
     ctx.hal.format_btrfs(
         Path::new(&p4),
-        &FormatOptions::new(ctx.dry_run, ctx.confirmed).with_args(vec![
+        &FormatOptions::new(ctx.dry_run, true).with_args(vec![
             "-f".to_string(),
             "-L".to_string(),
             "DATA".to_string(),
@@ -1719,7 +1790,6 @@ mod tests {
             scheme: PartitionScheme::Mbr,
             uefi_dir: PathBuf::new(),
             dry_run: false,
-            confirmed: true,
             auto_unmount: false,
             locale: None,
             early_ssh: false,

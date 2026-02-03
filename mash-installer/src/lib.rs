@@ -140,7 +140,7 @@ pub fn run() -> anyhow::Result<()> {
             state,
             dry_run,
             execute,
-            confirm,
+            confirm: _confirm,
             disk,
             mount,
             format_ext4,
@@ -166,7 +166,6 @@ pub fn run() -> anyhow::Result<()> {
             let cfg = mash_workflow::installer::pipeline::InstallConfig {
                 dry_run: *dry_run,
                 execute: *execute,
-                confirmed: *confirm,
                 state_path: state.clone(),
                 disk: disk.clone(),
                 mounts,

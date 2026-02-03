@@ -1,6 +1,7 @@
 use crate::install_runner::{StageDefinition, StageRunner};
 use crate::preflight;
 use anyhow::{Context, Result};
+use mash_core::config_states::{ArmedConfig, HasRunMode, ValidateConfig, ValidatedConfig};
 use mash_core::downloader;
 use mash_core::state_manager::{self, DownloadArtifact};
 use mash_core::{boot_config, system_config};
@@ -38,7 +39,6 @@ impl DownloadStageConfig {
 pub struct DiskStageConfig {
     pub format_ext4: Vec<PathBuf>,
     pub format_btrfs: Vec<PathBuf>,
-    pub confirmed: bool,
 }
 
 impl DiskStageConfig {
@@ -46,7 +46,6 @@ impl DiskStageConfig {
         Self {
             format_ext4: cfg.format_ext4.iter().map(PathBuf::from).collect(),
             format_btrfs: cfg.format_btrfs.iter().map(PathBuf::from).collect(),
-            confirmed: cfg.confirmed,
         }
     }
 }
@@ -115,7 +114,6 @@ impl ResumeStageConfig {
 pub struct InstallConfig {
     pub dry_run: bool,
     pub execute: bool,
-    pub confirmed: bool,
     pub state_path: PathBuf,
     pub disk: Option<String>,
     pub mounts: Vec<MountSpec>,
@@ -138,6 +136,19 @@ pub struct InstallConfig {
     pub download_timeout_secs: u64,
     pub download_retries: usize,
     pub download_dir: PathBuf,
+}
+
+impl ValidateConfig for InstallConfig {
+    fn validate_cfg(&self) -> Result<()> {
+        // Keep validation lightweight here; preflight does the heavy lifting.
+        Ok(())
+    }
+}
+
+impl HasRunMode for InstallConfig {
+    fn is_dry_run(&self) -> bool {
+        self.dry_run
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -286,7 +297,7 @@ fn run_disk_stage<H: mash_hal::FormatOps>(
         log::info!("Disk stage skipped; no format targets configured");
         return Ok(());
     }
-    let format_opts = mash_hal::FormatOptions::new(dry_run, cfg.confirmed);
+    let format_opts = mash_hal::FormatOptions::new(dry_run, true);
     for device in &cfg.format_ext4 {
         hal.format_ext4(device, &format_opts)?;
         if !dry_run {
@@ -413,13 +424,37 @@ fn run_resume_stage(
 }
 
 pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
-    let plan = build_plan(cfg);
-    if cfg.execute && !cfg.confirmed {
-        anyhow::bail!("Execution requires explicit confirmation");
+    let validated = mash_core::config_states::UnvalidatedConfig::new(cfg.clone()).validate()?;
+    run_pipeline_validated(validated)
+}
+
+pub fn run_pipeline_execute(cfg: ArmedConfig<InstallConfig>) -> Result<InstallPlan> {
+    if !cfg.cfg.execute || cfg.cfg.dry_run {
+        anyhow::bail!("run_pipeline_execute requires execute=true and dry_run=false");
     }
+    run_pipeline_impl(cfg.cfg)
+}
+
+fn run_pipeline_validated(cfg: ValidatedConfig<InstallConfig>) -> Result<InstallPlan> {
+    if !cfg.0.execute {
+        return Ok(build_plan(&cfg.0));
+    }
+
+    // For execute-mode, callers must arm to perform destructive operations. We only allow a
+    // simulated run here (execute=true, dry_run=true).
+    if !cfg.0.dry_run {
+        anyhow::bail!("execute-mode requires an ArmedConfig; use run_pipeline_execute");
+    }
+
+    run_pipeline_impl(cfg.0)
+}
+
+fn run_pipeline_impl(cfg: InstallConfig) -> Result<InstallPlan> {
+    let plan = build_plan(&cfg);
     if !cfg.execute {
         return Ok(plan);
     }
+
     let requires_network = !cfg.packages.is_empty() || cfg.download_image || cfg.download_uefi;
     let required_binaries = {
         let mut bins = Vec::new();
@@ -434,7 +469,6 @@ pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
         }
         bins
     };
-    // Create HAL for system operations
     let hal = Arc::new(mash_hal::LinuxHal::new());
 
     let preflight_cfg = Arc::new(preflight::PreflightConfig::for_install(
@@ -442,9 +476,9 @@ pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
         requires_network,
         required_binaries,
     ));
-    let mount_cfg = Arc::new(MountStageConfig::from_install_config(cfg));
-    let package_cfg = Arc::new(PackageStageConfig::from_install_config(cfg));
-    let resume_cfg = Arc::new(ResumeStageConfig::from_install_config(cfg));
+    let mount_cfg = Arc::new(MountStageConfig::from_install_config(&cfg));
+    let package_cfg = Arc::new(PackageStageConfig::from_install_config(&cfg));
+    let resume_cfg = Arc::new(ResumeStageConfig::from_install_config(&cfg));
     let stage_defs = plan
         .stages
         .iter()
@@ -457,7 +491,7 @@ pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
                 }
             }
             "Download assets" => {
-                let download_cfg = DownloadStageConfig::from_install_config(cfg);
+                let download_cfg = DownloadStageConfig::from_install_config(&cfg);
                 StageDefinition {
                     name: stage.name,
                     run: Box::new(move |state, dry_run| {
@@ -476,7 +510,7 @@ pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
                 }
             }
             "Format plan" => {
-                let disk_cfg = DiskStageConfig::from_install_config(cfg);
+                let disk_cfg = DiskStageConfig::from_install_config(&cfg);
                 let hal = Arc::clone(&hal);
                 StageDefinition {
                     name: stage.name,
@@ -493,7 +527,7 @@ pub fn run_pipeline(cfg: &InstallConfig) -> Result<InstallPlan> {
                 }
             }
             "Kernel fix check" => {
-                let boot_cfg = BootStageConfig::from_install_config(cfg);
+                let boot_cfg = BootStageConfig::from_install_config(&cfg);
                 StageDefinition {
                     name: stage.name,
                     run: Box::new(move |state, dry_run| run_boot_stage(state, &boot_cfg, dry_run)),
@@ -669,7 +703,6 @@ mod tests {
         let cfg = InstallConfig {
             dry_run: true,
             execute: false,
-            confirmed: false,
             state_path: PathBuf::from("/tmp/state.json"),
             disk: None,
             mounts: Vec::new(),
@@ -713,7 +746,6 @@ mod tests {
         InstallConfig {
             dry_run,
             execute,
-            confirmed: true,
             state_path,
             disk: None,
             mounts: Vec::new(),
@@ -767,7 +799,6 @@ mod tests {
         InstallConfig {
             dry_run: false,
             execute: true,
-            confirmed: true,
             state_path,
             disk: None,
             mounts: Vec::new(),
@@ -831,12 +862,10 @@ mod tests {
         format_btrfs: Vec<String>,
         execute: bool,
         dry_run: bool,
-        confirmed: bool,
     ) -> InstallConfig {
         InstallConfig {
             dry_run,
             execute,
-            confirmed,
             state_path,
             disk: None,
             mounts: Vec::new(),
@@ -1046,7 +1075,12 @@ mod tests {
             false,
         );
 
-        run_pipeline(&cfg).unwrap();
+        let token = mash_core::config_states::ExecuteArmToken::try_new(true, true, true).unwrap();
+        let validated = mash_core::config_states::UnvalidatedConfig::new(cfg)
+            .validate()
+            .unwrap();
+        let armed = validated.arm_execute(token).unwrap();
+        run_pipeline_execute(armed).unwrap();
         let artifact_path = downloads.join("override.img.xz");
         let metadata = artifact_path.metadata().unwrap();
         assert_eq!(metadata.len(), body.len() as u64);
@@ -1083,7 +1117,12 @@ mod tests {
             false,
         );
 
-        run_pipeline(&cfg).unwrap();
+        let token = mash_core::config_states::ExecuteArmToken::try_new(true, true, true).unwrap();
+        let validated = mash_core::config_states::UnvalidatedConfig::new(cfg)
+            .validate()
+            .unwrap();
+        let armed = validated.arm_execute(token).unwrap();
+        run_pipeline_execute(armed).unwrap();
         let artifact_path = downloads.join("override.img.xz");
         assert_eq!(fs::read(&artifact_path).unwrap(), body);
     }
@@ -1103,7 +1142,6 @@ mod tests {
             Vec::new(),
             true,
             false,
-            true,
         );
         let disk_cfg = DiskStageConfig::from_install_config(&cfg);
         let hal = mash_hal::LinuxHal::new();
@@ -1137,7 +1175,6 @@ mod tests {
             Vec::new(),
             false,
             true,
-            false,
         );
         let disk_cfg = DiskStageConfig::from_install_config(&cfg);
         let hal = mash_hal::LinuxHal::new();
@@ -1234,7 +1271,12 @@ mod tests {
             by_uuid.clone(),
         );
 
-        run_pipeline(&cfg).unwrap();
+        let token = mash_core::config_states::ExecuteArmToken::try_new(true, true, true).unwrap();
+        let validated = mash_core::config_states::UnvalidatedConfig::new(cfg)
+            .validate()
+            .unwrap();
+        let armed = validated.arm_execute(token).unwrap();
+        run_pipeline_execute(armed).unwrap();
 
         let unit_path = tmp
             .path()

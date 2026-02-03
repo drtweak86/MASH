@@ -1,5 +1,6 @@
 use crate::install_runner::{StageDefinition, StageRunner};
 use anyhow::{Context, Result};
+use mash_core::config_states::{ArmedConfig, HasRunMode, ValidateConfig, ValidatedConfig};
 use mash_core::downloader::{self, DownloadOptions, ImageKey, OsKind};
 use mash_core::progress::ProgressUpdate;
 use mash_core::state_manager::{save_state_atomic, DownloadArtifact, InstallState};
@@ -40,9 +41,53 @@ impl OsInstallConfig {
     }
 }
 
-pub fn run<H>(
+impl ValidateConfig for OsInstallConfig {
+    fn validate_cfg(&self) -> Result<()> {
+        if self.arch.trim().is_empty() {
+            anyhow::bail!("arch must not be empty");
+        }
+        if self.target_disk.as_os_str().is_empty() {
+            anyhow::bail!("target_disk must not be empty");
+        }
+        if self.download_dir.as_os_str().is_empty() {
+            anyhow::bail!("download_dir must not be empty");
+        }
+        Ok(())
+    }
+}
+
+impl HasRunMode for OsInstallConfig {
+    fn is_dry_run(&self) -> bool {
+        self.dry_run
+    }
+}
+
+pub fn run_dry_run<H>(
     hal: &H,
-    cfg: &OsInstallConfig,
+    cfg: ValidatedConfig<OsInstallConfig>,
+    cancel: Option<&AtomicBool>,
+) -> Result<InstallState>
+where
+    H: mash_hal::FlashOps + Send + Sync + Clone + 'static,
+{
+    cfg.require_dry_run()?;
+    run_impl(hal, cfg.0, false, false, cancel)
+}
+
+pub fn run_execute<H>(
+    hal: &H,
+    cfg: ArmedConfig<OsInstallConfig>,
+    cancel: Option<&AtomicBool>,
+) -> Result<InstallState>
+where
+    H: mash_hal::FlashOps + Send + Sync + Clone + 'static,
+{
+    run_impl(hal, cfg.cfg, true, true, cancel)
+}
+
+fn run_impl<H>(
+    hal: &H,
+    cfg: OsInstallConfig,
     destructive_confirmed: bool,
     typed_confirmation: bool,
     cancel: Option<&AtomicBool>,
@@ -50,10 +95,6 @@ pub fn run<H>(
 where
     H: mash_hal::FlashOps + Send + Sync + Clone + 'static,
 {
-    if !cfg.dry_run && !destructive_confirmed {
-        anyhow::bail!("refusing to run destructive install without confirmation");
-    }
-
     let state_path = cfg.state_path.clone();
     let runner = StageRunner::new(state_path.clone(), cfg.dry_run);
 
@@ -317,6 +358,7 @@ fn resolve_image_path(cfg: &OsInstallConfig, state: &InstallState) -> Result<Pat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mash_core::config_states::{ExecuteArmToken, UnvalidatedConfig};
     use tempfile::tempdir;
 
     fn xz_encode(data: &[u8]) -> Vec<u8> {
@@ -354,7 +396,10 @@ mod tests {
         };
 
         let hal = mash_hal::LinuxHal::new();
-        let state = run(&hal, &cfg, true, false, None).unwrap();
+        let token = ExecuteArmToken::try_new(true, true, true).unwrap();
+        let validated = UnvalidatedConfig::new(cfg).validate().unwrap();
+        let armed = validated.arm_execute(token).unwrap();
+        let state = run_execute(&hal, armed, None).unwrap();
         assert!(state
             .flashed_devices
             .iter()
@@ -391,7 +436,10 @@ mod tests {
         };
 
         let hal = mash_hal::LinuxHal::new();
-        let state = run(&hal, &cfg, true, false, None).unwrap();
+        let token = ExecuteArmToken::try_new(true, true, true).unwrap();
+        let validated = UnvalidatedConfig::new(cfg).validate().unwrap();
+        let armed = validated.arm_execute(token).unwrap();
+        let state = run_execute(&hal, armed, None).unwrap();
         assert!(!state.post_boot_partition_expansion_required);
         let written = std::fs::read(&disk_path).unwrap();
         assert_eq!(written, content);
@@ -423,7 +471,10 @@ mod tests {
         };
 
         let hal = mash_hal::LinuxHal::new();
-        let state = run(&hal, &cfg, true, false, None).unwrap();
+        let token = ExecuteArmToken::try_new(true, true, true).unwrap();
+        let validated = UnvalidatedConfig::new(cfg).validate().unwrap();
+        let armed = validated.arm_execute(token).unwrap();
+        let state = run_execute(&hal, armed, None).unwrap();
         assert!(state.post_boot_partition_expansion_required);
         let written = std::fs::read(&disk_path).unwrap();
         assert_eq!(written, content);

@@ -8,6 +8,12 @@ pub enum MashError {
     #[error("Missing --yes-i-know flag. This operation is destructive!")]
     MissingYesIKnow,
 
+    #[error("Safe Mode is still armed. Disarm Safe Mode to proceed.")]
+    MissingSafeModeDisarm,
+
+    #[error("Missing required typed confirmation for execute-mode.")]
+    MissingExecuteConfirmation,
+
     #[error("Safety lock engaged (SAFE MODE). Disarm Safe Mode to proceed.")]
     SafetyLock,
 

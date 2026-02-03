@@ -216,3 +216,27 @@ impl TryFrom<TuiFlashConfig> for mash_core::flash::FlashConfig {
         Ok(flash)
     }
 }
+
+impl TuiFlashConfig {
+    pub fn validated_flash_config(
+        &self,
+    ) -> anyhow::Result<mash_core::config_states::ValidatedConfig<mash_core::flash::FlashConfig>>
+    {
+        let flash_cfg: mash_core::flash::FlashConfig = self.clone().try_into()?;
+        mash_core::config_states::UnvalidatedConfig::new(flash_cfg).validate()
+    }
+
+    pub fn armed_flash_config(
+        &self,
+        yes_i_know: bool,
+        safe_mode_disarmed: bool,
+    ) -> anyhow::Result<mash_core::config_states::ArmedConfig<mash_core::flash::FlashConfig>> {
+        let validated = self.validated_flash_config()?;
+        let token = mash_core::config_states::ExecuteArmToken::try_new(
+            yes_i_know,
+            safe_mode_disarmed,
+            self.typed_execute_confirmation,
+        )?;
+        validated.arm_execute(token)
+    }
+}

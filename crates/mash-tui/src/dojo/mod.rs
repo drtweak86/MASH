@@ -375,15 +375,17 @@ fn run_execution_pipeline(
             config.uefi_dir = path;
         }
 
-        let flash_cfg: flash::FlashConfig = config.clone().try_into()?;
         let hal: std::sync::Arc<dyn mash_hal::InstallerHal> =
             std::sync::Arc::new(mash_hal::LinuxHal::new());
-        let flash_result = flash::run_with_progress_with_confirmation_with_hal(
-            &flash_cfg,
-            yes_i_know,
-            config.typed_execute_confirmation,
-            hal,
-        );
+        let flash_result = if config.dry_run {
+            let validated = config.validated_flash_config()?;
+            mash_core::flash::run_dry_run_with_hal(validated, hal)
+        } else {
+            // SAFE-mode disarm is handled by the UI; `yes_i_know` represents that it has been
+            // explicitly disarmed for this run.
+            let armed = config.armed_flash_config(yes_i_know, yes_i_know)?;
+            mash_core::flash::run_execute_with_hal(armed, hal)
+        };
         flash::clear_cancel_flag();
 
         match flash_result {
@@ -421,13 +423,18 @@ fn run_execution_pipeline(
         };
 
         let hal = mash_hal::LinuxHal::new();
-        let result = installer::os_install::run(
-            &hal,
-            &install_cfg,
-            yes_i_know,
-            config.typed_execute_confirmation,
-            Some(cancel_flag.as_ref()),
-        );
+        let validated = mash_core::config_states::UnvalidatedConfig::new(install_cfg).validate()?;
+        let result = if config.dry_run {
+            installer::os_install::run_dry_run(&hal, validated, Some(cancel_flag.as_ref()))
+        } else {
+            let token = mash_core::config_states::ExecuteArmToken::try_new(
+                yes_i_know,
+                yes_i_know,
+                config.typed_execute_confirmation,
+            )?;
+            let armed = validated.arm_execute(token)?;
+            installer::os_install::run_execute(&hal, armed, Some(cancel_flag.as_ref()))
+        };
         flash::clear_cancel_flag();
 
         match result {
