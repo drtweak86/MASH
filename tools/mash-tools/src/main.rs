@@ -1,8 +1,12 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
+use reqwest::blocking::Client;
+use reqwest::header::RANGE;
+use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 use toml_edit::{DocumentMut, Item};
 
 #[derive(Debug, Parser)]
@@ -21,6 +25,8 @@ struct Cli {
 enum Commands {
     #[command(subcommand)]
     Release(ReleaseCommand),
+    #[command(subcommand)]
+    Links(LinksCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -32,6 +38,20 @@ enum ReleaseCommand {
     Tag { version: String },
 }
 
+#[derive(Debug, Subcommand)]
+enum LinksCommand {
+    /// Perform HTTP health checks against documented OS download links.
+    Check {
+        /// Path to a TOML file containing [[health_checks]] entries.
+        #[arg(long)]
+        file: PathBuf,
+
+        /// Per-request timeout in seconds.
+        #[arg(long, default_value_t = 10)]
+        timeout_secs: u64,
+    },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let repo_root = repo_root()?;
@@ -41,6 +61,11 @@ fn main() -> Result<()> {
         Commands::Release(cmd) => match cmd {
             ReleaseCommand::Bump { version } => bump_version(&repo_root, &version)?,
             ReleaseCommand::Tag { version } => tag_release(&repo_root, &version)?,
+        },
+        Commands::Links(cmd) => match cmd {
+            LinksCommand::Check { file, timeout_secs } => {
+                check_links(&repo_root, &file, timeout_secs)?
+            }
         },
     }
 
@@ -168,4 +193,91 @@ where
         return Err(anyhow!("git command failed"));
     }
     Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct LinkHealthFile {
+    #[serde(default)]
+    health_checks: Vec<LinkHealthCheck>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LinkHealthCheck {
+    name: String,
+    url: String,
+}
+
+fn check_links(repo_root: &Path, rel_path: &Path, timeout_secs: u64) -> Result<()> {
+    let path = if rel_path.is_absolute() {
+        rel_path.to_path_buf()
+    } else {
+        repo_root.join(rel_path)
+    };
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    let parsed: LinkHealthFile =
+        toml::from_str(&content).with_context(|| format!("failed to parse {}", path.display()))?;
+    if parsed.health_checks.is_empty() {
+        return Err(anyhow!(
+            "no [[health_checks]] entries found in {}",
+            path.display()
+        ));
+    }
+
+    let client = Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .user_agent("mash-tools/os-link-health")
+        .build()
+        .context("failed to build HTTP client")?;
+
+    let mut failures = Vec::new();
+    for check in parsed.health_checks {
+        let res = check_one_link(&client, &check.url);
+        match res {
+            Ok(status) => {
+                println!("OK  {} -> {}", check.name, status);
+            }
+            Err(err) => {
+                println!("BAD {} -> {} ({})", check.name, check.url, err);
+                failures.push((check.name, check.url, err.to_string()));
+            }
+        }
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        let mut msg = String::from("one or more OS download links failed:\n");
+        for (name, url, err) in failures {
+            msg.push_str(&format!("- {name}: {url} ({err})\n"));
+        }
+        Err(anyhow!(msg))
+    }
+}
+
+fn check_one_link(client: &Client, url: &str) -> Result<String> {
+    // Prefer HEAD to avoid large downloads. Some sites reject HEAD, so fall back to a tiny GET.
+    let head = client.head(url).send();
+    match head {
+        Ok(resp) => {
+            if resp.status().is_success() {
+                return Ok(resp.status().to_string());
+            }
+            // Fall through to GET attempt for non-success statuses; some CDNs block HEAD.
+        }
+        Err(_) => {
+            // Fall through to GET attempt.
+        }
+    }
+
+    let resp = client
+        .get(url)
+        .header(RANGE, "bytes=0-0")
+        .send()
+        .context("GET fallback failed")?;
+    if resp.status().is_success() {
+        Ok(resp.status().to_string())
+    } else {
+        Err(anyhow!("HTTP {}", resp.status()))
+    }
 }

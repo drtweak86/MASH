@@ -8,3 +8,25 @@ edition = "KDE"
 arch = "aarch64"
 checksum_sha256 = ""
 mirrors = []
+
+# -----------------------------------------------------------------------------
+# Link Health Checks
+# -----------------------------------------------------------------------------
+# Used by the scheduled GitHub Action (issue #45) to verify that upstream landing
+# pages remain reachable (HTTP 200).
+
+[[health_checks]]
+name = "Fedora spins (KDE) landing page"
+url = "https://fedoraproject.org/spins/kde/"
+
+[[health_checks]]
+name = "Ubuntu Desktop download landing page"
+url = "https://ubuntu.com/download/desktop"
+
+[[health_checks]]
+name = "Manjaro ARM download landing page"
+url = "https://manjaro.org/products/download/arm"
+
+[[health_checks]]
+name = "Raspberry Pi OS landing page"
+url = "https://www.raspberrypi.com/software/operating-systems/"

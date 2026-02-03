@@ -1657,6 +1657,9 @@ version = "1.2.14"
 dependencies = [
  "anyhow",
  "clap",
+ "reqwest",
+ "serde",
+ "toml",
  "toml_edit 0.22.27",
 ]
 

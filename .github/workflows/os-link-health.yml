@@ -1,0 +1,21 @@
+name: OS Link Health
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Weekly (Monday 06:00 UTC)
+    - cron: "0 6 * * 1"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check OS download links
+        run: cargo run -p mash-tools -- links check --file docs/os-download-links.toml
+
