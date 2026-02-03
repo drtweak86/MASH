@@ -147,18 +147,55 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
             }
             let options = app.disks.iter().map(format_disk_entry).collect::<Vec<_>>();
             push_options(&mut items, &options, app.disk_index);
+
+            // Show boot disk override instructions if boot disk is selected
+            if let Some(disk) = app.disks.get(app.disk_index) {
+                if disk.is_boot {
+                    items.push("".to_string());
+                    items.push("⚠️ DANGER: Boot disk selected!".to_string());
+                    items.push(
+                        "Type 'BOOT' to override protection, or select a different disk."
+                            .to_string(),
+                    );
+                    if !app.boot_disk_override_input.is_empty() {
+                        items.push(format!("Input: {}", app.boot_disk_override_input));
+                    }
+                }
+            }
         }
         InstallStepType::DiskConfirmation => {
             let disk = app.disks.get(app.disk_index);
-            items.push("⚠️ Confirm disk destruction:".to_string());
-            items.push("Type DESTROY to confirm • Esc to go back.".to_string());
             if let Some(disk) = disk {
+                let is_boot_disk = disk.is_boot;
                 let model = disk.model.as_deref().unwrap_or("Unknown model").trim();
-                items.push(format!(
-                    "TARGET TO BE WIPED: {} ({} , {})",
-                    disk.path, model, disk.size
-                ));
-                items.push("Type DESTROY to confirm.".to_string());
+
+                if is_boot_disk {
+                    items.push("⚠️⚠️⚠️ CRITICAL WARNING: BOOT DISK SELECTED ⚠️⚠️⚠️".to_string());
+                    items.push("".to_string());
+                    items.push(
+                        "You are about to DESTROY the disk your system is running from!"
+                            .to_string(),
+                    );
+                    items.push(
+                        "This will make your system UNBOOTABLE and cause DATA LOSS!".to_string(),
+                    );
+                    items.push("".to_string());
+                    items.push(format!(
+                        "BOOT DEVICE TO BE WIPED: {} ({}, {})",
+                        disk.path, model, disk.size
+                    ));
+                    items.push("".to_string());
+                    items.push("Type 'DESTROY BOOT DISK' to confirm • Esc to go back.".to_string());
+                } else {
+                    items.push("⚠️ Confirm disk destruction:".to_string());
+                    items.push("Type DESTROY to confirm • Esc to go back.".to_string());
+                    items.push(format!(
+                        "TARGET TO BE WIPED: {} ({}, {})",
+                        disk.path, model, disk.size
+                    ));
+                    items.push("Type DESTROY to confirm.".to_string());
+                }
+
                 items.push(format!("Input: {}", app.wipe_confirmation));
             } else {
                 items.push("No disk selected.".to_string());
@@ -261,32 +298,50 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
             }
         }
         InstallStepType::ImageSelection => {
-            items.push("🖼️ Select Fedora image:".to_string());
+            items.push("🖼️ Select OS distribution:".to_string());
             items
                 .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
+
+            // Show OS distro options
             let options = app
-                .images
+                .os_distros
                 .iter()
-                .map(|image| image.label.clone())
+                .map(|distro| distro.display().to_string())
                 .collect::<Vec<_>>();
-            push_options(&mut items, &options, app.image_index);
+            push_options(&mut items, &options, app.os_distro_index);
+
+            // Show availability warning for non-Fedora distros
+            if let Some(distro) = app.os_distros.get(app.os_distro_index) {
+                if !distro.is_available() {
+                    items.push("".to_string());
+                    items.push("⚠️ This distribution is not yet available.".to_string());
+                    items.push("Please select Fedora for now.".to_string());
+                }
+            }
         }
         InstallStepType::UefiDirectory => {
-            items.push("📁 Select UEFI directory:".to_string());
+            items.push("📁 Select UEFI firmware source:".to_string());
             items
                 .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
+
+            let uefi_source = app.uefi_sources.get(app.uefi_source_index);
+            let is_local = matches!(
+                uefi_source,
+                Some(crate::tui::flash_config::UefiSource::LocalDirectory)
+            );
+
+            // Show UEFI source options
             let options = app
-                .uefi_dirs
+                .uefi_sources
                 .iter()
-                .map(|path| path.display().to_string())
+                .map(|source| source.display().to_string())
                 .collect::<Vec<_>>();
-            push_options(&mut items, &options, app.uefi_index);
-            if !app
-                .options
-                .iter()
-                .any(|option| option.label == "Download UEFI firmware" && option.enabled)
-            {
-                items.push("Local UEFI path:".to_string());
+            push_options(&mut items, &options, app.uefi_source_index);
+
+            // If local directory selected, show path input
+            if is_local {
+                items.push("".to_string());
+                items.push("UEFI firmware directory path:".to_string());
                 items.push(app.uefi_source_path.clone());
             }
         }
@@ -554,11 +609,35 @@ fn push_options(items: &mut Vec<String>, options: &[String], selected: usize) {
 
 fn build_plan_lines(app: &crate::tui::dojo_app::App) -> Vec<String> {
     let mut lines = Vec::new();
+
+    // OS Distribution
+    if let Some(distro) = app.os_distros.get(app.os_distro_index) {
+        lines.push(format!("OS: {}", distro.display()));
+    } else {
+        lines.push("OS: <not selected>".to_string());
+    }
+
+    // Target disk
     if let Some(disk) = app.disks.get(app.disk_index) {
         lines.push(format!("Disk: {} ({})", disk.path, disk.size));
     } else {
         lines.push("Disk: <not selected>".to_string());
     }
+
+    // UEFI firmware source
+    if let Some(uefi_source) = app.uefi_sources.get(app.uefi_source_index) {
+        match uefi_source {
+            crate::tui::flash_config::UefiSource::LocalDirectory => {
+                lines.push(format!("UEFI: Local directory ({})", app.uefi_source_path));
+            }
+            crate::tui::flash_config::UefiSource::Download => {
+                lines.push("UEFI: Download firmware".to_string());
+            }
+        }
+    } else {
+        lines.push("UEFI: <not selected>".to_string());
+    }
+
     lines.push("Mounts: /boot/efi, /boot, / (root), /data".to_string());
     lines.push("Formats: EFI=fat32, BOOT=ext4, ROOT=btrfs, DATA=btrfs".to_string());
     lines.push("Packages: (not selected)".to_string());
@@ -602,7 +681,7 @@ fn format_disk_entry(disk: &crate::tui::dojo_app::DiskOption) -> String {
         tags.push("removable");
     }
     if disk.is_boot {
-        tags.push("BOOT MEDIA");
+        tags.push("⚠ BOOT DEVICE");
     }
     let tag_str = if tags.is_empty() {
         String::new()

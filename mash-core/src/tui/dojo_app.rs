@@ -357,10 +357,14 @@ pub struct App {
     pub efi_size: String,
     pub boot_size: String,
     pub root_end: String,
+    pub os_distros: Vec<crate::tui::flash_config::OsDistro>,
+    pub os_distro_index: usize,
     pub image_sources: Vec<SourceOption>,
     pub image_source_index: usize,
     pub images: Vec<ImageOption>,
     pub image_index: usize,
+    pub uefi_sources: Vec<crate::tui::flash_config::UefiSource>,
+    pub uefi_source_index: usize,
     pub uefi_dirs: Vec<PathBuf>,
     pub uefi_index: usize,
     pub locales: Vec<String>,
@@ -385,6 +389,7 @@ pub struct App {
     pub downloaded_image_path: Option<PathBuf>,
     pub downloaded_uefi_dir: Option<PathBuf>,
     pub confirmation_input: String,
+    pub boot_disk_override_input: String,
     pub cancel_requested: Arc<std::sync::atomic::AtomicBool>,
     pub customize_error_field: Option<CustomizeField>,
     pub dry_run: bool,
@@ -454,6 +459,13 @@ impl App {
                 })
                 .collect()
         };
+
+        // Auto-select first non-boot, removable disk for safety (prefer USB/SD cards)
+        let default_disk_index = disks
+            .iter()
+            .position(|disk| !disk.is_boot && disk.removable)
+            .or_else(|| disks.iter().position(|disk| !disk.is_boot))
+            .unwrap_or(0);
 
         let partition_schemes = PartitionScheme::value_variants().to_vec();
         let scheme_index = partition_schemes
@@ -527,7 +539,7 @@ impl App {
             ],
             welcome_index: 0,
             disks,
-            disk_index: 0,
+            disk_index: default_disk_index,
             disk_confirm_index: 0,
             wipe_confirmation: String::new(),
             partition_schemes,
@@ -542,6 +554,8 @@ impl App {
             efi_size: "1024MiB".to_string(),
             boot_size: "2048MiB".to_string(),
             root_end: "1800GiB".to_string(),
+            os_distros: crate::tui::flash_config::OsDistro::all().to_vec(),
+            os_distro_index: 0, // Default to Fedora
             image_sources: vec![
                 SourceOption {
                     label: "Local Image File (.raw)".to_string(),
@@ -555,6 +569,8 @@ impl App {
             image_source_index: 0,
             images,
             image_index: 0,
+            uefi_sources: crate::tui::flash_config::UefiSource::all().to_vec(),
+            uefi_source_index: 0, // Default to local directory
             uefi_dirs: vec![
                 PathBuf::from("/tmp/uefi"),
                 PathBuf::from("/opt/uefi-firmware"),
@@ -602,6 +618,7 @@ impl App {
             downloaded_image_path: None,
             downloaded_uefi_dir: None,
             confirmation_input: String::new(),
+            boot_disk_override_input: String::new(),
             cancel_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             customize_error_field: None,
             dry_run: false,
@@ -626,11 +643,7 @@ impl App {
         match self.current_step_type {
             InstallStepType::Welcome => self.handle_welcome_input(key),
             InstallStepType::BackupConfirmation => self.handle_backup_confirmation_input(key),
-            InstallStepType::DiskSelection => {
-                let len = self.disks.len();
-                let action = Self::list_action(key, len, &mut self.disk_index);
-                self.apply_list_action(action)
-            }
+            InstallStepType::DiskSelection => self.handle_disk_selection_input(key),
             InstallStepType::DiskConfirmation => self.handle_disk_confirmation_input(key),
             InstallStepType::PartitionScheme => {
                 let len = self.partition_schemes.len();
@@ -653,24 +666,8 @@ impl App {
                     self.apply_list_action(action)
                 }
             }
-            InstallStepType::ImageSelection => {
-                let len = self.images.len();
-                let action = Self::list_action(key, len, &mut self.image_index);
-                self.apply_list_action(action)
-            }
-            InstallStepType::UefiDirectory => {
-                let len = self.uefi_dirs.len();
-                let downloads_uefi = self
-                    .options
-                    .iter()
-                    .any(|option| option.label == "Download UEFI firmware" && option.enabled);
-                if downloads_uefi {
-                    let action = Self::list_action(key, len, &mut self.uefi_index);
-                    self.apply_list_action(action)
-                } else {
-                    self.handle_uefi_source_path_input(key, len)
-                }
-            }
+            InstallStepType::ImageSelection => self.handle_os_distro_selection_input(key),
+            InstallStepType::UefiDirectory => self.handle_uefi_source_selection_input(key),
             InstallStepType::LocaleSelection => {
                 let len = self.locales.len();
                 let action = Self::list_action(key, len, &mut self.locale_index);
@@ -783,6 +780,79 @@ impl App {
         }
     }
 
+    fn handle_disk_selection_input(&mut self, key: KeyEvent) -> InputResult {
+        // Check if current disk is boot disk
+        let is_boot_disk_selected = self
+            .disks
+            .get(self.disk_index)
+            .map(|disk| disk.is_boot)
+            .unwrap_or(false);
+
+        // If boot disk is selected, accept text input for override
+        if is_boot_disk_selected {
+            match key.code {
+                KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
+                    self.adjust_disk_index(-1);
+                    self.boot_disk_override_input.clear();
+                    InputResult::Continue
+                }
+                KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
+                    self.adjust_disk_index(1);
+                    self.boot_disk_override_input.clear();
+                    InputResult::Continue
+                }
+                KeyCode::Char(c) => {
+                    self.boot_disk_override_input.push(c.to_ascii_uppercase());
+                    self.error_message = None;
+                    InputResult::Continue
+                }
+                KeyCode::Backspace => {
+                    self.boot_disk_override_input.pop();
+                    InputResult::Continue
+                }
+                KeyCode::Enter => {
+                    if self.boot_disk_override_input == "BOOT" {
+                        // Override accepted - proceed with boot disk
+                        self.boot_disk_override_input.clear();
+                        self.error_message = None;
+                        self.apply_list_action(ListAction::Advance)
+                    } else {
+                        self.error_message = Some(
+                            "⚠️ Type 'BOOT' to override protection or select a different disk."
+                                .to_string(),
+                        );
+                        InputResult::Continue
+                    }
+                }
+                KeyCode::Esc => {
+                    self.boot_disk_override_input.clear();
+                    self.apply_list_action(ListAction::Back)
+                }
+                _ => InputResult::Continue,
+            }
+        } else {
+            // Normal navigation for non-boot disks
+            match key.code {
+                KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
+                    self.adjust_disk_index(-1);
+                    InputResult::Continue
+                }
+                KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
+                    self.adjust_disk_index(1);
+                    InputResult::Continue
+                }
+                KeyCode::Enter => {
+                    self.error_message = None;
+                    self.boot_disk_override_input.clear();
+                    self.apply_list_action(ListAction::Advance)
+                }
+                KeyCode::Esc => self.apply_list_action(ListAction::Back),
+                KeyCode::Char('q') => self.apply_list_action(ListAction::Quit),
+                _ => InputResult::Continue,
+            }
+        }
+    }
+
     fn handle_options_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
             KeyCode::Up => {
@@ -832,9 +902,21 @@ impl App {
     }
 
     fn handle_disk_confirmation_input(&mut self, key: KeyEvent) -> InputResult {
+        let is_boot_disk = self
+            .disks
+            .get(self.disk_index)
+            .map(|disk| disk.is_boot)
+            .unwrap_or(false);
+
+        let required_text = if is_boot_disk {
+            "DESTROY BOOT DISK"
+        } else {
+            "DESTROY"
+        };
+
         match key.code {
-            KeyCode::Char(c) if c.is_ascii_alphanumeric() => {
-                if self.wipe_confirmation.len() < 16 {
+            KeyCode::Char(c) if c.is_ascii_alphanumeric() || c == ' ' => {
+                if self.wipe_confirmation.len() < 32 {
                     self.wipe_confirmation.push(c.to_ascii_uppercase());
                 }
                 InputResult::Continue
@@ -844,15 +926,21 @@ impl App {
                 InputResult::Continue
             }
             KeyCode::Enter => {
-                if self.wipe_confirmation == "DESTROY" {
+                if self.wipe_confirmation == required_text {
                     self.error_message = None;
                     self.wipe_confirmation.clear();
                     if let Some(next) = self.current_step_type.next() {
                         self.current_step_type = next;
                     }
                 } else {
-                    self.error_message =
-                        Some("Type DESTROY to confirm disk destruction.".to_string());
+                    self.error_message = if is_boot_disk {
+                        Some(
+                            "⚠️ Type 'DESTROY BOOT DISK' to confirm destruction of BOOT DEVICE."
+                                .to_string(),
+                        )
+                    } else {
+                        Some("Type DESTROY to confirm disk destruction.".to_string())
+                    };
                 }
                 InputResult::Continue
             }
@@ -1005,6 +1093,84 @@ impl App {
         }
     }
 
+    fn handle_os_distro_selection_input(&mut self, key: KeyEvent) -> InputResult {
+        match key.code {
+            KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
+                Self::adjust_index(self.os_distros.len(), &mut self.os_distro_index, -1);
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
+                Self::adjust_index(self.os_distros.len(), &mut self.os_distro_index, 1);
+                InputResult::Continue
+            }
+            KeyCode::Enter => {
+                // Check if selected distro is available
+                if let Some(distro) = self.os_distros.get(self.os_distro_index) {
+                    if !distro.is_available() {
+                        self.error_message = Some(
+                            "⚠️ This distribution is not yet available. Please select Fedora."
+                                .to_string(),
+                        );
+                        return InputResult::Continue;
+                    }
+                }
+                self.error_message = None;
+                self.apply_list_action(ListAction::Advance)
+            }
+            KeyCode::Esc => self.apply_list_action(ListAction::Back),
+            KeyCode::Char('q') => self.apply_list_action(ListAction::Quit),
+            _ => InputResult::Continue,
+        }
+    }
+
+    fn handle_uefi_source_selection_input(&mut self, key: KeyEvent) -> InputResult {
+        let is_local = matches!(
+            self.uefi_sources.get(self.uefi_source_index),
+            Some(crate::tui::flash_config::UefiSource::LocalDirectory)
+        );
+
+        // If local directory is selected, accept text input for path
+        if is_local {
+            match key.code {
+                KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
+                    Self::adjust_index(self.uefi_sources.len(), &mut self.uefi_source_index, -1);
+                    InputResult::Continue
+                }
+                KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
+                    Self::adjust_index(self.uefi_sources.len(), &mut self.uefi_source_index, 1);
+                    InputResult::Continue
+                }
+                KeyCode::Char(c) => {
+                    self.uefi_source_path.push(c);
+                    InputResult::Continue
+                }
+                KeyCode::Backspace => {
+                    self.uefi_source_path.pop();
+                    InputResult::Continue
+                }
+                KeyCode::Enter => self.apply_list_action(ListAction::Advance),
+                KeyCode::Esc => self.apply_list_action(ListAction::Back),
+                _ => InputResult::Continue,
+            }
+        } else {
+            // Download selected - simple navigation
+            match key.code {
+                KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
+                    Self::adjust_index(self.uefi_sources.len(), &mut self.uefi_source_index, -1);
+                    InputResult::Continue
+                }
+                KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
+                    Self::adjust_index(self.uefi_sources.len(), &mut self.uefi_source_index, 1);
+                    InputResult::Continue
+                }
+                KeyCode::Enter => self.apply_list_action(ListAction::Advance),
+                KeyCode::Esc => self.apply_list_action(ListAction::Back),
+                KeyCode::Char('q') => self.apply_list_action(ListAction::Quit),
+                _ => InputResult::Continue,
+            }
+        }
+    }
+
     fn apply_list_action(&mut self, action: ListAction) -> InputResult {
         match action {
             ListAction::Advance => {
@@ -1055,6 +1221,35 @@ impl App {
             next = 0;
         }
         *index = next as usize;
+    }
+
+    /// Adjust disk index while skipping boot disks for safety
+    fn adjust_disk_index(&mut self, delta: isize) {
+        let len = self.disks.len();
+        if len == 0 {
+            self.disk_index = 0;
+            return;
+        }
+
+        let start_index = self.disk_index;
+        let mut attempts = 0;
+        loop {
+            // Use standard index adjustment
+            Self::adjust_index(len, &mut self.disk_index, delta);
+
+            // Check if we found a non-boot disk or cycled through all
+            if let Some(disk) = self.disks.get(self.disk_index) {
+                if !disk.is_boot {
+                    return; // Found a safe disk
+                }
+            }
+
+            attempts += 1;
+            if attempts >= len || self.disk_index == start_index {
+                // All disks are boot disks or we cycled back - stay on current
+                return;
+            }
+        }
     }
 
     fn toggle_backup_choice(&mut self) {
@@ -1357,12 +1552,10 @@ impl App {
         // The actual values would come from fields in the App struct (e.g., self.selected_disk, etc.)
         // This is a minimal implementation to allow TuiFlashConfig construction.
 
-        let download_uefi_firmware = self
-            .options
-            .iter()
-            .find(|option| option.label == "Download UEFI firmware")
-            .map(|option| option.enabled)
-            .unwrap_or(false);
+        let download_uefi_firmware = matches!(
+            self.uefi_sources.get(self.uefi_source_index),
+            Some(crate::tui::flash_config::UefiSource::Download)
+        );
 
         Some(TuiFlashConfig {
             image: self
@@ -1636,12 +1829,57 @@ mod tests {
     fn disk_confirmation_requires_destroy() {
         let mut app = App::new();
         app.current_step_type = InstallStepType::DiskConfirmation;
+        // Set up non-boot disk
+        app.disks = vec![DiskOption {
+            label: "Safe Disk".to_string(),
+            path: "/dev/sdb".to_string(),
+            size: "512 GB".to_string(),
+            model: Some("Data Drive".to_string()),
+            removable: false,
+            is_boot: false,
+        }];
+        app.disk_index = 0;
+
         for ch in "DESTROY".chars() {
             app.handle_input(key(KeyCode::Char(ch)));
         }
         assert_eq!(app.wipe_confirmation, "DESTROY");
         app.handle_input(key(KeyCode::Enter));
         assert_eq!(app.current_step_type, InstallStepType::PartitionScheme);
+    }
+
+    #[test]
+    fn boot_disk_confirmation_requires_stronger_text() {
+        let mut app = App::new();
+        app.current_step_type = InstallStepType::DiskConfirmation;
+        // Set up boot disk
+        app.disks = vec![DiskOption {
+            label: "Boot Disk".to_string(),
+            path: "/dev/sda".to_string(),
+            size: "256 GB".to_string(),
+            model: Some("Boot Drive".to_string()),
+            removable: false,
+            is_boot: true,
+        }];
+        app.disk_index = 0;
+
+        // Regular DESTROY should not work for boot disk
+        for ch in "DESTROY".chars() {
+            app.handle_input(key(KeyCode::Char(ch)));
+        }
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::DiskConfirmation);
+        assert!(app.error_message.is_some());
+
+        // Clear and type correct phrase
+        app.wipe_confirmation.clear();
+        for ch in "DESTROY BOOT DISK".chars() {
+            app.handle_input(key(KeyCode::Char(ch)));
+        }
+        assert_eq!(app.wipe_confirmation, "DESTROY BOOT DISK");
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::PartitionScheme);
+        assert!(app.error_message.is_none());
     }
 
     #[test]
@@ -1740,15 +1978,42 @@ mod tests {
     #[test]
     fn download_uefi_flag_follows_option() {
         let mut app = App::new();
-        if let Some(option) = app
-            .options
-            .iter_mut()
-            .find(|option| option.label == "Download UEFI firmware")
-        {
-            option.enabled = true;
-        }
+        // Set UEFI source to Download (index 1)
+        app.uefi_source_index = 1;
         let config = app.build_flash_config().expect("config");
         assert!(config.download_uefi_firmware);
+    }
+
+    #[test]
+    fn os_distro_defaults_to_fedora() {
+        let app = App::new();
+        assert_eq!(app.os_distro_index, 0);
+        if let Some(distro) = app.os_distros.get(app.os_distro_index) {
+            assert!(matches!(distro, crate::tui::flash_config::OsDistro::Fedora));
+            assert!(distro.is_available());
+        }
+    }
+
+    #[test]
+    fn non_fedora_distros_are_marked_unavailable() {
+        let app = App::new();
+        // Ubuntu is index 1
+        if let Some(distro) = app.os_distros.get(1) {
+            assert!(matches!(distro, crate::tui::flash_config::OsDistro::Ubuntu));
+            assert!(!distro.is_available());
+        }
+    }
+
+    #[test]
+    fn uefi_source_defaults_to_local() {
+        let app = App::new();
+        assert_eq!(app.uefi_source_index, 0);
+        if let Some(source) = app.uefi_sources.get(app.uefi_source_index) {
+            assert!(matches!(
+                source,
+                crate::tui::flash_config::UefiSource::LocalDirectory
+            ));
+        }
     }
 
     #[test]
@@ -1769,5 +2034,221 @@ mod tests {
         app.dry_run = true;
         let config = app.build_flash_config().expect("config");
         assert!(config.dry_run);
+    }
+
+    #[test]
+    fn app_initializes_with_first_non_boot_disk() {
+        let app = App::new();
+        // Stub data has USB as index 0 (non-boot) and NVMe as index 1 (boot)
+        // Should default to index 0 which is non-boot
+        if !app.disks.is_empty() {
+            if let Some(_disk) = app.disks.get(app.disk_index) {
+                assert!(!_disk.is_boot, "Default disk should not be boot disk");
+            }
+        }
+    }
+
+    #[test]
+    fn app_prefers_removable_media_when_safe() {
+        // Create app-like disk list
+        let disks = vec![
+            DiskOption {
+                label: "Boot SSD".to_string(),
+                path: "/dev/nvme0n1".to_string(),
+                size: "512 GB".to_string(),
+                model: Some("Samsung".to_string()),
+                removable: false,
+                is_boot: true,
+            },
+            DiskOption {
+                label: "Internal HDD".to_string(),
+                path: "/dev/sda".to_string(),
+                size: "2 TB".to_string(),
+                model: Some("Seagate".to_string()),
+                removable: false,
+                is_boot: false,
+            },
+            DiskOption {
+                label: "USB Stick".to_string(),
+                path: "/dev/sdb".to_string(),
+                size: "32 GB".to_string(),
+                model: Some("SanDisk".to_string()),
+                removable: true,
+                is_boot: false,
+            },
+        ];
+
+        // Simulate the auto-selection logic
+        let default_disk_index = disks
+            .iter()
+            .position(|disk| !disk.is_boot && disk.removable)
+            .or_else(|| disks.iter().position(|disk| !disk.is_boot))
+            .unwrap_or(0);
+
+        // Should select USB (index 2) over internal HDD (index 1)
+        assert_eq!(default_disk_index, 2);
+        assert!(disks[default_disk_index].removable);
+        assert!(!disks[default_disk_index].is_boot);
+    }
+
+    #[test]
+    fn disk_selection_prevents_selecting_boot_disk() {
+        let mut app = App::new();
+        app.current_step_type = InstallStepType::DiskSelection;
+
+        // Set up test disks: boot disk at index 0, safe disk at index 1
+        app.disks = vec![
+            DiskOption {
+                label: "Boot Disk".to_string(),
+                path: "/dev/sda".to_string(),
+                size: "256 GB".to_string(),
+                model: Some("Boot Drive".to_string()),
+                removable: false,
+                is_boot: true,
+            },
+            DiskOption {
+                label: "Target Disk".to_string(),
+                path: "/dev/sdb".to_string(),
+                size: "512 GB".to_string(),
+                model: Some("Data Drive".to_string()),
+                removable: false,
+                is_boot: false,
+            },
+        ];
+
+        // Should initialize to index 1 (first non-boot)
+        app.disk_index = app.disks.iter().position(|disk| !disk.is_boot).unwrap_or(0);
+
+        assert_eq!(app.disk_index, 1);
+
+        // Try to navigate to boot disk
+        app.handle_input(key(KeyCode::Up));
+
+        // Should stay on non-boot disk or skip boot disk
+        if let Some(_disk) = app.disks.get(app.disk_index) {
+            // Navigation should skip boot disk
+            assert_eq!(app.disk_index, 1, "Should stay on safe disk");
+        }
+    }
+
+    #[test]
+    fn disk_selection_requires_boot_override() {
+        let mut app = App::new();
+        app.current_step_type = InstallStepType::DiskSelection;
+
+        // Set up boot disk
+        app.disks = vec![DiskOption {
+            label: "Boot Disk".to_string(),
+            path: "/dev/sda".to_string(),
+            size: "256 GB".to_string(),
+            model: Some("Boot Drive".to_string()),
+            removable: false,
+            is_boot: true,
+        }];
+
+        app.disk_index = 0;
+
+        // Try to advance with boot disk selected without override
+        app.handle_input(key(KeyCode::Enter));
+
+        // Should stay on DiskSelection and show error
+        assert_eq!(app.current_step_type, InstallStepType::DiskSelection);
+        assert!(app.error_message.is_some());
+
+        // Type the override text "BOOT"
+        for ch in "BOOT".chars() {
+            app.handle_input(key(KeyCode::Char(ch)));
+        }
+
+        assert_eq!(app.boot_disk_override_input, "BOOT");
+
+        // Now Enter should work
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::DiskConfirmation);
+        assert!(app.error_message.is_none());
+        assert_eq!(app.boot_disk_override_input, "");
+    }
+
+    #[test]
+    fn disk_selection_allows_non_boot_disk() {
+        let mut app = App::new();
+        app.current_step_type = InstallStepType::DiskSelection;
+
+        // Set up non-boot disk
+        app.disks = vec![DiskOption {
+            label: "Target Disk".to_string(),
+            path: "/dev/sdb".to_string(),
+            size: "512 GB".to_string(),
+            model: Some("Data Drive".to_string()),
+            removable: false,
+            is_boot: false,
+        }];
+
+        app.disk_index = 0;
+
+        // Advance with non-boot disk selected
+        app.handle_input(key(KeyCode::Enter));
+
+        // Should advance to next step
+        assert_eq!(app.current_step_type, InstallStepType::DiskConfirmation);
+        assert!(app.error_message.is_none());
+    }
+
+    #[test]
+    fn adjust_disk_index_skips_boot_disks() {
+        let mut app = App::new();
+
+        // Set up mixed disks: boot, safe, boot, safe
+        app.disks = vec![
+            DiskOption {
+                label: "Boot Disk 1".to_string(),
+                path: "/dev/sda".to_string(),
+                size: "256 GB".to_string(),
+                model: None,
+                removable: false,
+                is_boot: true,
+            },
+            DiskOption {
+                label: "Safe Disk 1".to_string(),
+                path: "/dev/sdb".to_string(),
+                size: "512 GB".to_string(),
+                model: None,
+                removable: false,
+                is_boot: false,
+            },
+            DiskOption {
+                label: "Boot Disk 2".to_string(),
+                path: "/dev/sdc".to_string(),
+                size: "128 GB".to_string(),
+                model: None,
+                removable: false,
+                is_boot: true,
+            },
+            DiskOption {
+                label: "Safe Disk 2".to_string(),
+                path: "/dev/sdd".to_string(),
+                size: "1 TB".to_string(),
+                model: None,
+                removable: false,
+                is_boot: false,
+            },
+        ];
+
+        app.disk_index = 1; // Start on first safe disk
+
+        // Navigate forward - should skip index 2 (boot) and land on index 3 (safe)
+        app.adjust_disk_index(1);
+        assert_eq!(app.disk_index, 3);
+        assert!(!app.disks[app.disk_index].is_boot);
+
+        // Navigate forward again - should wrap to index 1 (safe), skipping index 0 (boot)
+        app.adjust_disk_index(1);
+        assert_eq!(app.disk_index, 1);
+        assert!(!app.disks[app.disk_index].is_boot);
+
+        // Navigate backward - should go to index 3 (safe), skipping index 2 and 0 (boot)
+        app.adjust_disk_index(-1);
+        assert_eq!(app.disk_index, 3);
+        assert!(!app.disks[app.disk_index].is_boot);
     }
 }

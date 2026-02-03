@@ -21,6 +21,7 @@ pub struct DiskInfo {
     pub size_bytes: u64,
     pub model: Option<String>,
     pub removable: bool,
+    pub is_boot: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +49,8 @@ pub fn scan_disks() -> Vec<DiskInfo> {
         Err(_) => return disks,
     };
 
+    let boot_device = boot_device_path();
+
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         if should_skip_block_device(&name) {
@@ -74,19 +77,57 @@ pub fn scan_disks() -> Vec<DiskInfo> {
         let removable_path = PathBuf::from("/sys/block").join(&name).join("removable");
         let removable = read_u64(&removable_path).unwrap_or(0) == 1;
 
+        let disk_path = format!("/dev/{}", name);
+        let is_boot = boot_device.as_deref() == Some(disk_path.as_str());
+
         disks.push(DiskInfo {
             name: label.unwrap_or_else(|| name.clone()),
-            path: format!("/dev/{}", name),
+            path: disk_path,
             size_bytes,
             model,
             removable,
+            is_boot,
         });
     }
 
     disks
 }
 
+fn resolve_uuid_to_device_path(uuid: &str) -> Option<String> {
+    let by_uuid_path = PathBuf::from("/dev/disk/by-uuid").join(uuid);
+    fs::read_link(&by_uuid_path).ok().and_then(|path| {
+        // Canonicalize to get the /dev/sdX path
+        let canonical = PathBuf::from("/dev/disk/by-uuid")
+            .join(&path)
+            .canonicalize()
+            .ok();
+        canonical.map(|p| p.to_string_lossy().to_string())
+    })
+}
+
+fn get_boot_device_from_cmdline() -> Option<String> {
+    let cmdline = fs::read_to_string("/proc/cmdline").ok()?;
+    for part in cmdline.split_whitespace() {
+        if part.starts_with("root=") {
+            let root_val = part.trim_start_matches("root=");
+            if root_val.starts_with("UUID=") {
+                let uuid = root_val.trim_start_matches("UUID=");
+                return resolve_uuid_to_device_path(uuid);
+            } else {
+                return Some(root_val.to_string());
+            }
+        }
+    }
+    None
+}
+
 pub fn boot_device_path() -> Option<String> {
+    // Prioritize /proc/cmdline
+    if let Some(cmdline_device) = get_boot_device_from_cmdline() {
+        return base_block_device(&cmdline_device);
+    }
+
+    // Fallback to /proc/self/mounts
     let mounts = fs::read_to_string("/proc/self/mounts").ok()?;
     for line in mounts.lines() {
         let mut parts = line.split_whitespace();
@@ -365,4 +406,127 @@ fn read_trimmed(path: &Path) -> Option<String> {
 
 fn read_u64(path: &Path) -> Option<u64> {
     read_trimmed(path).and_then(|value| value.parse::<u64>().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_block_device_strips_partition_from_sd() {
+        assert_eq!(base_block_device("/dev/sda1"), Some("/dev/sda".to_string()));
+        assert_eq!(base_block_device("/dev/sda5"), Some("/dev/sda".to_string()));
+        assert_eq!(
+            base_block_device("/dev/sdb12"),
+            Some("/dev/sdb".to_string())
+        );
+    }
+
+    #[test]
+    fn base_block_device_strips_partition_from_nvme() {
+        assert_eq!(
+            base_block_device("/dev/nvme0n1p1"),
+            Some("/dev/nvme0n1".to_string())
+        );
+        assert_eq!(
+            base_block_device("/dev/nvme0n1p5"),
+            Some("/dev/nvme0n1".to_string())
+        );
+        assert_eq!(
+            base_block_device("/dev/nvme1n1p2"),
+            Some("/dev/nvme1n1".to_string())
+        );
+    }
+
+    #[test]
+    fn base_block_device_strips_partition_from_mmcblk() {
+        assert_eq!(
+            base_block_device("/dev/mmcblk0p1"),
+            Some("/dev/mmcblk0".to_string())
+        );
+        assert_eq!(
+            base_block_device("/dev/mmcblk0p2"),
+            Some("/dev/mmcblk0".to_string())
+        );
+        assert_eq!(
+            base_block_device("/dev/mmcblk1p3"),
+            Some("/dev/mmcblk1".to_string())
+        );
+    }
+
+    #[test]
+    fn base_block_device_handles_whole_disks() {
+        assert_eq!(base_block_device("/dev/sda"), Some("/dev/sda".to_string()));
+        assert_eq!(
+            base_block_device("/dev/nvme0n1"),
+            Some("/dev/nvme0n1".to_string())
+        );
+        assert_eq!(
+            base_block_device("/dev/mmcblk0"),
+            Some("/dev/mmcblk0".to_string())
+        );
+    }
+
+    #[test]
+    fn base_block_device_rejects_non_dev_paths() {
+        assert_eq!(base_block_device("/sys/block/sda"), None);
+        assert_eq!(base_block_device("sda1"), None);
+        assert_eq!(base_block_device(""), None);
+    }
+
+    #[test]
+    fn should_skip_loop_devices() {
+        assert!(should_skip_block_device("loop0"));
+        assert!(should_skip_block_device("loop1"));
+    }
+
+    #[test]
+    fn should_skip_ram_devices() {
+        assert!(should_skip_block_device("ram0"));
+        assert!(should_skip_block_device("ram1"));
+    }
+
+    #[test]
+    fn should_skip_optical_drives() {
+        assert!(should_skip_block_device("sr0"));
+        assert!(should_skip_block_device("sr1"));
+    }
+
+    #[test]
+    fn should_skip_device_mapper() {
+        assert!(should_skip_block_device("dm-0"));
+        assert!(should_skip_block_device("dm-1"));
+    }
+
+    #[test]
+    fn should_not_skip_valid_disks() {
+        assert!(!should_skip_block_device("sda"));
+        assert!(!should_skip_block_device("sdb"));
+        assert!(!should_skip_block_device("nvme0n1"));
+        assert!(!should_skip_block_device("mmcblk0"));
+    }
+
+    #[test]
+    fn human_size_formats_bytes() {
+        assert_eq!(human_size(512), "512 B");
+        assert_eq!(human_size(1023), "1023 B");
+    }
+
+    #[test]
+    fn human_size_formats_kb() {
+        assert_eq!(human_size(1024), "1.0 KiB");
+        assert_eq!(human_size(2048), "2.0 KiB");
+    }
+
+    #[test]
+    fn human_size_formats_mb() {
+        assert_eq!(human_size(1024 * 1024), "1.0 MiB");
+        assert_eq!(human_size(512 * 1024 * 1024), "512.0 MiB");
+    }
+
+    #[test]
+    fn human_size_formats_gb() {
+        assert_eq!(human_size(1024 * 1024 * 1024), "1.0 GiB");
+        assert_eq!(human_size(32 * 1024 * 1024 * 1024), "32.0 GiB");
+    }
 }

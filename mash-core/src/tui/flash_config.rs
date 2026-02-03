@@ -21,6 +21,59 @@ impl ImageSource {
     }
 }
 
+/// Options for UEFI firmware source selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UefiSource {
+    LocalDirectory,
+    Download,
+}
+
+impl UefiSource {
+    pub fn display(&self) -> &'static str {
+        match self {
+            UefiSource::LocalDirectory => "Provide UEFI firmware directory",
+            UefiSource::Download => "Download UEFI firmware",
+        }
+    }
+
+    pub fn all() -> &'static [UefiSource] {
+        &[UefiSource::LocalDirectory, UefiSource::Download]
+    }
+}
+
+/// OS Distribution options
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OsDistro {
+    Fedora,
+    Ubuntu,
+    RaspberryPiOS,
+    Manjaro,
+}
+
+impl OsDistro {
+    pub fn display(&self) -> &'static str {
+        match self {
+            OsDistro::Fedora => "Fedora KDE (recommended)",
+            OsDistro::Ubuntu => "Ubuntu Desktop (coming soon)",
+            OsDistro::RaspberryPiOS => "Raspberry Pi OS (coming soon)",
+            OsDistro::Manjaro => "Manjaro (coming soon)",
+        }
+    }
+
+    pub fn is_available(&self) -> bool {
+        matches!(self, OsDistro::Fedora)
+    }
+
+    pub fn all() -> &'static [OsDistro] {
+        &[
+            OsDistro::Fedora,
+            OsDistro::Ubuntu,
+            OsDistro::RaspberryPiOS,
+            OsDistro::Manjaro,
+        ]
+    }
+}
+
 /// Available Fedora image versions for download
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageVersionOption {
