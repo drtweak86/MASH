@@ -38,7 +38,9 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-/// Download with progress indication to terminal
+/// Download helper used by CLI/TUI flows.
+///
+/// IMPORTANT: Do not print to stdout/stderr here. The TUI depends on a clean terminal.
 fn download_with_progress(
     client: &reqwest::blocking::Client,
     url: &str,
@@ -55,14 +57,15 @@ fn download_with_progress(
     let mut reader = response;
     let mut downloaded: u64 = 0;
     let mut buffer = [0u8; 8192];
-    let start_time = Instant::now();
-    let mut last_print = Instant::now();
-
-    // Print header
     if let Some(total) = total_size {
-        eprintln!("\n📥 {} ({}):", description, format_bytes(total));
+        info!(
+            "📥 Downloading {} ({}): {}",
+            description,
+            format_bytes(total),
+            url
+        );
     } else {
-        eprintln!("\n📥 {}:", description);
+        info!("📥 Downloading {}: {}", description, url);
     }
 
     loop {
@@ -73,65 +76,9 @@ fn download_with_progress(
 
         dest_file.write_all(&buffer[..bytes_read])?;
         downloaded += bytes_read as u64;
-
-        // Update progress every 250ms to avoid flooding terminal
-        if last_print.elapsed().as_millis() >= 250 {
-            let elapsed = start_time.elapsed().as_secs_f64();
-            let speed = if elapsed > 0.0 {
-                downloaded as f64 / elapsed
-            } else {
-                0.0
-            };
-
-            if let Some(total) = total_size {
-                let percent = (downloaded as f64 / total as f64) * 100.0;
-                let eta = if speed > 0.0 {
-                    let remaining = total - downloaded;
-                    remaining as f64 / speed
-                } else {
-                    0.0
-                };
-
-                // Progress bar
-                let bar_width = 30;
-                let filled = (percent / 100.0 * bar_width as f64) as usize;
-                let empty = bar_width - filled;
-                let bar: String = "█".repeat(filled) + &"░".repeat(empty);
-
-                eprint!(
-                    "\r   [{}] {:>5.1}% | {} / {} | {}/s | ETA: {}s   ",
-                    bar,
-                    percent,
-                    format_bytes(downloaded),
-                    format_bytes(total),
-                    format_bytes(speed as u64),
-                    eta as u64
-                );
-            } else {
-                eprint!(
-                    "\r   Downloaded: {} | {}/s   ",
-                    format_bytes(downloaded),
-                    format_bytes(speed as u64)
-                );
-            }
-            io::stderr().flush().ok();
-            last_print = Instant::now();
-        }
     }
 
-    // Final line
-    let elapsed = start_time.elapsed().as_secs_f64();
-    let avg_speed = if elapsed > 0.0 {
-        downloaded as f64 / elapsed
-    } else {
-        0.0
-    };
-    eprintln!(
-        "\r   ✅ Complete: {} downloaded in {:.1}s ({}/s avg)                    ",
-        format_bytes(downloaded),
-        elapsed,
-        format_bytes(avg_speed as u64)
-    );
+    debug!("✅ Download complete: {}", format_bytes(downloaded));
 
     Ok(downloaded)
 }
@@ -198,7 +145,7 @@ fn download_with_progress_cb(
 
 pub fn download_uefi_firmware(destination_dir: &Path) -> Result<()> {
     info!("Starting UEFI firmware download...");
-    eprintln!("\n🔧 Downloading UEFI Firmware for Raspberry Pi 4...");
+    info!("🔧 Downloading UEFI Firmware for Raspberry Pi 4");
 
     fs::create_dir_all(destination_dir).with_context(|| {
         format!(
@@ -213,7 +160,7 @@ pub fn download_uefi_firmware(destination_dir: &Path) -> Result<()> {
         "Fetching latest UEFI firmware release info from: {}",
         github_api_url
     );
-    eprintln!("   Checking GitHub for latest release...");
+    info!("Checking GitHub for latest release...");
 
     let client = reqwest::blocking::Client::builder()
         .user_agent("mash-installer")
@@ -239,7 +186,7 @@ pub fn download_uefi_firmware(destination_dir: &Path) -> Result<()> {
         "Found UEFI firmware zip: {} at {}",
         asset.name, download_url
     );
-    eprintln!("   Found: {}", asset.name);
+    info!("Found asset: {}", asset.name);
 
     // Step 3: Download the zip file to a temporary location
     let temp_zip_path = destination_dir.join("uefi_firmware.zip");
@@ -249,7 +196,6 @@ pub fn download_uefi_firmware(destination_dir: &Path) -> Result<()> {
     download_with_progress(&client, download_url, &mut temp_zip_file, "UEFI Firmware")?;
 
     // Step 4: Unzip the file to the destination_dir
-    eprintln!("\n📦 Extracting UEFI firmware...");
     info!("Unzipping firmware to {}", destination_dir.display());
     let file = File::open(&temp_zip_path)?;
     let mut archive = ZipArchive::new(file)?;
@@ -277,7 +223,7 @@ pub fn download_uefi_firmware(destination_dir: &Path) -> Result<()> {
         }
     }
     fs::remove_file(&temp_zip_path)?; // Clean up the downloaded zip
-    eprintln!("   ✅ Extracted {} files", total_files);
+    info!("✅ Extracted {} files", total_files);
 
     info!(
         "UEFI firmware download and extraction complete to {}",
@@ -369,8 +315,8 @@ pub fn download_fedora_image(
     edition: &str,
 ) -> Result<PathBuf> {
     info!("Starting Fedora image download...");
-    eprintln!(
-        "\n🐧 Downloading Fedora {} {} for Raspberry Pi 4...",
+    info!(
+        "🐧 Downloading Fedora {} {} for Raspberry Pi 4",
         version, edition
     );
 
@@ -402,12 +348,11 @@ pub fn download_fedora_image(
 
     // Check if already downloaded
     if dest_path.exists() {
-        eprintln!("   ℹ️  Compressed image already exists, skipping download");
         info!("Fedora image already downloaded: {}", dest_path.display());
     } else {
         info!("Downloading Fedora image: {}", filename);
-        eprintln!("   File: {}", filename);
-        eprintln!("   ⚠️  This is a large download (~2-3 GB). Please be patient.\n");
+        info!("File: {}", filename);
+        info!("Large download (~2-3 GB) - please be patient.");
 
         let client = reqwest::blocking::Client::builder()
             .user_agent("mash-installer")
@@ -428,7 +373,7 @@ pub fn download_fedora_image(
                             break;
                         }
                         Err(e) => {
-                            eprintln!("   ⚠️  URL failed, trying next mirror...");
+                            info!("URL failed, trying next mirror...");
                             last_error = Some(e);
                             let _ = fs::remove_file(&dest_path); // Clean up partial download
                         }
@@ -451,7 +396,6 @@ pub fn download_fedora_image(
     let raw_path = destination_dir.join(format!("Fedora-{}-{}-{}.raw", edition, version, arch));
 
     if raw_path.exists() {
-        eprintln!("\n   ℹ️  Raw image already exists, skipping decompression");
         debug!(
             "Raw image already exists, skipping decompression: {}",
             raw_path.display()
@@ -459,7 +403,6 @@ pub fn download_fedora_image(
         return Ok(raw_path);
     }
 
-    eprintln!("\n📦 Decompressing image (this may take a few minutes)...");
     info!("Decompressing image (unxz)...");
 
     let status = Command::new("unxz")
@@ -471,7 +414,6 @@ pub fn download_fedora_image(
         return Err(anyhow!("unxz failed with status: {}", status));
     }
 
-    eprintln!("   ✅ Decompression complete");
     info!("Decompressed Fedora image to {}", raw_path.display());
     Ok(raw_path)
 }

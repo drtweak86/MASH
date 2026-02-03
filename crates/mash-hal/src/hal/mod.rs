@@ -10,7 +10,7 @@ pub mod linux_hal;
 pub mod mount_ops;
 
 pub use fake_hal::{FakeHal, Operation};
-pub use flash_ops::FlashOps;
+pub use flash_ops::{FlashOps, FlashOptions};
 pub use format_ops::{FormatOps, FormatOptions};
 pub use linux_hal::LinuxHal;
 pub use mount_ops::{MountOps, MountOptions};

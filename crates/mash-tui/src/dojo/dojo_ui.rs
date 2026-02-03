@@ -14,21 +14,23 @@ use std::path::PathBuf;
 
 pub fn draw(f: &mut Frame, app: &App) {
     let progress_state = app.progress_state_snapshot();
-    let chunks = Layout::default()
+
+    // Main layout: Title | Main Body | Progress Bar | Key Legend
+    let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
         .constraints(
             [
-                Constraint::Length(3), // Title
-                Constraint::Min(0),    // Steps
-                Constraint::Length(5), // Progress block
-                Constraint::Length(2), // Status line
+                Constraint::Length(3), // Title bar
+                Constraint::Min(10),   // Main body (3-panel)
+                Constraint::Length(3), // Progress bar
+                Constraint::Length(3), // Key legend
             ]
             .as_ref(),
         )
         .split(f.area());
 
-    // Title
+    // Title bar with SAFE/ARMED indicator
     let (arming_label, arming_color) = if app.destructive_armed {
         ("ARMED", Color::Red)
     } else {
@@ -40,46 +42,61 @@ pub fn draw(f: &mut Frame, app: &App) {
         Span::styled(arming_label, Style::default().fg(arming_color)),
     ]);
     let title = Block::default().borders(Borders::ALL).title(title_line);
-    f.render_widget(title, chunks[0]);
+    f.render_widget(title, main_chunks[0]);
 
-    // Current Step Display
+    // Three-panel layout: Sidebar | Content | Info Panel
+    let body_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(
+            [
+                Constraint::Percentage(20), // Left: Step sidebar
+                Constraint::Percentage(55), // Center: Main content
+                Constraint::Percentage(25), // Right: Info panel
+            ]
+            .as_ref(),
+        )
+        .split(main_chunks[1]);
+
+    // Left sidebar: Step progress
+    let sidebar_content = build_step_sidebar(app);
+    let sidebar = Paragraph::new(sidebar_content)
+        .block(Block::default().borders(Borders::ALL).title("Steps"));
+    f.render_widget(sidebar, body_chunks[0]);
+
+    // Center: Main content (current step)
     let dojo_lines = build_dojo_lines(app);
     let list_items = dojo_lines
         .into_iter()
         .map(ListItem::new)
         .collect::<Vec<_>>();
-    let list = List::new(list_items).block(Block::default().borders(Borders::ALL).title("Dojo"));
-    f.render_widget(list, chunks[1]);
+    let content = List::new(list_items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(app.current_step_type.title()),
+    );
+    f.render_widget(content, body_chunks[1]);
+
+    // Right panel: Info summary
+    let info_content = build_info_panel(app, &progress_state);
+    let info_panel =
+        Paragraph::new(info_content).block(Block::default().borders(Borders::ALL).title("Info"));
+    f.render_widget(info_panel, body_chunks[2]);
 
     // Progress bar
     let percent = progress_state.overall_percent.round().clamp(0.0, 100.0) as u16;
-    let phase_line = phase_line(&progress_state);
-    let eta_line = format!("⏱️ ETA: {}", progress_state.eta_string());
-    let phase_percent = progress_state.phase_percent.round().clamp(0.0, 100.0) as u16;
-    let overall_line = format!("📈 Overall: {}% | Phase: {}%", percent, phase_percent);
-    let progress_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Length(2)].as_ref())
-        .split(chunks[2]);
     let gauge = Gauge::default()
         .block(Block::default().borders(Borders::ALL).title("Progress"))
         .gauge_style(Style::default().fg(Color::Yellow))
         .percent(percent);
-    f.render_widget(gauge, progress_chunks[0]);
-    let progress_details = Paragraph::new(progress_detail(
-        &progress_state,
-        &phase_line,
-        &overall_line,
-        &eta_line,
-    ))
-    .block(Block::default().borders(Borders::ALL).title("Telemetry"));
-    f.render_widget(progress_details, progress_chunks[1]);
+    f.render_widget(gauge, main_chunks[2]);
 
-    // Status line
-    let status_message = status_message(app, &progress_state);
-    let status = Paragraph::new(status_message)
-        .block(Block::default().borders(Borders::ALL).title("Status"));
-    f.render_widget(status, chunks[3]);
+    // Key legend (always visible, context-specific)
+    let key_help = expected_actions(app.current_step_type);
+    let status_msg = status_message(app, &progress_state);
+    let legend_text = format!("{}\n{}", status_msg, key_help);
+    let legend =
+        Paragraph::new(legend_text).block(Block::default().borders(Borders::ALL).title("Keys"));
+    f.render_widget(legend, main_chunks[3]);
 }
 
 pub fn dump_step(app: &App) -> String {
@@ -117,6 +134,129 @@ pub fn dump_step(app: &App) -> String {
     )
 }
 
+/// Build the left sidebar showing step progression
+fn build_step_sidebar(app: &App) -> String {
+    let all_steps = [
+        (InstallStepType::Welcome, "Welcome"),
+        (InstallStepType::ImageSelection, "Select OS"),
+        (InstallStepType::VariantSelection, "Select Flavour"),
+        (InstallStepType::DownloadSourceSelection, "Image Source"),
+        (InstallStepType::DiskSelection, "Select Disk"),
+        (InstallStepType::DiskConfirmation, "Confirm Disk"),
+        (InstallStepType::PartitionScheme, "Partition Scheme"),
+        (InstallStepType::PartitionLayout, "Partition Layout"),
+        (InstallStepType::EfiImage, "EFI Setup"),
+        (InstallStepType::LocaleSelection, "Locale/Keymap"),
+        (InstallStepType::Options, "Options"),
+        (InstallStepType::PlanReview, "Review Plan"),
+        (InstallStepType::Confirmation, "Confirm"),
+        (InstallStepType::Flashing, "Installing..."),
+        (InstallStepType::Complete, "Complete!"),
+    ];
+
+    let mut lines = Vec::new();
+    for (step, label) in &all_steps {
+        let marker = if *step == app.current_step_type {
+            "▶"
+        } else if is_step_before(*step, app.current_step_type) {
+            "✓"
+        } else {
+            " "
+        };
+        lines.push(format!("{} {}", marker, label));
+    }
+    lines.join("\n")
+}
+
+/// Check if step_a comes before step_b in the flow
+fn is_step_before(step_a: InstallStepType, step_b: InstallStepType) -> bool {
+    let order = [
+        InstallStepType::Welcome,
+        InstallStepType::ImageSelection,
+        InstallStepType::VariantSelection,
+        InstallStepType::DownloadSourceSelection,
+        InstallStepType::DiskSelection,
+        InstallStepType::DiskConfirmation,
+        InstallStepType::PartitionScheme,
+        InstallStepType::PartitionLayout,
+        InstallStepType::PartitionCustomize,
+        InstallStepType::EfiImage,
+        InstallStepType::LocaleSelection,
+        InstallStepType::Options,
+        InstallStepType::PlanReview,
+        InstallStepType::Confirmation,
+        InstallStepType::DisarmSafeMode,
+        InstallStepType::Flashing,
+        InstallStepType::Complete,
+    ];
+
+    let pos_a = order.iter().position(|&s| s == step_a);
+    let pos_b = order.iter().position(|&s| s == step_b);
+
+    match (pos_a, pos_b) {
+        (Some(a), Some(b)) => a < b,
+        _ => false,
+    }
+}
+
+/// Build the right info panel showing current selections and status
+fn build_info_panel(app: &App, progress_state: &ProgressState) -> String {
+    let mut lines = Vec::new();
+
+    // Safety status (prominent)
+    let arming_status = if app.destructive_armed {
+        "🔴 ARMED (writes enabled)"
+    } else {
+        "🟢 SAFE (disarmed)"
+    };
+    lines.push(arming_status.to_string());
+    lines.push("".to_string());
+
+    // Current selections
+    lines.push("Selections:".to_string());
+
+    // OS selection
+    if let Some(distro) = app.os_distros.get(app.os_distro_index) {
+        lines.push(format!("OS: {}", distro.display()));
+    }
+
+    // Variant selection
+    if let Some(variant) = app.os_variants.get(app.os_variant_index) {
+        lines.push(format!("Variant: {}", variant.label));
+    }
+
+    // Disk selection
+    if let Some(disk) = app.disks.get(app.disk_index) {
+        if let Some(ref identity) = disk.identity {
+            lines.push(format!("Disk: {}", identity.display_string()));
+        } else {
+            lines.push(format!("Disk: {}", disk.path));
+        }
+    }
+
+    // Partition scheme
+    if let Some(scheme) = app.partition_schemes.get(app.scheme_index) {
+        let scheme_str = match scheme {
+            mash_core::cli::PartitionScheme::Mbr => "MBR",
+            mash_core::cli::PartitionScheme::Gpt => "GPT",
+        };
+        lines.push(format!("Scheme: {}", scheme_str));
+    }
+
+    // Progress info (if running)
+    if app.is_running {
+        lines.push("".to_string());
+        lines.push("Progress:".to_string());
+        let percent = progress_state.overall_percent.round().clamp(0.0, 100.0);
+        lines.push(format!("Overall: {:.0}%", percent));
+        let phase_percent = progress_state.phase_percent.round().clamp(0.0, 100.0);
+        lines.push(format!("Phase: {:.0}%", phase_percent));
+        lines.push(format!("ETA: {}", progress_state.eta_string()));
+    }
+
+    lines.join("\n")
+}
+
 fn build_dojo_lines(app: &App) -> Vec<String> {
     let current_step_title = app.current_step_type.title();
     let mut items = Vec::new();
@@ -126,22 +266,34 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
     match app.current_step_type {
         InstallStepType::Welcome => {
             items.push("👋 Welcome to MASH: a safe, guided installer.".to_string());
-            items.push("🛡️ No disks will be modified unless the installer is ARMED.".to_string());
-            items.push("⌨️ Enter to proceed • Esc to go back • q to quit.".to_string());
+            items.push("".to_string());
+            items.push(
+                "🛡️ Safety: No disks will be modified unless the installer is ARMED.".to_string(),
+            );
             items.push(format!(
-                "Arming state: {}",
+                "Current state: {}",
                 if app.destructive_armed {
-                    "ARMED (writes enabled)"
+                    "🔴 ARMED (writes enabled)"
                 } else {
-                    "SAFE (disarmed)"
+                    "🟢 SAFE (disarmed — read-only)"
                 }
             ));
+            items.push("".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  Enter — Proceed to OS selection".to_string());
+            items.push("  q — Quit installer".to_string());
             push_options(&mut items, &app.welcome_options, app.welcome_index);
         }
         InstallStepType::DiskSelection => {
             items.push("💽 Select a target disk:".to_string());
-            items
-                .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
+            items.push("".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  ↑/↓ or Tab — Move selection up/down".to_string());
+            items.push("  Enter — Confirm disk choice".to_string());
+            items.push("  r — Refresh disk list".to_string());
+            items.push("  Esc — Go back to previous step".to_string());
+            items.push("  q — Quit installer".to_string());
+            items.push("".to_string());
 
             // Show warning banner if boot detection failed
             use super::data_sources::BootConfidence;
@@ -162,17 +314,21 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
             let options = app.disks.iter().map(format_disk_entry).collect::<Vec<_>>();
             push_options(&mut items, &options, app.disk_index);
 
-            // Show boot disk override instructions if boot disk is selected
+            // Show protection banner for source/boot media.
             if let Some(disk) = app.disks.get(app.disk_index) {
-                if disk.boot_confidence.is_boot() {
+                if disk.boot_confidence.is_boot() || disk.is_source_disk {
                     items.push("".to_string());
-                    items.push("⚠️ DANGER: Boot disk selected!".to_string());
-                    items.push(
-                        "Type 'BOOT' to override protection, or select a different disk."
-                            .to_string(),
-                    );
-                    if !app.boot_disk_override_input.is_empty() {
-                        items.push(format!("Input: {}", app.boot_disk_override_input));
+                    items.push("🛑 PROTECTED MEDIA selected.".to_string());
+                    if app.developer_mode {
+                        items.push(
+                            "Developer mode is ON: you may proceed, but confirmation will require 'DESTROY BOOT DISK'."
+                                .to_string(),
+                        );
+                    } else {
+                        items.push(
+                            "This disk cannot be selected. Re-run with --developer-mode to override (dangerous)."
+                                .to_string(),
+                        );
                     }
                 }
             }
@@ -180,7 +336,7 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
         InstallStepType::DiskConfirmation => {
             let disk = app.disks.get(app.disk_index);
             if let Some(disk) = disk {
-                let is_boot_disk = disk.boot_confidence.is_boot();
+                let is_boot_disk = disk.boot_confidence.is_boot() || disk.is_source_disk;
                 let disk_info = match &disk.identity {
                     Some(identity) => identity.display_string(),
                     None => {
@@ -210,9 +366,13 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                     items.push("Type 'DESTROY BOOT DISK' to confirm • Esc to go back.".to_string());
                 } else {
                     items.push("⚠️ Confirm disk destruction:".to_string());
-                    items.push("Type DESTROY to confirm • Esc to go back.".to_string());
+                    items.push("".to_string());
                     items.push(format!("TARGET TO BE WIPED: {} ({})", disk.path, disk_info));
-                    items.push("Type DESTROY to confirm.".to_string());
+                    items.push("".to_string());
+                    items.push("⌨️ Keys:".to_string());
+                    items.push("  Type DESTROY (exactly) — Confirm and proceed".to_string());
+                    items.push("  Esc — Cancel and go back".to_string());
+                    items.push("".to_string());
                 }
 
                 items.push(format!("Input: {}", app.wipe_confirmation));
@@ -240,8 +400,14 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::PartitionScheme => {
             items.push("🧩 Select a partition scheme:".to_string());
-            items
-                .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
+            items.push("".to_string());
+            items.push("MBR: Compatible with older systems, simpler structure".to_string());
+            items.push("GPT: Modern standard, supports larger disks, UEFI-oriented".to_string());
+            items.push("".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  ↑/↓ or Tab — Switch between MBR and GPT".to_string());
+            items.push("  Enter — Confirm choice".to_string());
+            items.push("  Esc — Go back".to_string());
             let options = app
                 .partition_schemes
                 .iter()
@@ -250,22 +416,34 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
             push_options(&mut items, &options, app.scheme_index);
         }
         InstallStepType::PartitionLayout => {
-            items.push("📐 Select a partition layout:".to_string());
-            items.push(
-                "Use ↑/↓ or Tab to choose • Y to accept • N to customize • Esc to go back."
-                    .to_string(),
-            );
+            items.push("📐 Partition Layout:".to_string());
+            items.push("".to_string());
+            items.push("Pick a default layout or customize manually:".to_string());
+            items.push("".to_string());
+
+            // Show layout options with clear names and descriptions
             let layout_options = app
                 .partition_layouts
                 .iter()
                 .enumerate()
-                .map(|(idx, _)| format!("Layout {}", idx + 1))
+                .map(|(idx, _layout_str)| match idx {
+                    0 => "Default A (recommended) — Large ROOT for desktop workstation".to_string(),
+                    1 => "Default B (minimal) — Compact ROOT for embedded/testing".to_string(),
+                    _ => format!("Layout {}", idx + 1),
+                })
                 .collect::<Vec<_>>();
+
             push_options(&mut items, &layout_options, app.layout_index);
+
+            // Show detailed preview of selected layout
             if let Some(layout) = app.partition_layouts.get(app.layout_index) {
-                items.push("Preview:".to_string());
+                items.push("".to_string());
+                items.push("Partition details:".to_string());
                 items.extend(format_layout_preview(layout));
             }
+
+            items.push("".to_string());
+            items.push("⌨️ ↑/↓ or Tab to choose • Enter or Y to accept • M to customize manually • Esc to go back".to_string());
         }
         InstallStepType::PartitionCustomize => {
             items.push("🛠️ Customize partitions:".to_string());
@@ -318,8 +496,12 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::ImageSelection => {
             items.push("🖼️ Select OS distribution:".to_string());
-            items
-                .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
+            items.push("".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  ↑/↓ or Tab — Move between OS options".to_string());
+            items.push("  Enter — Confirm OS choice".to_string());
+            items.push("  Esc — Go back".to_string());
+            items.push("".to_string());
 
             // Show OS distro options
             let options = app
@@ -332,9 +514,15 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("Next: pick a variant (server/desktop/etc).".to_string());
         }
         InstallStepType::VariantSelection => {
-            items.push("🎛️ Select OS variant:".to_string());
-            items
-                .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
+            items.push("🎛️ Select OS flavour/variant:".to_string());
+            items.push("".to_string());
+            items.push("Choose the edition or desktop environment for your OS.".to_string());
+            items.push("".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  ↑/↓ or Tab — Move between variants".to_string());
+            items.push("  Enter — Confirm variant choice".to_string());
+            items.push("  Esc — Go back to OS selection".to_string());
+            items.push("".to_string());
 
             if app.os_variants.is_empty() {
                 items.push("".to_string());
@@ -377,13 +565,23 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::LocaleSelection => {
             items.push("🗣️ Select locale and keymap:".to_string());
-            items
-                .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
+            items.push("".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  ↑/↓ or Tab — Browse locale options".to_string());
+            items.push("  Enter — Confirm locale choice".to_string());
+            items.push("  Esc — Go back".to_string());
+            items.push("".to_string());
             push_options(&mut items, &app.locales, app.locale_index);
         }
         InstallStepType::Options => {
             items.push("⚙️ Installation options:".to_string());
-            items.push("Use ↑/↓ to focus • Space/Enter to toggle • Esc to go back.".to_string());
+            items.push("".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  ↑/↓ — Move between options".to_string());
+            items.push("  Space or Enter — Toggle option on/off".to_string());
+            items.push("  Enter (when done) — Proceed to review".to_string());
+            items.push("  Esc — Go back".to_string());
+            items.push("".to_string());
             let options = app
                 .options
                 .iter()
@@ -405,24 +603,36 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::PlanReview => {
             items.push("🧾 Execution plan:".to_string());
-            items.push("Review exactly what will happen next.".to_string());
+            items.push("".to_string());
+            items.push("Review exactly what will happen next:".to_string());
             for line in build_plan_lines(app) {
                 items.push(line);
             }
+            items.push("".to_string());
             if app.dry_run {
-                items.push("Mode: DRY-RUN (no disk writes)".to_string());
+                items.push("🔧 Mode: DRY-RUN (no disk writes will occur)".to_string());
+                items.push("".to_string());
             }
-            items.push("Press Enter to proceed to confirmation • Esc to go back.".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  Enter — Proceed to final confirmation".to_string());
+            items.push("  Esc — Go back to modify settings".to_string());
         }
         InstallStepType::Confirmation => {
-            items.push("✅ Review configuration summary:".to_string());
-            items.push("Press Enter to begin installation.".to_string());
+            items.push("✅ Final confirmation:".to_string());
+            items.push("".to_string());
+            items.push("All settings reviewed. Ready to begin installation.".to_string());
+            items.push("".to_string());
             if !app.dry_run && !app.destructive_armed {
                 items.push(
-                    "SAFE MODE is ON — you'll be prompted to disarm before any disk writes."
+                    "🛡️ SAFE MODE is ON — you'll be prompted to disarm before any disk writes."
                         .to_string(),
                 );
+                items.push("".to_string());
             }
+            items.push("⌨️ Keys:".to_string());
+            items.push("  Enter — BEGIN INSTALLATION".to_string());
+            items.push("  Esc — Go back to review".to_string());
+            items.push("".to_string());
             let effective_image = app
                 .downloaded_image_path
                 .clone()
@@ -513,8 +723,14 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("🛡️ SAFE MODE is active.".to_string());
             items.push("You attempted a destructive action.".to_string());
             items.push("".to_string());
-            items.push("To DISARM SAFE MODE and enable disk writes, type: DESTROY".to_string());
-            items.push("Then press Enter.".to_string());
+            items.push("⚠️ SAFE MODE ACTIVE — Disk writes are currently BLOCKED.".to_string());
+            items.push("".to_string());
+            items.push("To ARM the installer and enable destructive operations:".to_string());
+            items.push("".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  Type DESTROY (exactly) — Disarm safe mode and ARM installer".to_string());
+            items.push("  Enter — Submit after typing DESTROY".to_string());
+            items.push("  Esc — Cancel and go back".to_string());
             items.push("".to_string());
             items.push(format!("Input: {}", app.safe_mode_disarm_input));
             if let Some(error) = &app.error_message {
@@ -678,7 +894,9 @@ fn expected_actions(step: InstallStepType) -> String {
         }
         InstallStepType::Options => "Up/Down, Space/Enter, Esc, q".to_string(),
         InstallStepType::Welcome => "Up/Down, Enter, q".to_string(),
-        InstallStepType::PartitionLayout => "Up/Down/Tab, Y/N, Enter, Esc, q".to_string(),
+        InstallStepType::PartitionLayout => {
+            "Up/Down/Tab, Enter/Y (accept), M (manual), Esc, q".to_string()
+        }
         InstallStepType::PartitionScheme => "Up/Down/Tab, Enter, Esc, q".to_string(),
         InstallStepType::PartitionCustomize => {
             "Up/Down/Tab, Type, Backspace, R, Enter, Esc, q".to_string()
@@ -711,6 +929,10 @@ fn format_disk_entry(disk: &super::dojo_app::DiskOption) -> String {
 
     // Build tags
     let mut tags = Vec::new();
+
+    if disk.is_source_disk {
+        tags.push("⚠ SOURCE MEDIA");
+    }
 
     // Boot confidence tags
     match disk.boot_confidence {

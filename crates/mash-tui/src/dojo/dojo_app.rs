@@ -36,6 +36,7 @@ pub struct DiskOption {
     pub path: String,
     pub removable: bool,
     pub boot_confidence: super::data_sources::BootConfidence,
+    pub is_source_disk: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -211,15 +212,15 @@ impl InstallStepType {
     pub fn all() -> &'static [InstallStepType] {
         &[
             InstallStepType::Welcome,
+            InstallStepType::ImageSelection,
+            InstallStepType::VariantSelection,
+            InstallStepType::DownloadSourceSelection,
             InstallStepType::DiskSelection,
             InstallStepType::DiskConfirmation,
             InstallStepType::BackupConfirmation,
             InstallStepType::PartitionScheme,
             InstallStepType::PartitionLayout,
             InstallStepType::PartitionCustomize,
-            InstallStepType::DownloadSourceSelection,
-            InstallStepType::ImageSelection,
-            InstallStepType::VariantSelection,
             InstallStepType::EfiImage,
             InstallStepType::LocaleSelection,
             InstallStepType::Options,
@@ -261,18 +262,19 @@ impl InstallStepType {
     }
 
     // Helper to get the next step in the sequence
+    // Flow: Welcome → Distro → Flavour → Download Source → Disk → Partition → EFI → Locale → Options → Review → Confirm
     pub fn next(&self) -> Option<InstallStepType> {
         match self {
-            InstallStepType::Welcome => Some(InstallStepType::DiskSelection),
+            InstallStepType::Welcome => Some(InstallStepType::ImageSelection),
+            InstallStepType::ImageSelection => Some(InstallStepType::VariantSelection),
+            InstallStepType::VariantSelection => Some(InstallStepType::DownloadSourceSelection),
+            InstallStepType::DownloadSourceSelection => Some(InstallStepType::DiskSelection),
             InstallStepType::DiskSelection => Some(InstallStepType::DiskConfirmation),
             InstallStepType::DiskConfirmation => Some(InstallStepType::PartitionScheme),
             InstallStepType::BackupConfirmation => Some(InstallStepType::PartitionScheme),
             InstallStepType::PartitionScheme => Some(InstallStepType::PartitionLayout),
             InstallStepType::PartitionLayout => Some(InstallStepType::PartitionCustomize),
-            InstallStepType::PartitionCustomize => Some(InstallStepType::DownloadSourceSelection),
-            InstallStepType::DownloadSourceSelection => Some(InstallStepType::ImageSelection),
-            InstallStepType::ImageSelection => Some(InstallStepType::VariantSelection),
-            InstallStepType::VariantSelection => Some(InstallStepType::EfiImage),
+            InstallStepType::PartitionCustomize => Some(InstallStepType::EfiImage),
             InstallStepType::EfiImage => Some(InstallStepType::LocaleSelection),
             InstallStepType::LocaleSelection => Some(InstallStepType::Options),
             InstallStepType::Options => Some(InstallStepType::PlanReview),
@@ -291,16 +293,16 @@ impl InstallStepType {
     pub fn prev(&self) -> Option<InstallStepType> {
         match self {
             InstallStepType::Welcome => None,
-            InstallStepType::DiskSelection => Some(InstallStepType::Welcome),
+            InstallStepType::ImageSelection => Some(InstallStepType::Welcome),
+            InstallStepType::VariantSelection => Some(InstallStepType::ImageSelection),
+            InstallStepType::DownloadSourceSelection => Some(InstallStepType::VariantSelection),
+            InstallStepType::DiskSelection => Some(InstallStepType::DownloadSourceSelection),
             InstallStepType::DiskConfirmation => Some(InstallStepType::DiskSelection),
             InstallStepType::BackupConfirmation => Some(InstallStepType::DiskConfirmation),
             InstallStepType::PartitionScheme => Some(InstallStepType::DiskConfirmation),
             InstallStepType::PartitionLayout => Some(InstallStepType::PartitionScheme),
             InstallStepType::PartitionCustomize => Some(InstallStepType::PartitionLayout),
-            InstallStepType::DownloadSourceSelection => Some(InstallStepType::PartitionCustomize),
-            InstallStepType::ImageSelection => Some(InstallStepType::DownloadSourceSelection),
-            InstallStepType::VariantSelection => Some(InstallStepType::ImageSelection),
-            InstallStepType::EfiImage => Some(InstallStepType::VariantSelection),
+            InstallStepType::EfiImage => Some(InstallStepType::PartitionCustomize),
             InstallStepType::LocaleSelection => Some(InstallStepType::EfiImage),
             InstallStepType::Options => Some(InstallStepType::LocaleSelection),
             InstallStepType::FirstBootUser => Some(InstallStepType::Options),
@@ -404,10 +406,10 @@ pub struct App {
     pub downloaded_uefi_dir: Option<PathBuf>,
     pub safe_mode_disarm_input: String,
     pending_destructive_action: Option<PendingDestructiveAction>,
-    pub boot_disk_override_input: String,
     pub cancel_requested: Arc<std::sync::atomic::AtomicBool>,
     pub customize_error_field: Option<CustomizeField>,
     pub dry_run: bool,
+    pub developer_mode: bool,
     pub mash_root: PathBuf,
     pub state_path: PathBuf,
 }
@@ -423,6 +425,12 @@ enum ListAction {
     Back,
     Quit,
     None,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl App {
@@ -457,6 +465,7 @@ impl App {
                     path: "/dev/sda".to_string(),
                     removable: true,
                     boot_confidence: data_sources::BootConfidence::NotBoot,
+                    is_source_disk: false,
                 },
                 DiskOption {
                     identity: data_sources::DiskIdentity::new(
@@ -468,6 +477,7 @@ impl App {
                     path: "/dev/nvme0n1".to_string(),
                     removable: false,
                     boot_confidence: data_sources::BootConfidence::Confident,
+                    is_source_disk: true,
                 },
             ]
         } else {
@@ -478,6 +488,7 @@ impl App {
                     path: disk.path,
                     removable: disk.removable,
                     boot_confidence: disk.boot_confidence,
+                    is_source_disk: disk.is_source_disk,
                 })
                 .collect()
         };
@@ -486,12 +497,15 @@ impl App {
         let default_disk_index = disks
             .iter()
             .position(|disk| {
-                disk.boot_confidence == data_sources::BootConfidence::NotBoot && disk.removable
+                !disk.is_source_disk
+                    && disk.boot_confidence == data_sources::BootConfidence::NotBoot
+                    && disk.removable
             })
             .or_else(|| {
-                disks
-                    .iter()
-                    .position(|disk| disk.boot_confidence == data_sources::BootConfidence::NotBoot)
+                disks.iter().position(|disk| {
+                    !disk.is_source_disk
+                        && disk.boot_confidence == data_sources::BootConfidence::NotBoot
+                })
             })
             .unwrap_or(0);
 
@@ -638,10 +652,10 @@ impl App {
             downloaded_uefi_dir: None,
             safe_mode_disarm_input: String::new(),
             pending_destructive_action: None,
-            boot_disk_override_input: String::new(),
             cancel_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             customize_error_field: None,
             dry_run: false,
+            developer_mode: false,
             mash_root: PathBuf::from("."),
             state_path: PathBuf::from("state.json"),
         }
@@ -654,10 +668,11 @@ impl App {
         app
     }
 
-    pub fn new_with_mash_root(mash_root: PathBuf, dry_run: bool) -> Self {
+    pub fn new_with_mash_root(mash_root: PathBuf, dry_run: bool, developer_mode: bool) -> Self {
         let mut app = Self::new_with_flags(dry_run);
         app.mash_root = mash_root.clone();
         app.state_path = mash_root.join("var/lib/mash/state.json");
+        app.developer_mode = developer_mode;
         app
     }
 
@@ -794,96 +809,47 @@ impl App {
     }
 
     fn handle_disk_selection_input(&mut self, key: KeyEvent) -> InputResult {
-        // Check if current disk is boot disk
-        let is_boot_disk_selected = self
+        let protected = self
             .disks
             .get(self.disk_index)
-            .map(|disk| disk.boot_confidence.is_boot())
+            .map(|disk| disk.boot_confidence.is_boot() || disk.is_source_disk)
             .unwrap_or(false);
 
-        // If boot disk is selected, accept text input for override
-        if is_boot_disk_selected {
-            match key.code {
-                KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
-                    self.adjust_disk_index(-1);
-                    self.boot_disk_override_input.clear();
-                    InputResult::Continue
-                }
-                KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
-                    self.adjust_disk_index(1);
-                    self.boot_disk_override_input.clear();
-                    InputResult::Continue
-                }
-                KeyCode::Char(c) => {
-                    self.boot_disk_override_input.push(c.to_ascii_uppercase());
-                    self.error_message = None;
-                    InputResult::Continue
-                }
-                KeyCode::Backspace => {
-                    self.boot_disk_override_input.pop();
-                    InputResult::Continue
-                }
-                KeyCode::Enter => {
-                    // CRITICAL: Block installation if disk identity cannot be resolved
-                    if let Some(disk) = self.disks.get(self.disk_index) {
-                        if disk.identity.is_none() {
-                            self.error_message = Some(
-                                "❌ IDENTITY FAILED: Cannot proceed with this disk. Hardware vendor/model could not be resolved. Select a different disk.".to_string()
-                            );
-                            self.boot_disk_override_input.clear();
-                            return InputResult::Continue;
-                        }
-                    }
-
-                    if self.boot_disk_override_input == "BOOT" {
-                        // Override accepted - proceed with boot disk
-                        self.boot_disk_override_input.clear();
-                        self.error_message = None;
-                        self.apply_list_action(ListAction::Advance)
-                    } else {
+        match key.code {
+            KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
+                self.adjust_disk_index(-1);
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
+                self.adjust_disk_index(1);
+                InputResult::Continue
+            }
+            KeyCode::Enter => {
+                // CRITICAL: Block installation if disk identity cannot be resolved
+                if let Some(disk) = self.disks.get(self.disk_index) {
+                    if disk.identity.is_none() {
                         self.error_message = Some(
-                            "⚠️ Type 'BOOT' to override protection or select a different disk."
+                            "❌ IDENTITY FAILED: Cannot proceed with this disk. Hardware vendor/model could not be resolved. Select a different disk."
                                 .to_string(),
                         );
-                        InputResult::Continue
+                        return InputResult::Continue;
                     }
                 }
-                KeyCode::Esc => {
-                    self.boot_disk_override_input.clear();
-                    self.apply_list_action(ListAction::Back)
-                }
-                _ => InputResult::Continue,
-            }
-        } else {
-            // Normal navigation for non-boot disks
-            match key.code {
-                KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
-                    self.adjust_disk_index(-1);
-                    InputResult::Continue
-                }
-                KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
-                    self.adjust_disk_index(1);
-                    InputResult::Continue
-                }
-                KeyCode::Enter => {
-                    // CRITICAL: Block installation if disk identity cannot be resolved
-                    if let Some(disk) = self.disks.get(self.disk_index) {
-                        if disk.identity.is_none() {
-                            self.error_message = Some(
-                                "❌ IDENTITY FAILED: Cannot proceed with this disk. Hardware vendor/model could not be resolved. Select a different disk.".to_string()
-                            );
-                            return InputResult::Continue;
-                        }
-                    }
 
-                    self.error_message = None;
-                    self.boot_disk_override_input.clear();
-                    self.apply_list_action(ListAction::Advance)
+                if protected && !self.developer_mode {
+                    self.error_message = Some(
+                        "🛑 This disk is the source/boot media and cannot be selected. Re-run with --developer-mode to override (dangerous)."
+                            .to_string(),
+                    );
+                    return InputResult::Continue;
                 }
-                KeyCode::Esc => self.apply_list_action(ListAction::Back),
-                KeyCode::Char('q') => self.apply_list_action(ListAction::Quit),
-                _ => InputResult::Continue,
+
+                self.error_message = None;
+                self.apply_list_action(ListAction::Advance)
             }
+            KeyCode::Esc => self.apply_list_action(ListAction::Back),
+            KeyCode::Char('q') => self.apply_list_action(ListAction::Quit),
+            _ => InputResult::Continue,
         }
     }
 
@@ -930,13 +896,13 @@ impl App {
     }
 
     fn handle_disk_confirmation_input(&mut self, key: KeyEvent) -> InputResult {
-        let is_boot_disk = self
+        let is_boot_or_source_disk = self
             .disks
             .get(self.disk_index)
-            .map(|disk| disk.boot_confidence.is_boot())
+            .map(|disk| disk.boot_confidence.is_boot() || disk.is_source_disk)
             .unwrap_or(false);
 
-        let required_text = if is_boot_disk {
+        let required_text = if is_boot_or_source_disk {
             "DESTROY BOOT DISK"
         } else {
             "DESTROY"
@@ -959,7 +925,7 @@ impl App {
                     self.wipe_confirmation.clear();
                     self.go_next();
                 } else {
-                    self.error_message = if is_boot_disk {
+                    self.error_message = if is_boot_or_source_disk {
                         Some(
                             "⚠️ Type 'DESTROY BOOT DISK' to confirm destruction of BOOT DEVICE."
                                 .to_string(),
@@ -1350,7 +1316,7 @@ impl App {
         *index = next as usize;
     }
 
-    /// Adjust disk index while skipping boot disks for safety
+    /// Adjust disk index while skipping protected disks (boot/source media) for safety.
     fn adjust_disk_index(&mut self, delta: isize) {
         let len = self.disks.len();
         if len == 0 {
@@ -1364,16 +1330,17 @@ impl App {
             // Use standard index adjustment
             Self::adjust_index(len, &mut self.disk_index, delta);
 
-            // Check if we found a non-boot disk or cycled through all
+            // Check if we found an allowed disk or cycled through all.
             if let Some(disk) = self.disks.get(self.disk_index) {
-                if !disk.boot_confidence.is_boot() {
-                    return; // Found a safe disk
+                let protected = disk.boot_confidence.is_boot() || disk.is_source_disk;
+                if !protected || self.developer_mode {
+                    return;
                 }
             }
 
             attempts += 1;
             if attempts >= len || self.disk_index == start_index {
-                // All disks are boot disks or we cycled back - stay on current
+                // All disks are protected or we cycled back - stay on current.
                 return;
             }
         }
@@ -1414,13 +1381,14 @@ impl App {
 
     fn handle_partition_layout_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                 self.error_message = None;
-                // Accept selected layout and continue.
+                // Accept selected layout and skip customization, go directly to EFI setup.
                 self.current_step_type = InstallStepType::EfiImage;
                 InputResult::Continue
             }
-            KeyCode::Char('n') | KeyCode::Char('N') => {
+            KeyCode::Char('m') | KeyCode::Char('M') | KeyCode::Char('n') | KeyCode::Char('N') => {
+                // Manual customization mode
                 self.current_step_type = InstallStepType::PartitionCustomize;
                 InputResult::Continue
             }
@@ -1977,6 +1945,7 @@ mod tests {
             path: "/dev/sdb".to_string(),
             removable: false,
             boot_confidence: BootConfidence::NotBoot,
+            is_source_disk: false,
         }];
         app.disk_index = 0;
 
@@ -2005,6 +1974,7 @@ mod tests {
             path: "/dev/sda".to_string(),
             removable: false,
             boot_confidence: BootConfidence::Confident,
+            is_source_disk: false,
         }];
         app.disk_index = 0;
 
@@ -2233,6 +2203,7 @@ mod tests {
                 path: "/dev/nvme0n1".to_string(),
                 removable: false,
                 boot_confidence: BootConfidence::Confident,
+                is_source_disk: false,
             },
             DiskOption {
                 identity: data_sources::DiskIdentity::new(
@@ -2244,6 +2215,7 @@ mod tests {
                 path: "/dev/sda".to_string(),
                 removable: false,
                 boot_confidence: BootConfidence::NotBoot,
+                is_source_disk: false,
             },
             DiskOption {
                 identity: data_sources::DiskIdentity::new(
@@ -2255,6 +2227,7 @@ mod tests {
                 path: "/dev/sdb".to_string(),
                 removable: true,
                 boot_confidence: BootConfidence::NotBoot,
+                is_source_disk: false,
             },
         ];
 
@@ -2294,6 +2267,7 @@ mod tests {
                 path: "/dev/sda".to_string(),
                 removable: false,
                 boot_confidence: BootConfidence::Confident,
+                is_source_disk: false,
             },
             DiskOption {
                 identity: data_sources::DiskIdentity::new(
@@ -2305,6 +2279,7 @@ mod tests {
                 path: "/dev/sdb".to_string(),
                 removable: false,
                 boot_confidence: BootConfidence::NotBoot,
+                is_source_disk: false,
             },
         ];
 
@@ -2328,13 +2303,13 @@ mod tests {
     }
 
     #[test]
-    fn disk_selection_requires_boot_override() {
+    fn disk_selection_blocks_protected_disk_without_developer_mode() {
         use super::data_sources::{BootConfidence, TransportType};
 
         let mut app = App::new();
         app.current_step_type = InstallStepType::DiskSelection;
 
-        // Set up boot disk
+        // Set up protected (boot/source) disk
         app.disks = vec![DiskOption {
             identity: data_sources::DiskIdentity::new(
                 Some("Generic".to_string()),
@@ -2345,29 +2320,43 @@ mod tests {
             path: "/dev/sda".to_string(),
             removable: false,
             boot_confidence: BootConfidence::Confident,
+            is_source_disk: true,
         }];
 
         app.disk_index = 0;
 
-        // Try to advance with boot disk selected without override
+        // Try to advance with protected disk selected without developer mode
         app.handle_input(key(KeyCode::Enter));
 
         // Should stay on DiskSelection and show error
         assert_eq!(app.current_step_type, InstallStepType::DiskSelection);
         assert!(app.error_message.is_some());
+    }
 
-        // Type the override text "BOOT"
-        for ch in "BOOT".chars() {
-            app.handle_input(key(KeyCode::Char(ch)));
-        }
+    #[test]
+    fn disk_selection_allows_protected_disk_in_developer_mode() {
+        use super::data_sources::{BootConfidence, TransportType};
 
-        assert_eq!(app.boot_disk_override_input, "BOOT");
+        let mut app = App::new();
+        app.current_step_type = InstallStepType::DiskSelection;
+        app.developer_mode = true;
 
-        // Now Enter should work
+        app.disks = vec![DiskOption {
+            identity: data_sources::DiskIdentity::new(
+                Some("Generic".to_string()),
+                Some("Boot Drive".to_string()),
+                256 * 1024 * 1024 * 1024,
+                TransportType::Sata,
+            ),
+            path: "/dev/sda".to_string(),
+            removable: false,
+            boot_confidence: BootConfidence::Confident,
+            is_source_disk: true,
+        }];
+        app.disk_index = 0;
+
         app.handle_input(key(KeyCode::Enter));
         assert_eq!(app.current_step_type, InstallStepType::DiskConfirmation);
-        assert!(app.error_message.is_none());
-        assert_eq!(app.boot_disk_override_input, "");
     }
 
     #[test]
@@ -2388,6 +2377,7 @@ mod tests {
             path: "/dev/sdb".to_string(),
             removable: false,
             boot_confidence: BootConfidence::NotBoot,
+            is_source_disk: false,
         }];
 
         app.disk_index = 0;
@@ -2418,6 +2408,7 @@ mod tests {
                 path: "/dev/sda".to_string(),
                 removable: false,
                 boot_confidence: BootConfidence::Confident,
+                is_source_disk: false,
             },
             DiskOption {
                 identity: data_sources::DiskIdentity::new(
@@ -2429,6 +2420,7 @@ mod tests {
                 path: "/dev/sdb".to_string(),
                 removable: false,
                 boot_confidence: BootConfidence::NotBoot,
+                is_source_disk: false,
             },
             DiskOption {
                 identity: data_sources::DiskIdentity::new(
@@ -2440,6 +2432,7 @@ mod tests {
                 path: "/dev/sdc".to_string(),
                 removable: false,
                 boot_confidence: BootConfidence::Confident,
+                is_source_disk: false,
             },
             DiskOption {
                 identity: data_sources::DiskIdentity::new(
@@ -2451,6 +2444,7 @@ mod tests {
                 path: "/dev/sdd".to_string(),
                 removable: false,
                 boot_confidence: BootConfidence::NotBoot,
+                is_source_disk: false,
             },
         ];
 

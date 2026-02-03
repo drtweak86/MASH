@@ -153,7 +153,8 @@ where
             }
 
             let image_path = resolve_image_path(&cfg_flash, state)?;
-            hal_flash.flash_raw_image(&image_path, &cfg_flash.target_disk)?;
+            let opts = mash_hal::FlashOptions::new(dry_run, destructive_confirmed);
+            hal_flash.flash_raw_image(&image_path, &cfg_flash.target_disk, &opts)?;
 
             if !state
                 .flashed_devices

@@ -4,7 +4,7 @@
 //! allowing for CI-safe testing without root privileges or real hardware.
 
 use super::{FlashOps, FormatOps, FormatOptions, MountOps, MountOptions};
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -154,8 +154,8 @@ impl MountOps for FakeHal {
 
 impl FormatOps for FakeHal {
     fn format_ext4(&self, device: &Path, opts: &FormatOptions) -> Result<()> {
-        if !opts.confirmed {
-            return Err(anyhow!("Formatting requires explicit confirmation"));
+        if !opts.dry_run && !opts.confirmed {
+            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
         }
 
         if opts.dry_run {
@@ -173,8 +173,8 @@ impl FormatOps for FakeHal {
     }
 
     fn format_btrfs(&self, device: &Path, opts: &FormatOptions) -> Result<()> {
-        if !opts.confirmed {
-            return Err(anyhow!("Formatting requires explicit confirmation"));
+        if !opts.dry_run && !opts.confirmed {
+            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
         }
 
         if opts.dry_run {
@@ -193,7 +193,25 @@ impl FormatOps for FakeHal {
 }
 
 impl FlashOps for FakeHal {
-    fn flash_raw_image(&self, image_path: &Path, target_disk: &Path) -> Result<()> {
+    fn flash_raw_image(
+        &self,
+        image_path: &Path,
+        target_disk: &Path,
+        opts: &crate::FlashOptions,
+    ) -> Result<()> {
+        if !opts.dry_run && !opts.confirmed {
+            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
+        }
+
+        if opts.dry_run {
+            log::info!(
+                "FAKE HAL DRY RUN: flash {} -> {}",
+                image_path.display(),
+                target_disk.display()
+            );
+            return Ok(());
+        }
+
         log::info!(
             "FAKE HAL: flash {} -> {}",
             image_path.display(),
@@ -280,7 +298,8 @@ mod tests {
         let image = Path::new("/tmp/image.img");
         let target = Path::new("/dev/sda");
 
-        hal.flash_raw_image(image, target).unwrap();
+        let opts = crate::FlashOptions::new(false, true);
+        hal.flash_raw_image(image, target, &opts).unwrap();
 
         assert_eq!(hal.operation_count(), 1);
         assert!(hal.has_operation(|op| matches!(op, Operation::FlashImage { .. })));
@@ -292,10 +311,20 @@ mod tests {
         let opts = FormatOptions::new(false, false);
 
         let err = hal.format_ext4(Path::new("/dev/sda1"), &opts).unwrap_err();
-        assert!(err.to_string().contains("explicit confirmation"));
+        assert!(err.downcast_ref::<crate::HalError>().is_some());
 
         let err = hal.format_btrfs(Path::new("/dev/sda2"), &opts).unwrap_err();
-        assert!(err.to_string().contains("explicit confirmation"));
+        assert!(err.downcast_ref::<crate::HalError>().is_some());
+
+        let flash_opts = crate::FlashOptions::new(false, false);
+        let err = hal
+            .flash_raw_image(
+                Path::new("/tmp/image.img"),
+                Path::new("/dev/sda"),
+                &flash_opts,
+            )
+            .unwrap_err();
+        assert!(err.downcast_ref::<crate::HalError>().is_some());
     }
 
     #[test]

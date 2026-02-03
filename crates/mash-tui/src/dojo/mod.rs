@@ -51,7 +51,8 @@ pub fn run(_cli: &Cli, _watch: bool, _dry_run: bool) -> Result<dojo_app::InputRe
     let mut terminal = Terminal::new(backend)?;
 
     // Create app state
-    let mut app = dojo_app::App::new_with_mash_root(_cli.mash_root.clone(), _dry_run);
+    let mut app =
+        dojo_app::App::new_with_mash_root(_cli.mash_root.clone(), _dry_run, _cli.developer_mode);
 
     // Main loop
     let final_result = run_new_ui(&mut terminal, &mut app)?;
@@ -91,9 +92,9 @@ pub fn run_new_ui(
         // Handle input with timeout
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
+                // F12 reserved for future debug logging feature
+                // (stdout prints break TUI display - would need in-TUI log panel)
                 if key.code == KeyCode::F(12) {
-                    let dump = dojo_ui::dump_step(app);
-                    println!("{}", dump);
                     continue;
                 }
                 // Pass key event to app's handler

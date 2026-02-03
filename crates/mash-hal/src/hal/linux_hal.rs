@@ -1,6 +1,6 @@
 //! Linux HAL implementation using real system calls.
 
-use super::{FlashOps, FormatOps, FormatOptions, MountOps, MountOptions};
+use super::{FlashOps, FlashOptions, FormatOps, FormatOptions, MountOps, MountOptions};
 use anyhow::{anyhow, Context, Result};
 use std::fs;
 use std::io::{self, Read};
@@ -74,7 +74,7 @@ impl FormatOps for LinuxHal {
         }
 
         if !opts.confirmed {
-            return Err(anyhow!("Formatting requires explicit confirmation"));
+            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
         }
 
         let mut args = opts.extra_args.clone();
@@ -99,7 +99,7 @@ impl FormatOps for LinuxHal {
         }
 
         if !opts.confirmed {
-            return Err(anyhow!("Formatting requires explicit confirmation"));
+            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
         }
 
         let mut args = opts.extra_args.clone();
@@ -119,7 +119,25 @@ impl FormatOps for LinuxHal {
 }
 
 impl FlashOps for LinuxHal {
-    fn flash_raw_image(&self, image_path: &Path, target_disk: &Path) -> Result<()> {
+    fn flash_raw_image(
+        &self,
+        image_path: &Path,
+        target_disk: &Path,
+        opts: &FlashOptions,
+    ) -> Result<()> {
+        if opts.dry_run {
+            log::info!(
+                "DRY RUN: flash {} -> {}",
+                image_path.display(),
+                target_disk.display()
+            );
+            return Ok(());
+        }
+
+        if !opts.confirmed {
+            return Err(anyhow::Error::new(crate::HalError::SafetyLock));
+        }
+
         log::info!(
             "💾 Flashing image {} -> {}",
             image_path.display(),
@@ -164,7 +182,7 @@ mod tests {
         let hal = LinuxHal::new();
         let opts = FormatOptions::new(false, false);
         let err = hal.format_ext4(Path::new("/dev/null"), &opts).unwrap_err();
-        assert!(err.to_string().contains("explicit confirmation"));
+        assert!(err.downcast_ref::<crate::HalError>().is_some());
     }
 
     #[test]
@@ -172,7 +190,7 @@ mod tests {
         let hal = LinuxHal::new();
         let opts = FormatOptions::new(false, false);
         let err = hal.format_btrfs(Path::new("/dev/null"), &opts).unwrap_err();
-        assert!(err.to_string().contains("explicit confirmation"));
+        assert!(err.downcast_ref::<crate::HalError>().is_some());
     }
 
     #[test]
@@ -184,7 +202,8 @@ mod tests {
         std::fs::write(&image, b"test content").unwrap();
 
         let hal = LinuxHal::new();
-        hal.flash_raw_image(&image, &target).unwrap();
+        let opts = super::FlashOptions::new(false, true);
+        hal.flash_raw_image(&image, &target, &opts).unwrap();
 
         let result = std::fs::read(&target).unwrap();
         assert_eq!(result, b"test content");
@@ -204,7 +223,8 @@ mod tests {
         std::fs::write(&image, compressed).unwrap();
 
         let hal = LinuxHal::new();
-        hal.flash_raw_image(&image, &target).unwrap();
+        let opts = super::FlashOptions::new(false, true);
+        hal.flash_raw_image(&image, &target, &opts).unwrap();
 
         let result = std::fs::read(&target).unwrap();
         assert_eq!(result, b"compressed data");

@@ -106,6 +106,7 @@ pub struct DiskInfo {
     pub path: String,                   // /dev/sda
     pub removable: bool,
     pub boot_confidence: BootConfidence,
+    pub is_source_disk: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +134,7 @@ pub fn scan_disks() -> Vec<DiskInfo> {
     };
 
     let (boot_device, boot_detection_succeeded) = boot_device_path_with_confidence();
+    let source_disk = source_disk_path();
 
     for entry in entries.flatten() {
         let dev_name = entry.file_name().to_string_lossy().to_string();
@@ -174,9 +176,10 @@ pub fn scan_disks() -> Vec<DiskInfo> {
 
         disks.push(DiskInfo {
             identity,
-            path: disk_path,
+            path: disk_path.clone(),
             removable,
             boot_confidence,
+            is_source_disk: source_disk.as_deref() == Some(disk_path.as_str()),
         });
     }
 
@@ -243,6 +246,47 @@ fn get_boot_device_from_cmdline() -> Option<String> {
 
 pub fn boot_device_path() -> Option<String> {
     boot_device_path_with_confidence().0
+}
+
+/// Attempts to determine the "source disk" backing the running system (rootfs or executable).
+///
+/// This is used to protect the installer boot media from being selected as a target.
+pub fn source_disk_path() -> Option<String> {
+    let mi = fs::read_to_string("/proc/self/mountinfo").ok()?;
+    let exe = std::env::current_exe().ok();
+
+    // Prefer rootfs source.
+    if let Some(src) = mash_hal::procfs::mountinfo::root_mount_source(&mi) {
+        if let Some(base) = base_block_device(&src) {
+            return Some(base);
+        }
+    }
+
+    // Fallback: find the mount backing the executable path.
+    let exe = exe?;
+    let exe_str = exe.to_string_lossy().to_string();
+    let mut best: Option<(usize, String)> = None;
+    for line in mi.lines() {
+        let (pre, post) = line.split_once(" - ")?;
+        let pre_fields: Vec<&str> = pre.split_whitespace().collect();
+        if pre_fields.len() < 5 {
+            continue;
+        }
+        let mount_point = mash_hal::procfs::mountinfo::unescape_mount_path(pre_fields[4]);
+        if mount_point == "/" || exe_str.starts_with(&mount_point) {
+            let mut post_fields = post.split_whitespace();
+            let _fstype = post_fields.next();
+            let source = match post_fields.next() {
+                Some(v) => v.to_string(),
+                None => continue,
+            };
+            let score = mount_point.len();
+            if best.as_ref().map(|(s, _)| *s).unwrap_or(0) <= score {
+                best = Some((score, source));
+            }
+        }
+    }
+    best.and_then(|(_, src)| base_block_device(&src))
 }
 
 /// Returns (boot_device_path, detection_succeeded)

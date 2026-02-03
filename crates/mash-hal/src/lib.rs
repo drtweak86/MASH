@@ -13,8 +13,12 @@ pub mod os_release;
 pub mod procfs;
 pub mod sysfs;
 
+pub mod error;
+
 pub mod hal;
 pub use hal::*;
+
+pub use error::HalError;
 
 // Re-export commonly used types
 pub use procfs::mountinfo::MountInfo;

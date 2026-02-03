@@ -159,14 +159,22 @@ fn check_target_disk(path: &Path, min_target_disk_gb: u64) -> Result<()> {
         );
     }
 
-    // Avoid clobbering the host system disk (rootfs).
-    if let Some(root_source) = procfs::mountinfo::root_mount_source(&mountinfo) {
-        if root_source.starts_with(&path.to_string_lossy().to_string()) {
-            anyhow::bail!(
-                "Target disk {} appears to be the current root device ({}); refusing to continue.",
-                path.display(),
-                root_source
-            );
+    // Avoid clobbering the host system disk (rootfs / boot media).
+    // This can only be overridden explicitly in developer mode.
+    if std::env::var_os("MASH_DEVELOPER_MODE").is_none() {
+        if let Some(root_source) = procfs::mountinfo::root_mount_source(&mountinfo) {
+            if let (Some(root_disk), Some(target_disk)) = (
+                base_block_device(&root_source),
+                base_block_device(&path.to_string_lossy()),
+            ) {
+                if root_disk == target_disk {
+                    anyhow::bail!(
+                        "Target disk {} is the current root/boot media ({}); refusing to continue.",
+                        path.display(),
+                        root_disk
+                    );
+                }
+            }
         }
     }
 
@@ -185,9 +193,46 @@ fn check_target_disk(path: &Path, min_target_disk_gb: u64) -> Result<()> {
     Ok(())
 }
 
+fn base_block_device(device: &str) -> Option<String> {
+    if !device.starts_with("/dev/") {
+        return None;
+    }
+    let name = device.trim_start_matches("/dev/");
+    let base = if name.starts_with("nvme") || name.starts_with("mmcblk") || name.starts_with("loop")
+    {
+        if let Some(idx) = name.rfind('p') {
+            let suffix = &name[idx + 1..];
+            if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
+                name[..idx].to_string()
+            } else {
+                name.to_string()
+            }
+        } else {
+            name.to_string()
+        }
+    } else {
+        let trimmed = name.trim_end_matches(|c: char| c.is_ascii_digit());
+        if trimmed.is_empty() {
+            name.to_string()
+        } else {
+            trimmed.to_string()
+        }
+    };
+    Some(format!("/dev/{}", base))
+}
+
 fn check_os_release() -> Result<()> {
-    let content = fs::read_to_string("/etc/os-release")
-        .context("failed to read /etc/os-release for Fedora verification")?;
+    // CI/test runs often happen on non-Fedora hosts; allow tests to point preflight at a fixture.
+    // In production this defaults to `/etc/os-release`.
+    let os_release_path = env::var_os("MASH_OS_RELEASE_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/etc/os-release"));
+    let content = fs::read_to_string(&os_release_path).with_context(|| {
+        format!(
+            "failed to read {} for Fedora verification",
+            os_release_path.display()
+        )
+    })?;
     let (id, version) = os_release::parse_os_release(&content)?;
     if id != "fedora" {
         anyhow::bail!("Preflight requires Fedora, found {}", id);

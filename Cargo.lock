@@ -1649,6 +1649,7 @@ dependencies = [
  "log",
  "nix 0.29.0",
  "tempfile",
+ "thiserror 2.0.18",
  "xz2",
 ]
 

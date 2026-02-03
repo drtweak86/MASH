@@ -56,6 +56,10 @@ pub struct Cli {
     /// Dump TUI step render text to stdout and exit
     #[arg(long, global = true)]
     pub dump_tui: bool,
+
+    /// Developer mode - allows selecting the source/boot disk (dangerous; for debugging only)
+    #[arg(long, global = true)]
+    pub developer_mode: bool,
 }
 
 #[derive(Subcommand)]

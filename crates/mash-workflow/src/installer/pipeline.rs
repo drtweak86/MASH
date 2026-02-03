@@ -592,25 +592,26 @@ mod tests {
         }
     }
 
-    struct EnvVarGuard<'a> {
-        key: &'a str,
+    struct EnvVarGuard {
+        key: String,
         original: Option<OsString>,
     }
 
-    impl<'a> EnvVarGuard<'a> {
-        fn new(key: &'a str, value: &'a str) -> Self {
-            let original = env::var_os(key);
-            env::set_var(key, value);
+    impl EnvVarGuard {
+        fn new(key: impl Into<String>, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let key = key.into();
+            let original = env::var_os(&key);
+            env::set_var(&key, value);
             Self { key, original }
         }
     }
 
-    impl Drop for EnvVarGuard<'_> {
+    impl Drop for EnvVarGuard {
         fn drop(&mut self) {
             if let Some(ref original) = self.original {
-                env::set_var(self.key, original);
+                env::set_var(&self.key, original);
             } else {
-                env::remove_var(self.key);
+                env::remove_var(&self.key);
             }
         }
     }
@@ -618,7 +619,8 @@ mod tests {
     struct PreflightEnv {
         _env_lock: crate::test_env::EnvLockGuard,
         _path_guard: PathGuard,
-        _skip_network: EnvVarGuard<'static>,
+        _skip_network: EnvVarGuard,
+        _os_release: EnvVarGuard,
         bin_dir: PathBuf,
     }
 
@@ -644,10 +646,19 @@ mod tests {
                 fs::set_permissions(&path, perms).unwrap();
             }
         }
+
+        // Ensure preflight's Fedora-only check is deterministic across CI hosts.
+        let os_release_path = tmp.path().join("os-release");
+        fs::write(
+            &os_release_path,
+            "NAME=\"Fedora Linux\"\nID=fedora\nVERSION_ID=\"43\"\n",
+        )
+        .unwrap();
         PreflightEnv {
             _env_lock: env_lock,
             _path_guard: PathGuard::new(&bin_dir),
             _skip_network: EnvVarGuard::new("MASH_TEST_SKIP_NETWORK_CHECK", "1"),
+            _os_release: EnvVarGuard::new("MASH_OS_RELEASE_PATH", &os_release_path),
             bin_dir,
         }
     }
