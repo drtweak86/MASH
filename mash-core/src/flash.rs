@@ -290,10 +290,38 @@ fn run_installation(ctx: &mut FlashContext) -> Result<()> {
         return Ok(());
     }
 
+    prepare_mount_points(ctx, &mounts)?;
+
+    execute_partition_phase(ctx)?;
+    execute_format_phase(ctx)?;
+
+    setup_image_loop_phase(ctx)?;
+    let subvols = mount_source_phase(ctx, &mounts)?;
+    mount_dest_phase(ctx, &mounts)?;
+    create_dest_subvols_phase(ctx, &mounts, &subvols)?;
+
+    execute_copy_root_phase(ctx, &mounts, &subvols)?;
+    execute_copy_boot_phase(ctx, &mounts)?;
+    execute_copy_efi_phase(ctx, &mounts)?;
+
+    execute_uefi_config_phase(ctx, &mounts, &subvols)?;
+    execute_locale_phase(ctx, &mounts.dst_root_subvol)?;
+    execute_fstab_phase(ctx, &mounts.dst_root_subvol, &subvols)?;
+    execute_stage_dojo_phase(ctx, &mounts.dst_data, &mounts.dst_root_subvol)?;
+    execute_cleanup_phase(ctx)?;
+
+    ctx.send_progress(ProgressUpdate::Complete);
+    info!("🎉 Installation complete!");
+    Ok(())
+}
+
+fn prepare_mount_points(ctx: &FlashContext, mounts: &MountPoints) -> Result<()> {
     ctx.check_cancel()?;
     mounts.create_all()?;
+    Ok(())
+}
 
-    // Phase 1: Partition (GPT with parted)
+fn execute_partition_phase(ctx: &FlashContext) -> Result<()> {
     ctx.check_cancel()?;
     ctx.start_phase(Phase::Partition);
     unmount_disk_partitions(&ctx.disk, ctx.auto_unmount)?;
@@ -302,34 +330,51 @@ fn run_installation(ctx: &mut FlashContext) -> Result<()> {
         PartitionScheme::Gpt => partition_disk_gpt(ctx)?,
     };
     ctx.complete_phase(Phase::Partition);
+    Ok(())
+}
 
-    // Phase 2: Format
+fn execute_format_phase(ctx: &FlashContext) -> Result<()> {
     ctx.check_cancel()?;
     ctx.start_phase(Phase::Format);
     format_partitions(ctx)?;
     ctx.complete_phase(Phase::Format);
+    Ok(())
+}
 
-    // Setup loop device for image
+fn setup_image_loop_phase(ctx: &mut FlashContext) -> Result<()> {
     ctx.check_cancel()?;
     ctx.status("🔄 Setting up image loop device...");
     setup_image_loop(ctx)?;
+    Ok(())
+}
 
-    // Mount source (image) partitions
+fn mount_source_phase(ctx: &FlashContext, mounts: &MountPoints) -> Result<BtrfsSubvols> {
     ctx.check_cancel()?;
     ctx.status("📂 Mounting image partitions...");
-    let subvols = mount_source_partitions(ctx, &mounts)?;
+    mount_source_partitions(ctx, mounts)
+}
 
-    // Mount destination (target) partitions
+fn mount_dest_phase(ctx: &FlashContext, mounts: &MountPoints) -> Result<()> {
     ctx.check_cancel()?;
     ctx.status("📂 Mounting target partitions...");
-    mount_dest_partitions(ctx, &mounts)?;
+    mount_dest_partitions(ctx, mounts)
+}
 
-    // Create btrfs subvolumes on destination
+fn create_dest_subvols_phase(
+    ctx: &FlashContext,
+    mounts: &MountPoints,
+    subvols: &BtrfsSubvols,
+) -> Result<()> {
     ctx.check_cancel()?;
     ctx.status("🌳 Creating btrfs subvolumes...");
-    create_dest_subvols(ctx, &mounts, &subvols)?;
+    create_dest_subvols(ctx, mounts, subvols)
+}
 
-    // Phase 3: Copy root filesystem (btrfs subvol: root)
+fn execute_copy_root_phase(
+    ctx: &FlashContext,
+    mounts: &MountPoints,
+    subvols: &BtrfsSubvols,
+) -> Result<()> {
     ctx.check_cancel()?;
     ctx.start_phase(Phase::CopyRoot);
     rsync_with_progress(
@@ -355,14 +400,18 @@ fn run_installation(ctx: &mut FlashContext) -> Result<()> {
         )?;
     }
     ctx.complete_phase(Phase::CopyRoot);
+    Ok(())
+}
 
-    // Phase 4: Copy boot partition
+fn execute_copy_boot_phase(ctx: &FlashContext, mounts: &MountPoints) -> Result<()> {
     ctx.check_cancel()?;
     ctx.start_phase(Phase::CopyBoot);
     rsync_with_progress(ctx, &mounts.src_boot, &mounts.dst_boot, "boot")?;
     ctx.complete_phase(Phase::CopyBoot);
+    Ok(())
+}
 
-    // Phase 5: Copy EFI partition
+fn execute_copy_efi_phase(ctx: &FlashContext, mounts: &MountPoints) -> Result<()> {
     ctx.check_cancel()?;
     ctx.start_phase(Phase::CopyEfi);
     // Copy Fedora EFI tree (safe for vfat)
@@ -372,45 +421,64 @@ fn run_installation(ctx: &mut FlashContext) -> Result<()> {
     // Write config.txt
     write_config_txt(&mounts.dst_efi)?;
     ctx.complete_phase(Phase::CopyEfi);
+    Ok(())
+}
 
-    // Phase 6: Apply UEFI/boot configuration
+fn execute_uefi_config_phase(
+    ctx: &FlashContext,
+    mounts: &MountPoints,
+    subvols: &BtrfsSubvols,
+) -> Result<()> {
     ctx.check_cancel()?;
     ctx.start_phase(Phase::UefiConfig);
-    configure_boot(ctx, &mounts, &subvols)?;
+    configure_boot(ctx, mounts, subvols)?;
     ctx.complete_phase(Phase::UefiConfig);
+    Ok(())
+}
 
-    // Phase 7: Configure locale
+fn execute_locale_phase(ctx: &FlashContext, target_root: &Path) -> Result<()> {
     ctx.check_cancel()?;
     ctx.start_phase(Phase::LocaleConfig);
-    configure_locale(ctx, &mounts.dst_root_subvol)?;
+    configure_locale(ctx, target_root)?;
     if ctx.early_ssh {
-        enable_early_ssh(&mounts.dst_root_subvol)?;
+        enable_early_ssh(target_root)?;
     }
-    enable_first_boot_setup(ctx, &mounts.dst_root_subvol)?;
-    disable_autologin(ctx, &mounts.dst_root_subvol)?;
+    enable_first_boot_setup(ctx, target_root)?;
+    disable_autologin(ctx, target_root)?;
     ctx.complete_phase(Phase::LocaleConfig);
+    Ok(())
+}
 
-    // Phase 8: Generate fstab
+fn execute_fstab_phase(
+    ctx: &FlashContext,
+    target_root: &Path,
+    subvols: &BtrfsSubvols,
+) -> Result<()> {
     ctx.check_cancel()?;
     ctx.start_phase(Phase::Fstab);
-    generate_fstab(ctx, &mounts.dst_root_subvol, &subvols)?;
+    generate_fstab(ctx, target_root, subvols)?;
     ctx.complete_phase(Phase::Fstab);
+    Ok(())
+}
 
-    // Phase 9: Stage Dojo to DATA partition
+fn execute_stage_dojo_phase(
+    ctx: &FlashContext,
+    data_mount: &Path,
+    target_root: &Path,
+) -> Result<()> {
     ctx.check_cancel()?;
     ctx.start_phase(Phase::StageDojo);
-    stage_dojo(ctx, &mounts.dst_data, &mounts.dst_root_subvol)?;
+    stage_dojo(ctx, data_mount, target_root)?;
     ctx.complete_phase(Phase::StageDojo);
+    Ok(())
+}
 
-    // Phase 10: Cleanup
+fn execute_cleanup_phase(ctx: &FlashContext) -> Result<()> {
     ctx.check_cancel()?;
     ctx.start_phase(Phase::Cleanup);
     ctx.status("💾 Syncing filesystems...");
     let _ = Command::new("sync").status();
     ctx.complete_phase(Phase::Cleanup);
-
-    ctx.send_progress(ProgressUpdate::Complete);
-    info!("🎉 Installation complete!");
     Ok(())
 }
 
