@@ -56,31 +56,61 @@ impl BootConfidence {
 /// Disk identity - mandatory hardware identification
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiskIdentity {
-    pub vendor: String,
-    pub model: String,
+    pub vendor: Option<String>,
+    pub model: Option<String>,
+    pub serial: Option<String>,
+    pub wwn: Option<String>,
     pub size_bytes: u64,
     pub transport: TransportType,
 }
 
 impl DiskIdentity {
-    /// Create disk identity - returns None if vendor/model cannot be resolved
+    /// Create disk identity with best-effort sysfs fields.
+    ///
+    /// Identity must always be renderable in the UI even when vendor/model are absent.
     pub fn new(
         vendor: Option<String>,
         model: Option<String>,
+        serial: Option<String>,
+        wwn: Option<String>,
         size_bytes: u64,
         transport: TransportType,
-    ) -> Option<Self> {
-        // Require both vendor and model - no fallbacks allowed
-        match (vendor, model) {
-            (Some(v), Some(m)) if !v.trim().is_empty() && !m.trim().is_empty() => {
-                Some(DiskIdentity {
-                    vendor: v.trim().to_string(),
-                    model: m.trim().to_string(),
-                    size_bytes,
-                    transport,
-                })
-            }
-            _ => None,
+    ) -> Self {
+        DiskIdentity {
+            vendor: vendor.and_then(|v| {
+                let t = v.trim().to_string();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t)
+                }
+            }),
+            model: model.and_then(|m| {
+                let t = m.trim().to_string();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t)
+                }
+            }),
+            serial: serial.and_then(|s| {
+                let t = s.trim().to_string();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t)
+                }
+            }),
+            wwn: wwn.and_then(|w| {
+                let t = w.trim().to_string();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t)
+                }
+            }),
+            size_bytes,
+            transport,
         }
     }
 
@@ -88,22 +118,41 @@ impl DiskIdentity {
     pub fn display_string(&self) -> String {
         let size = human_size(self.size_bytes);
         let transport_hint = self.transport.hint();
+        let label = match (&self.vendor, &self.model) {
+            (Some(v), Some(m)) => format!("{} {}", v, m),
+            (Some(v), None) => v.clone(),
+            (None, Some(m)) => m.clone(),
+            (None, None) => "Disk".to_string(),
+        };
 
         if transport_hint.is_empty() {
-            format!("{} {} - {}", self.vendor, self.model, size)
+            format!("{} - {}", label, size)
         } else {
-            format!(
-                "{} {} ({}) - {}",
-                self.vendor, self.model, transport_hint, size
-            )
+            format!("{} ({}) - {}", label, transport_hint, size)
         }
+    }
+
+    /// Stable key for preserving selection across rescans.
+    pub fn stable_id(&self, dev_path: &str) -> String {
+        if let Some(ref wwn) = self.wwn {
+            return format!("wwn:{}", wwn);
+        }
+        if let Some(ref serial) = self.serial {
+            return format!("serial:{}", serial);
+        }
+        // Fall back to a synthetic key that still incorporates physical characteristics.
+        format!(
+            "fallback:{}:{}:{:?}",
+            dev_path, self.size_bytes, self.transport
+        )
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct DiskInfo {
-    pub identity: Option<DiskIdentity>, // None = identity resolution failed
-    pub path: String,                   // /dev/sda
+    pub identity: DiskIdentity,
+    pub stable_id: String,
+    pub path: String, // /dev/sda
     pub removable: bool,
     pub boot_confidence: BootConfidence,
     pub is_source_disk: bool,
@@ -128,44 +177,19 @@ pub fn data_flags() -> DataFlags {
 
 pub fn scan_disks() -> Vec<DiskInfo> {
     let mut disks = Vec::new();
-    let entries = match fs::read_dir("/sys/block") {
-        Ok(entries) => entries,
-        Err(_) => return disks,
-    };
-
     let (boot_device, boot_detection_succeeded) = boot_device_path_with_confidence();
     let source_disk = source_disk_path();
 
-    for entry in entries.flatten() {
-        let dev_name = entry.file_name().to_string_lossy().to_string();
-        if should_skip_block_device(&dev_name) {
-            continue;
-        }
-
-        let sysfs_base = PathBuf::from("/sys/block").join(&dev_name);
-
-        // Read size
-        let size_sectors = read_u64(&sysfs_base.join("size")).unwrap_or(0);
-        if size_sectors == 0 {
-            continue;
-        }
-        let size_bytes = size_sectors.saturating_mul(512);
-
-        // Read vendor and model
-        let vendor = read_trimmed(&sysfs_base.join("device/vendor"));
-        let model = read_trimmed(&sysfs_base.join("device/model"));
-
+    let sysfs_disks = match mash_hal::sysfs::block::scan_block_devices() {
+        Ok(v) => v,
+        Err(_) => return disks,
+    };
+    for dev in sysfs_disks {
         // Detect transport type
-        let transport = detect_transport_type(&dev_name, &sysfs_base);
-
-        // Create disk identity - returns None if vendor/model cannot be resolved
-        let identity = DiskIdentity::new(vendor, model, size_bytes, transport);
-
-        // Check if removable
-        let removable = read_u64(&sysfs_base.join("removable")).unwrap_or(0) == 1;
+        let transport = detect_transport_type(&dev.name, &dev.sysfs_path);
 
         // Determine boot confidence
-        let disk_path = format!("/dev/{}", dev_name);
+        let disk_path = dev.dev_path.to_string_lossy().to_string();
         let boot_confidence = if !boot_detection_succeeded {
             BootConfidence::Unknown
         } else if boot_device.as_deref() == Some(disk_path.as_str()) {
@@ -174,10 +198,21 @@ pub fn scan_disks() -> Vec<DiskInfo> {
             BootConfidence::NotBoot
         };
 
+        let identity = DiskIdentity::new(
+            dev.vendor,
+            dev.model,
+            dev.serial,
+            dev.wwn,
+            dev.size_bytes,
+            transport,
+        );
+        let stable_id = identity.stable_id(&disk_path);
+
         disks.push(DiskInfo {
             identity,
+            stable_id,
             path: disk_path.clone(),
-            removable,
+            removable: dev.removable,
             boot_confidence,
             is_source_disk: source_disk.as_deref() == Some(disk_path.as_str()),
         });
@@ -186,7 +221,6 @@ pub fn scan_disks() -> Vec<DiskInfo> {
     disks
 }
 
-/// Build human-readable disk identity - never returns just device name
 /// Detect transport type from device name and sysfs path
 fn detect_transport_type(dev_name: &str, sysfs_base: &Path) -> TransportType {
     // Check device name patterns first
@@ -563,26 +597,6 @@ fn parse_version_edition(name: &str) -> (String, String) {
     (version, edition)
 }
 
-fn should_skip_block_device(name: &str) -> bool {
-    name.starts_with("loop")
-        || name.starts_with("ram")
-        || name.starts_with("sr")
-        || name.starts_with("fd")
-        || name.starts_with("zram")
-        || name.starts_with("dm-")
-}
-
-fn read_trimmed(path: &Path) -> Option<String> {
-    fs::read_to_string(path)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-fn read_u64(path: &Path) -> Option<u64> {
-    read_trimmed(path).and_then(|value| value.parse::<u64>().ok())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -647,38 +661,6 @@ mod tests {
         assert_eq!(base_block_device("/sys/block/sda"), None);
         assert_eq!(base_block_device("sda1"), None);
         assert_eq!(base_block_device(""), None);
-    }
-
-    #[test]
-    fn should_skip_loop_devices() {
-        assert!(should_skip_block_device("loop0"));
-        assert!(should_skip_block_device("loop1"));
-    }
-
-    #[test]
-    fn should_skip_ram_devices() {
-        assert!(should_skip_block_device("ram0"));
-        assert!(should_skip_block_device("ram1"));
-    }
-
-    #[test]
-    fn should_skip_optical_drives() {
-        assert!(should_skip_block_device("sr0"));
-        assert!(should_skip_block_device("sr1"));
-    }
-
-    #[test]
-    fn should_skip_device_mapper() {
-        assert!(should_skip_block_device("dm-0"));
-        assert!(should_skip_block_device("dm-1"));
-    }
-
-    #[test]
-    fn should_not_skip_valid_disks() {
-        assert!(!should_skip_block_device("sda"));
-        assert!(!should_skip_block_device("sdb"));
-        assert!(!should_skip_block_device("nvme0n1"));
-        assert!(!should_skip_block_device("mmcblk0"));
     }
 
     #[test]

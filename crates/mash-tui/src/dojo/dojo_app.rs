@@ -32,7 +32,8 @@ pub enum StepState {
 
 #[derive(Debug, Clone)]
 pub struct DiskOption {
-    pub identity: Option<super::data_sources::DiskIdentity>, // None = identity failed
+    pub identity: super::data_sources::DiskIdentity,
+    pub stable_id: String,
     pub path: String,
     pub removable: bool,
     pub boot_confidence: super::data_sources::BootConfidence,
@@ -368,6 +369,7 @@ pub struct App {
     pub backup_choice_index: usize,
     pub welcome_options: Vec<String>,
     pub welcome_index: usize,
+    use_real_disks: bool,
     pub disks: Vec<DiskOption>,
     pub disk_index: usize,
     pub disk_confirm_index: usize,
@@ -460,7 +462,8 @@ impl App {
         });
         let flags = data_sources::data_flags();
         let _boot_device = data_sources::boot_device_path();
-        let real_disks = if flags.disks {
+        let use_real_disks = flags.disks;
+        let real_disks = if use_real_disks {
             data_sources::scan_disks()
         } else {
             Vec::new()
@@ -471,9 +474,12 @@ impl App {
                     identity: data_sources::DiskIdentity::new(
                         Some("SanDisk".to_string()),
                         Some("Ultra".to_string()),
+                        None,
+                        None,
                         32 * 1024 * 1024 * 1024,
                         data_sources::TransportType::Usb,
                     ),
+                    stable_id: "mock:sandisk-ultra-usb".to_string(),
                     path: "/dev/sda".to_string(),
                     removable: true,
                     boot_confidence: data_sources::BootConfidence::NotBoot,
@@ -483,9 +489,12 @@ impl App {
                     identity: data_sources::DiskIdentity::new(
                         Some("Samsung".to_string()),
                         Some("980".to_string()),
+                        None,
+                        None,
                         512 * 1024 * 1024 * 1024,
                         data_sources::TransportType::Nvme,
                     ),
+                    stable_id: "mock:samsung-980-nvme".to_string(),
                     path: "/dev/nvme0n1".to_string(),
                     removable: false,
                     boot_confidence: data_sources::BootConfidence::Confident,
@@ -497,6 +506,7 @@ impl App {
                 .into_iter()
                 .map(|disk| DiskOption {
                     identity: disk.identity,
+                    stable_id: disk.stable_id,
                     path: disk.path,
                     removable: disk.removable,
                     boot_confidence: disk.boot_confidence,
@@ -592,6 +602,7 @@ impl App {
                 "Review Dojo steps".to_string(),
             ],
             welcome_index: 0,
+            use_real_disks,
             disks,
             disk_index: default_disk_index,
             disk_confirm_index: 0,
@@ -834,6 +845,10 @@ impl App {
             .unwrap_or(false);
 
         match key.code {
+            KeyCode::Char('r') => {
+                self.rescan_disks();
+                InputResult::Continue
+            }
             KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
                 self.adjust_disk_index(-1);
                 InputResult::Continue
@@ -843,17 +858,6 @@ impl App {
                 InputResult::Continue
             }
             KeyCode::Enter => {
-                // CRITICAL: Block installation if disk identity cannot be resolved
-                if let Some(disk) = self.disks.get(self.disk_index) {
-                    if disk.identity.is_none() {
-                        self.error_message = Some(
-                            "❌ IDENTITY FAILED: Cannot proceed with this disk. Hardware vendor/model could not be resolved. Select a different disk."
-                                .to_string(),
-                        );
-                        return InputResult::Continue;
-                    }
-                }
-
                 if protected && !self.developer_mode {
                     self.error_message = Some(
                         "🛑 This disk is the source/boot media and cannot be selected. Re-run with --developer-mode to override (dangerous)."
@@ -938,6 +942,15 @@ impl App {
                 InputResult::Continue
             }
             KeyCode::Enter => {
+                // Disk topology can change while the TUI is open; rescan before allowing a
+                // destructive transition so we don't target a disconnected/re-enumerated device.
+                if self.use_real_disks {
+                    self.rescan_disks();
+                    if self.disks.is_empty() {
+                        return InputResult::Continue;
+                    }
+                }
+
                 if self.wipe_confirmation == required_text {
                     self.error_message = None;
                     self.wipe_confirmation.clear();
@@ -1419,6 +1432,69 @@ impl App {
         }
     }
 
+    fn rescan_disks(&mut self) {
+        if !self.use_real_disks {
+            return;
+        }
+
+        let selected = self
+            .disks
+            .get(self.disk_index)
+            .map(|disk| disk.stable_id.clone());
+
+        let mut disks = data_sources::scan_disks()
+            .into_iter()
+            .map(|disk| DiskOption {
+                identity: disk.identity,
+                stable_id: disk.stable_id,
+                path: disk.path,
+                removable: disk.removable,
+                boot_confidence: disk.boot_confidence,
+                is_source_disk: disk.is_source_disk,
+            })
+            .collect::<Vec<_>>();
+
+        // Deterministic ordering in case kernel enumeration changes.
+        disks.sort_by(|a, b| a.path.cmp(&b.path));
+
+        if disks.is_empty() {
+            self.disks.clear();
+            self.disk_index = 0;
+            self.error_message =
+                Some("No disks detected. Insert a target disk and press r.".to_string());
+            return;
+        }
+
+        // Preserve selection if possible.
+        let mut next_index = selected
+            .as_ref()
+            .and_then(|id| disks.iter().position(|d| &d.stable_id == id))
+            .unwrap_or(0);
+
+        // If the preserved selection is protected, prefer a safe target unless developer-mode.
+        if !self.developer_mode {
+            if let Some(disk) = disks.get(next_index) {
+                let protected = disk.boot_confidence.is_boot() || disk.is_source_disk;
+                if protected {
+                    if let Some(idx) = disks.iter().position(|d| {
+                        !(d.boot_confidence.is_boot() || d.is_source_disk) && d.removable
+                    }) {
+                        next_index = idx;
+                    } else if let Some(idx) = disks
+                        .iter()
+                        .position(|d| !(d.boot_confidence.is_boot() || d.is_source_disk))
+                    {
+                        next_index = idx;
+                    }
+                }
+            }
+        }
+
+        self.disks = disks;
+        self.disk_index = next_index.min(self.disks.len().saturating_sub(1));
+        self.error_message = None;
+    }
+
     fn toggle_backup_choice(&mut self) {
         self.backup_choice_index = if self.backup_choice_index == 0 { 1 } else { 0 };
     }
@@ -1747,15 +1823,13 @@ impl App {
             }
         };
 
-        let disk_identity = self.disks.get(self.disk_index).and_then(|disk| {
-            disk.identity
-                .as_ref()
-                .map(|id| mash_core::install_report::DiskIdentityReport {
-                    vendor: Some(id.vendor.clone()),
-                    model: Some(id.model.clone()),
-                    transport: Some(id.transport.hint().to_string()),
-                    size_bytes: Some(id.size_bytes),
-                })
+        let disk_identity = self.disks.get(self.disk_index).map(|disk| {
+            mash_core::install_report::DiskIdentityReport {
+                vendor: disk.identity.vendor.clone(),
+                model: disk.identity.model.clone(),
+                transport: Some(disk.identity.transport.hint().to_string()),
+                size_bytes: Some(disk.identity.size_bytes),
+            }
         });
 
         Some(TuiFlashConfig {
@@ -1977,6 +2051,35 @@ mod tests {
         }
     }
 
+    fn disk_option(
+        path: &str,
+        vendor: &str,
+        model: &str,
+        size_bytes: u64,
+        transport: data_sources::TransportType,
+        removable: bool,
+        boot_confidence: data_sources::BootConfidence,
+        is_source_disk: bool,
+    ) -> DiskOption {
+        let identity = data_sources::DiskIdentity::new(
+            Some(vendor.to_string()),
+            Some(model.to_string()),
+            None,
+            None,
+            size_bytes,
+            transport,
+        );
+        let stable_id = identity.stable_id(path);
+        DiskOption {
+            identity,
+            stable_id,
+            path: path.to_string(),
+            removable,
+            boot_confidence,
+            is_source_disk,
+        }
+    }
+
     #[test]
     fn tab_cycles_partition_scheme() {
         let mut app = App::new();
@@ -2039,23 +2142,19 @@ mod tests {
 
     #[test]
     fn disk_confirmation_requires_destroy() {
-        use super::data_sources::{BootConfidence, TransportType};
-
         let mut app = App::new();
         app.current_step_type = InstallStepType::DiskConfirmation;
         // Set up non-boot disk
-        app.disks = vec![DiskOption {
-            identity: data_sources::DiskIdentity::new(
-                Some("Generic".to_string()),
-                Some("Data Drive".to_string()),
-                512 * 1024 * 1024 * 1024,
-                TransportType::Sata,
-            ),
-            path: "/dev/sdb".to_string(),
-            removable: false,
-            boot_confidence: BootConfidence::NotBoot,
-            is_source_disk: false,
-        }];
+        app.disks = vec![disk_option(
+            "/dev/sdb",
+            "Generic",
+            "Data Drive",
+            512 * 1024 * 1024 * 1024,
+            data_sources::TransportType::Sata,
+            false,
+            data_sources::BootConfidence::NotBoot,
+            false,
+        )];
         app.disk_index = 0;
 
         for ch in "DESTROY".chars() {
@@ -2068,23 +2167,19 @@ mod tests {
 
     #[test]
     fn boot_disk_confirmation_requires_stronger_text() {
-        use super::data_sources::{BootConfidence, TransportType};
-
         let mut app = App::new();
         app.current_step_type = InstallStepType::DiskConfirmation;
         // Set up boot disk
-        app.disks = vec![DiskOption {
-            identity: data_sources::DiskIdentity::new(
-                Some("Generic".to_string()),
-                Some("Boot Drive".to_string()),
-                256 * 1024 * 1024 * 1024,
-                TransportType::Sata,
-            ),
-            path: "/dev/sda".to_string(),
-            removable: false,
-            boot_confidence: BootConfidence::Confident,
-            is_source_disk: false,
-        }];
+        app.disks = vec![disk_option(
+            "/dev/sda",
+            "Generic",
+            "Boot Drive",
+            256 * 1024 * 1024 * 1024,
+            data_sources::TransportType::Sata,
+            false,
+            data_sources::BootConfidence::Confident,
+            false,
+        )];
         app.disk_index = 0;
 
         // Regular DESTROY should not work for boot disk
@@ -2312,46 +2407,38 @@ mod tests {
 
     #[test]
     fn app_prefers_removable_media_when_safe() {
-        use super::data_sources::{BootConfidence, TransportType};
-
         // Create app-like disk list
         let disks = [
-            DiskOption {
-                identity: data_sources::DiskIdentity::new(
-                    Some("Samsung".to_string()),
-                    Some("980".to_string()),
-                    512 * 1024 * 1024 * 1024,
-                    TransportType::Nvme,
-                ),
-                path: "/dev/nvme0n1".to_string(),
-                removable: false,
-                boot_confidence: BootConfidence::Confident,
-                is_source_disk: false,
-            },
-            DiskOption {
-                identity: data_sources::DiskIdentity::new(
-                    Some("Seagate".to_string()),
-                    Some("BarraCuda".to_string()),
-                    2 * 1024 * 1024 * 1024 * 1024,
-                    TransportType::Sata,
-                ),
-                path: "/dev/sda".to_string(),
-                removable: false,
-                boot_confidence: BootConfidence::NotBoot,
-                is_source_disk: false,
-            },
-            DiskOption {
-                identity: data_sources::DiskIdentity::new(
-                    Some("SanDisk".to_string()),
-                    Some("Ultra".to_string()),
-                    32 * 1024 * 1024 * 1024,
-                    TransportType::Usb,
-                ),
-                path: "/dev/sdb".to_string(),
-                removable: true,
-                boot_confidence: BootConfidence::NotBoot,
-                is_source_disk: false,
-            },
+            disk_option(
+                "/dev/nvme0n1",
+                "Samsung",
+                "980",
+                512 * 1024 * 1024 * 1024,
+                data_sources::TransportType::Nvme,
+                false,
+                data_sources::BootConfidence::Confident,
+                false,
+            ),
+            disk_option(
+                "/dev/sda",
+                "Seagate",
+                "BarraCuda",
+                2 * 1024 * 1024 * 1024 * 1024,
+                data_sources::TransportType::Sata,
+                false,
+                data_sources::BootConfidence::NotBoot,
+                false,
+            ),
+            disk_option(
+                "/dev/sdb",
+                "SanDisk",
+                "Ultra",
+                32 * 1024 * 1024 * 1024,
+                data_sources::TransportType::Usb,
+                true,
+                data_sources::BootConfidence::NotBoot,
+                false,
+            ),
         ];
 
         // Simulate the auto-selection logic
@@ -2373,37 +2460,31 @@ mod tests {
 
     #[test]
     fn disk_selection_prevents_selecting_boot_disk() {
-        use super::data_sources::{BootConfidence, TransportType};
-
         let mut app = App::new();
         app.current_step_type = InstallStepType::DiskSelection;
 
         // Set up test disks: boot disk at index 0, safe disk at index 1
         app.disks = vec![
-            DiskOption {
-                identity: data_sources::DiskIdentity::new(
-                    Some("Generic".to_string()),
-                    Some("Boot Drive".to_string()),
-                    256 * 1024 * 1024 * 1024,
-                    TransportType::Sata,
-                ),
-                path: "/dev/sda".to_string(),
-                removable: false,
-                boot_confidence: BootConfidence::Confident,
-                is_source_disk: false,
-            },
-            DiskOption {
-                identity: data_sources::DiskIdentity::new(
-                    Some("Generic".to_string()),
-                    Some("Data Drive".to_string()),
-                    512 * 1024 * 1024 * 1024,
-                    TransportType::Sata,
-                ),
-                path: "/dev/sdb".to_string(),
-                removable: false,
-                boot_confidence: BootConfidence::NotBoot,
-                is_source_disk: false,
-            },
+            disk_option(
+                "/dev/sda",
+                "Generic",
+                "Boot Drive",
+                256 * 1024 * 1024 * 1024,
+                data_sources::TransportType::Sata,
+                false,
+                data_sources::BootConfidence::Confident,
+                false,
+            ),
+            disk_option(
+                "/dev/sdb",
+                "Generic",
+                "Data Drive",
+                512 * 1024 * 1024 * 1024,
+                data_sources::TransportType::Sata,
+                false,
+                data_sources::BootConfidence::NotBoot,
+                false,
+            ),
         ];
 
         // Should initialize to index 1 (first non-boot)
@@ -2427,24 +2508,20 @@ mod tests {
 
     #[test]
     fn disk_selection_blocks_protected_disk_without_developer_mode() {
-        use super::data_sources::{BootConfidence, TransportType};
-
         let mut app = App::new();
         app.current_step_type = InstallStepType::DiskSelection;
 
         // Set up protected (boot/source) disk
-        app.disks = vec![DiskOption {
-            identity: data_sources::DiskIdentity::new(
-                Some("Generic".to_string()),
-                Some("Boot Drive".to_string()),
-                256 * 1024 * 1024 * 1024,
-                TransportType::Sata,
-            ),
-            path: "/dev/sda".to_string(),
-            removable: false,
-            boot_confidence: BootConfidence::Confident,
-            is_source_disk: true,
-        }];
+        app.disks = vec![disk_option(
+            "/dev/sda",
+            "Generic",
+            "Boot Drive",
+            256 * 1024 * 1024 * 1024,
+            data_sources::TransportType::Sata,
+            false,
+            data_sources::BootConfidence::Confident,
+            true,
+        )];
 
         app.disk_index = 0;
 
@@ -2458,24 +2535,20 @@ mod tests {
 
     #[test]
     fn disk_selection_allows_protected_disk_in_developer_mode() {
-        use super::data_sources::{BootConfidence, TransportType};
-
         let mut app = App::new();
         app.current_step_type = InstallStepType::DiskSelection;
         app.developer_mode = true;
 
-        app.disks = vec![DiskOption {
-            identity: data_sources::DiskIdentity::new(
-                Some("Generic".to_string()),
-                Some("Boot Drive".to_string()),
-                256 * 1024 * 1024 * 1024,
-                TransportType::Sata,
-            ),
-            path: "/dev/sda".to_string(),
-            removable: false,
-            boot_confidence: BootConfidence::Confident,
-            is_source_disk: true,
-        }];
+        app.disks = vec![disk_option(
+            "/dev/sda",
+            "Generic",
+            "Boot Drive",
+            256 * 1024 * 1024 * 1024,
+            data_sources::TransportType::Sata,
+            false,
+            data_sources::BootConfidence::Confident,
+            true,
+        )];
         app.disk_index = 0;
 
         app.handle_input(key(KeyCode::Enter));
@@ -2484,24 +2557,20 @@ mod tests {
 
     #[test]
     fn disk_selection_allows_non_boot_disk() {
-        use super::data_sources::{BootConfidence, TransportType};
-
         let mut app = App::new();
         app.current_step_type = InstallStepType::DiskSelection;
 
         // Set up non-boot disk
-        app.disks = vec![DiskOption {
-            identity: data_sources::DiskIdentity::new(
-                Some("Generic".to_string()),
-                Some("Data Drive".to_string()),
-                512 * 1024 * 1024 * 1024,
-                TransportType::Sata,
-            ),
-            path: "/dev/sdb".to_string(),
-            removable: false,
-            boot_confidence: BootConfidence::NotBoot,
-            is_source_disk: false,
-        }];
+        app.disks = vec![disk_option(
+            "/dev/sdb",
+            "Generic",
+            "Data Drive",
+            512 * 1024 * 1024 * 1024,
+            data_sources::TransportType::Sata,
+            false,
+            data_sources::BootConfidence::NotBoot,
+            false,
+        )];
 
         app.disk_index = 0;
 
@@ -2515,60 +2584,50 @@ mod tests {
 
     #[test]
     fn adjust_disk_index_skips_boot_disks() {
-        use super::data_sources::{BootConfidence, TransportType};
-
         let mut app = App::new();
 
         // Set up mixed disks: boot, safe, boot, safe
         app.disks = vec![
-            DiskOption {
-                identity: data_sources::DiskIdentity::new(
-                    Some("Generic".to_string()),
-                    Some("Disk 1".to_string()),
-                    256 * 1024 * 1024 * 1024,
-                    TransportType::Sata,
-                ),
-                path: "/dev/sda".to_string(),
-                removable: false,
-                boot_confidence: BootConfidence::Confident,
-                is_source_disk: false,
-            },
-            DiskOption {
-                identity: data_sources::DiskIdentity::new(
-                    Some("Generic".to_string()),
-                    Some("Safe Disk 1".to_string()),
-                    512 * 1024 * 1024 * 1024,
-                    TransportType::Sata,
-                ),
-                path: "/dev/sdb".to_string(),
-                removable: false,
-                boot_confidence: BootConfidence::NotBoot,
-                is_source_disk: false,
-            },
-            DiskOption {
-                identity: data_sources::DiskIdentity::new(
-                    Some("Generic".to_string()),
-                    Some("Disk 2".to_string()),
-                    128 * 1024 * 1024 * 1024,
-                    TransportType::Sata,
-                ),
-                path: "/dev/sdc".to_string(),
-                removable: false,
-                boot_confidence: BootConfidence::Confident,
-                is_source_disk: false,
-            },
-            DiskOption {
-                identity: data_sources::DiskIdentity::new(
-                    Some("Generic".to_string()),
-                    Some("Safe Disk 2".to_string()),
-                    1024 * 1024 * 1024 * 1024,
-                    TransportType::Sata,
-                ),
-                path: "/dev/sdd".to_string(),
-                removable: false,
-                boot_confidence: BootConfidence::NotBoot,
-                is_source_disk: false,
-            },
+            disk_option(
+                "/dev/sda",
+                "Generic",
+                "Disk 1",
+                256 * 1024 * 1024 * 1024,
+                data_sources::TransportType::Sata,
+                false,
+                data_sources::BootConfidence::Confident,
+                false,
+            ),
+            disk_option(
+                "/dev/sdb",
+                "Generic",
+                "Safe Disk 1",
+                512 * 1024 * 1024 * 1024,
+                data_sources::TransportType::Sata,
+                false,
+                data_sources::BootConfidence::NotBoot,
+                false,
+            ),
+            disk_option(
+                "/dev/sdc",
+                "Generic",
+                "Disk 2",
+                128 * 1024 * 1024 * 1024,
+                data_sources::TransportType::Sata,
+                false,
+                data_sources::BootConfidence::Confident,
+                false,
+            ),
+            disk_option(
+                "/dev/sdd",
+                "Generic",
+                "Safe Disk 2",
+                1024 * 1024 * 1024 * 1024,
+                data_sources::TransportType::Sata,
+                false,
+                data_sources::BootConfidence::NotBoot,
+                false,
+            ),
         ];
 
         app.disk_index = 1; // Start on first safe disk

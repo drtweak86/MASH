@@ -244,11 +244,7 @@ fn build_info_panel(app: &App, progress_state: &ProgressState) -> String {
 
     // Disk selection
     if let Some(disk) = app.disks.get(app.disk_index) {
-        if let Some(ref identity) = disk.identity {
-            lines.push(format!("Disk: {}", identity.display_string()));
-        } else {
-            lines.push(format!("Disk: {}", disk.path));
-        }
+        lines.push(format!("Disk: {}", disk.identity.display_string()));
     }
 
     // Partition scheme
@@ -354,15 +350,7 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
             let disk = app.disks.get(app.disk_index);
             if let Some(disk) = disk {
                 let is_boot_disk = disk.boot_confidence.is_boot() || disk.is_source_disk;
-                let disk_info = match &disk.identity {
-                    Some(identity) => identity.display_string(),
-                    None => {
-                        items.push("❌ IDENTITY FAILED - Cannot proceed".to_string());
-                        items.push("Disk identity could not be resolved.".to_string());
-                        items.push("Press Esc to go back and select a different disk.".to_string());
-                        return items;
-                    }
-                };
+                let disk_info = disk.identity.display_string();
 
                 if is_boot_disk {
                     items.push("⚠️⚠️⚠️ CRITICAL WARNING: BOOT DISK SELECTED ⚠️⚠️⚠️".to_string());
@@ -673,11 +661,11 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                 PathBuf::from(app.uefi_source_path.clone())
             };
             if let Some(disk) = app.disks.get(app.disk_index) {
-                let disk_info = match &disk.identity {
-                    Some(identity) => identity.display_string(),
-                    None => "❌ IDENTITY FAILED".to_string(),
-                };
-                items.push(format!("Disk: {} - {}", disk.path, disk_info));
+                items.push(format!(
+                    "Disk: {} - {}",
+                    disk.path,
+                    disk.identity.display_string()
+                ));
             }
             if let Some(distro) = app.os_distros.get(app.os_distro_index) {
                 items.push(format!("Distro: {}", distro.display()));
@@ -770,11 +758,11 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                 items.push(format!("Flavour: {}", variant.label));
             }
             if let Some(disk) = app.disks.get(app.disk_index) {
-                let disk_info = match &disk.identity {
-                    Some(identity) => identity.display_string(),
-                    None => "❌ IDENTITY FAILED".to_string(),
-                };
-                items.push(format!("Disk: {} - {}", disk.path, disk_info));
+                items.push(format!(
+                    "Disk: {} - {}",
+                    disk.path,
+                    disk.identity.display_string()
+                ));
             }
             if let Some(scheme) = app.partition_schemes.get(app.scheme_index) {
                 items.push(format!("Scheme: {}", scheme));
@@ -933,10 +921,7 @@ fn build_plan_lines(app: &super::dojo_app::App) -> Vec<String> {
     }
 
     if let Some(disk) = app.disks.get(app.disk_index) {
-        let disk_info = match &disk.identity {
-            Some(identity) => identity.display_string(),
-            None => "❌ IDENTITY FAILED".to_string(),
-        };
+        let disk_info = disk.identity.display_string();
         lines.push(format!("Disk: {} - {}", disk.path, disk_info));
     } else {
         lines.push("Disk: <not selected>".to_string());
@@ -1005,13 +990,7 @@ fn format_disk_entry(disk: &super::dojo_app::DiskOption) -> String {
     use super::data_sources::BootConfidence;
 
     // CRITICAL: Use DiskIdentity::display_string() exclusively - no UI-side reconstruction
-    let identity_str = match &disk.identity {
-        Some(identity) => identity.display_string(),
-        None => {
-            // Identity resolution failed - show error (should be blocked from selection)
-            return format!("{} - ❌ IDENTITY FAILED - Cannot proceed", disk.path);
-        }
-    };
+    let identity_str = disk.identity.display_string();
 
     // Build tags
     let mut tags = Vec::new();
