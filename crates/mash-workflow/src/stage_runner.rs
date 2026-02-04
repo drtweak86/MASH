@@ -1,16 +1,19 @@
 use anyhow::Result;
+use mash_core::state_manager::StageName;
 
 pub type StageFn<'a, S> = Box<dyn Fn(&mut S, bool) -> Result<()> + 'a>;
 
 pub struct StageDefinition<'a, S> {
-    pub name: &'a str,
+    pub name: StageName,
     pub run: StageFn<'a, S>,
 }
 
 pub trait WorkflowState {
-    fn is_completed(&self, stage: &str) -> bool;
-    fn set_current(&mut self, stage: &str);
-    fn mark_completed(&mut self, stage: &str);
+    fn is_completed(&self, stage: &StageName) -> bool;
+    fn set_current(&mut self, stage: &StageName);
+    fn mark_completed(&mut self, stage: &StageName);
+    fn ensure_armed(&self) -> Result<()>;
+    fn arm_execute(&mut self);
 }
 
 pub trait StateStore<S>: Send + Sync {
@@ -23,6 +26,7 @@ pub struct StageRunner<S, Store> {
     dry_run: bool,
     persist: bool,
     init_state: Box<dyn Fn(bool) -> S + Send + Sync>,
+    require_armed: bool,
 }
 
 impl<S, Store> StageRunner<S, Store>
@@ -40,6 +44,7 @@ where
             dry_run,
             persist: true,
             init_state: Box::new(init_state),
+            require_armed: false,
         }
     }
 
@@ -54,7 +59,13 @@ where
             dry_run,
             persist,
             init_state: Box::new(init_state),
+            require_armed: false,
         }
+    }
+
+    pub fn with_require_armed(mut self, require: bool) -> Self {
+        self.require_armed = require;
+        self
     }
 
     pub fn run(&self, stages: &[StageDefinition<'_, S>]) -> Result<S> {
@@ -63,18 +74,29 @@ where
             .load()?
             .unwrap_or_else(|| (self.init_state)(self.dry_run));
 
+        if self.require_armed {
+            // first-run: arm state so subsequent resumes stay armed
+            state.arm_execute();
+            if self.persist {
+                self.store.save(&state)?;
+            }
+        }
+
         for stage in stages {
-            if state.is_completed(stage.name) {
+            if self.require_armed {
+                state.ensure_armed()?;
+            }
+            if state.is_completed(&stage.name) {
                 continue;
             }
-            state.set_current(stage.name);
+            state.set_current(&stage.name);
             if self.persist {
                 self.store.save(&state)?;
             }
 
             (stage.run)(&mut state, self.dry_run)?;
 
-            state.mark_completed(stage.name);
+            state.mark_completed(&stage.name);
             if self.persist {
                 self.store.save(&state)?;
             }
@@ -87,13 +109,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mash_core::state_manager::StageName;
     use std::collections::BTreeSet;
     use std::sync::{Arc, Mutex};
 
     #[derive(Debug, Clone, Default)]
     struct TestState {
-        current: Option<String>,
-        completed: BTreeSet<String>,
+        current: Option<StageName>,
+        completed: BTreeSet<StageName>,
         dry_run: bool,
     }
 
@@ -108,17 +131,23 @@ mod tests {
     }
 
     impl WorkflowState for TestState {
-        fn is_completed(&self, stage: &str) -> bool {
+        fn is_completed(&self, stage: &StageName) -> bool {
             self.completed.contains(stage)
         }
 
-        fn set_current(&mut self, stage: &str) {
-            self.current = Some(stage.to_string());
+        fn set_current(&mut self, stage: &StageName) {
+            self.current = Some(stage.clone());
         }
 
-        fn mark_completed(&mut self, stage: &str) {
-            self.completed.insert(stage.to_string());
+        fn mark_completed(&mut self, stage: &StageName) {
+            self.completed.insert(stage.clone());
         }
+
+        fn ensure_armed(&self) -> Result<()> {
+            Ok(())
+        }
+
+        fn arm_execute(&mut self) {}
     }
 
     #[derive(Clone, Default)]
@@ -141,7 +170,9 @@ mod tests {
         store
             .save(&TestState {
                 current: None,
-                completed: ["stage-1".to_string()].into_iter().collect(),
+                completed: [StageName::Other("stage-1".to_string())]
+                    .into_iter()
+                    .collect(),
                 dry_run: false,
             })
             .unwrap();
@@ -152,14 +183,14 @@ mod tests {
 
         let stages = vec![
             StageDefinition {
-                name: "stage-1",
+                name: StageName::Other("stage-1".into()),
                 run: Box::new(move |_state, _dry_run| {
                     calls_stage_1.lock().unwrap().push("stage-1".to_string());
                     Ok(())
                 }),
             },
             StageDefinition {
-                name: "stage-2",
+                name: StageName::Other("stage-2".into()),
                 run: Box::new(move |_state, _dry_run| {
                     calls_stage_2.lock().unwrap().push("stage-2".to_string());
                     Ok(())
@@ -171,9 +202,13 @@ mod tests {
         let final_state = runner.run(&stages).unwrap();
 
         assert_eq!(calls.lock().unwrap().as_slice(), &["stage-2"]);
-        assert!(final_state.is_completed("stage-1"));
-        assert!(final_state.is_completed("stage-2"));
-        assert!(store.load().unwrap().unwrap().is_completed("stage-2"));
+        assert!(final_state.is_completed(&StageName::Other("stage-1".into())));
+        assert!(final_state.is_completed(&StageName::Other("stage-2".into())));
+        assert!(store
+            .load()
+            .unwrap()
+            .unwrap()
+            .is_completed(&StageName::Other("stage-2".into())));
     }
 
     #[test]
@@ -188,13 +223,13 @@ mod tests {
     fn runner_can_disable_persistence() {
         let store = MemStore::<TestState>::default();
         let stages = vec![StageDefinition {
-            name: "stage-1",
+            name: StageName::Other("stage-1".into()),
             run: Box::new(|_state, _dry_run| Ok(())),
         }];
 
         let runner = StageRunner::new_with_persist(store.clone(), false, false, TestState::new);
         let state = runner.run(&stages).unwrap();
-        assert!(state.is_completed("stage-1"));
+        assert!(state.is_completed(&StageName::Other("stage-1".into())));
         assert!(store.load().unwrap().is_none());
     }
 }

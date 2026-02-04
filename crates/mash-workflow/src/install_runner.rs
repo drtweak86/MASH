@@ -1,5 +1,5 @@
 use anyhow::Result;
-use mash_core::state_manager::{load_state, save_state_atomic, InstallState};
+use mash_core::state_manager::{load_state, save_state_atomic, InstallState, StageName};
 use std::path::PathBuf;
 
 use crate::stage_runner as wf;
@@ -23,16 +23,24 @@ impl wf::StateStore<InstallState> for InstallStateFileStore {
 }
 
 impl wf::WorkflowState for InstallState {
-    fn is_completed(&self, stage: &str) -> bool {
+    fn is_completed(&self, stage: &StageName) -> bool {
         self.is_completed(stage)
     }
 
-    fn set_current(&mut self, stage: &str) {
+    fn set_current(&mut self, stage: &StageName) {
         self.set_current(stage);
     }
 
-    fn mark_completed(&mut self, stage: &str) {
+    fn mark_completed(&mut self, stage: &StageName) {
         self.mark_completed(stage);
+    }
+
+    fn ensure_armed(&self) -> anyhow::Result<()> {
+        self.ensure_armed()
+    }
+
+    fn arm_execute(&mut self) {
+        self.arm_execute()
     }
 }
 
@@ -53,6 +61,11 @@ impl StageRunner {
         Self {
             inner: wf::StageRunner::new_with_persist(store, dry_run, persist, InstallState::new),
         }
+    }
+
+    pub fn with_require_armed(mut self, require: bool) -> Self {
+        self.inner = self.inner.with_require_armed(require);
+        self
     }
 
     pub fn run(&self, stages: &[StageDefinition<'_>]) -> Result<InstallState> {
