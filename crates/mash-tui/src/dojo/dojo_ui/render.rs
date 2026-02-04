@@ -1,11 +1,13 @@
 use super::super::dojo_app::App;
-use super::content::{build_dojo_lines, build_info_panel, expected_actions, status_message};
+use super::content::{
+    build_dojo_lines, build_info_panel, expected_actions, help_overlay_text, status_message,
+};
 use super::sidebar::build_step_sidebar;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
@@ -101,4 +103,45 @@ pub fn draw(f: &mut Frame, app: &App) {
     let legend =
         Paragraph::new(legend_text).block(Block::default().borders(Borders::ALL).title("Keys"));
     f.render_widget(legend, main_chunks[3]);
+
+    // Help overlay modal (global).
+    if app.help_open {
+        let overlay_area = centered_rect(70, 70, f.area());
+        f.render_widget(Clear, overlay_area);
+        let content = help_overlay_text(app.current_step_type);
+        let help = Paragraph::new(content)
+            .wrap(Wrap { trim: true })
+            .block(Block::default().borders(Borders::ALL).title("Help"));
+        f.render_widget(help, overlay_area);
+    }
+}
+
+fn centered_rect(
+    percent_x: u16,
+    percent_y: u16,
+    r: ratatui::layout::Rect,
+) -> ratatui::layout::Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(
+            [
+                Constraint::Percentage((100 - percent_y) / 2),
+                Constraint::Percentage(percent_y),
+                Constraint::Percentage((100 - percent_y) / 2),
+            ]
+            .as_ref(),
+        )
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(
+            [
+                Constraint::Percentage((100 - percent_x) / 2),
+                Constraint::Percentage(percent_x),
+                Constraint::Percentage((100 - percent_x) / 2),
+            ]
+            .as_ref(),
+        )
+        .split(popup_layout[1])[1]
 }
