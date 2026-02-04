@@ -4,6 +4,7 @@
 //! both real (LinuxHal) and fake (FakeHal) implementations.
 
 pub mod btrfs_ops;
+pub mod copy_ops;
 pub mod fake_hal;
 pub mod flash_ops;
 pub mod format_ops;
@@ -18,6 +19,7 @@ pub mod rsync_ops;
 pub mod system_ops;
 
 pub use btrfs_ops::BtrfsOps;
+pub use copy_ops::{CopyOps, CopyOptions, CopyProgress};
 pub use fake_hal::{FakeHal, Operation};
 pub use flash_ops::{FlashOps, FlashOptions};
 pub use format_ops::{FormatOps, FormatOptions};

@@ -4,11 +4,12 @@
 //! allowing for CI-safe testing without root privileges or real hardware.
 
 use super::{
-    BtrfsOps, FlashOps, FormatOps, FormatOptions, HostInfoOps, LoopOps, MountOps, MountOptions,
-    OsReleaseInfo, PartedOp, PartedOptions, PartitionOps, ProbeOps, ProcessOps, RsyncOps,
-    RsyncOptions, SystemOps, WipeFsOptions,
+    BtrfsOps, CopyOps, CopyOptions, CopyProgress, FlashOps, FormatOps, FormatOptions, HostInfoOps,
+    LoopOps, MountOps, MountOptions, OsReleaseInfo, PartedOp, PartedOptions, PartitionOps,
+    ProbeOps, ProcessOps, RsyncOps, RsyncOptions, SystemOps, WipeFsOptions,
 };
 use crate::{HalError, HalResult};
+use nix::libc;
 use std::collections::HashSet;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
@@ -65,10 +66,15 @@ pub enum Operation {
     BtrfsSubvolumeCreate {
         path: PathBuf,
     },
+    CopyTree {
+        src: PathBuf,
+        dst: PathBuf,
+    },
     Rsync {
         src: PathBuf,
         dst: PathBuf,
     },
+    InjectedFailure(&'static str),
     LsblkMountpoints {
         disk: PathBuf,
     },
@@ -92,6 +98,16 @@ struct FakeHalState {
     operations: Vec<Operation>,
     /// Currently mounted paths
     mounted_paths: HashSet<PathBuf>,
+    /// Optional injected failure for deterministic testing.
+    failure: Option<InjectedFailure>,
+}
+
+#[derive(Debug, Clone)]
+pub enum InjectedFailure {
+    DiskFull,
+    PermissionDenied,
+    MidCopy { after_bytes: u64 },
+    OutOfMemory,
 }
 
 /// Fake HAL implementation that records operations without executing them.
@@ -108,6 +124,11 @@ impl FakeHal {
         Self {
             state: Arc::new(Mutex::new(FakeHalState::default())),
         }
+    }
+
+    /// Configure a deterministic failure for the next operation.
+    pub fn set_failure(&self, failure: InjectedFailure) {
+        self.state.lock().unwrap().failure = Some(failure);
     }
 
     /// Get all recorded operations.
@@ -130,6 +151,7 @@ impl FakeHal {
         let mut state = self.state.lock().unwrap();
         state.operations.clear();
         state.mounted_paths.clear();
+        state.failure = None;
     }
 
     /// Simulate a mount by adding it to the mounted set.
@@ -144,6 +166,20 @@ impl FakeHal {
 
     fn record_operation(&self, op: Operation) {
         self.state.lock().unwrap().operations.push(op);
+    }
+
+    fn take_failure(&self) -> Option<InjectedFailure> {
+        self.state.lock().unwrap().failure.take()
+    }
+
+    fn take_failure_if(&self, pred: impl Fn(&InjectedFailure) -> bool) -> bool {
+        let mut state = self.state.lock().unwrap();
+        if state.failure.as_ref().is_some_and(&pred) {
+            state.failure.take();
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -230,6 +266,10 @@ impl MountOps for FakeHal {
         _options: MountOptions,
         dry_run: bool,
     ) -> HalResult<()> {
+        if self.take_failure_if(|f| matches!(f, InjectedFailure::PermissionDenied)) {
+            self.record_operation(Operation::InjectedFailure("permission_denied"));
+            return Err(HalError::PermissionDenied);
+        }
         if dry_run {
             log::info!(
                 "FAKE HAL DRY RUN: mount {} -> {}",
@@ -290,6 +330,11 @@ impl FormatOps for FakeHal {
             return Err(HalError::SafetyLock);
         }
 
+        if self.take_failure_if(|f| matches!(f, InjectedFailure::PermissionDenied)) {
+            self.record_operation(Operation::InjectedFailure("permission_denied"));
+            return Err(HalError::PermissionDenied);
+        }
+
         if opts.dry_run {
             log::info!("FAKE HAL DRY RUN: mkfs.ext4 {}", device.display());
             return Ok(());
@@ -309,6 +354,11 @@ impl FormatOps for FakeHal {
             return Err(HalError::SafetyLock);
         }
 
+        if self.take_failure_if(|f| matches!(f, InjectedFailure::PermissionDenied)) {
+            self.record_operation(Operation::InjectedFailure("permission_denied"));
+            return Err(HalError::PermissionDenied);
+        }
+
         if opts.dry_run {
             log::info!("FAKE HAL DRY RUN: mkfs.btrfs {}", device.display());
             return Ok(());
@@ -326,6 +376,11 @@ impl FormatOps for FakeHal {
     fn format_vfat(&self, device: &Path, label: &str, opts: &FormatOptions) -> HalResult<()> {
         if !opts.dry_run && !opts.confirmed {
             return Err(HalError::SafetyLock);
+        }
+
+        if self.take_failure_if(|f| matches!(f, InjectedFailure::PermissionDenied)) {
+            self.record_operation(Operation::InjectedFailure("permission_denied"));
+            return Err(HalError::PermissionDenied);
         }
 
         if opts.dry_run {
@@ -476,6 +531,55 @@ impl BtrfsOps for FakeHal {
     }
 }
 
+impl CopyOps for FakeHal {
+    fn copy_tree_native(
+        &self,
+        src: &Path,
+        dst: &Path,
+        _opts: &CopyOptions,
+        on_progress: &mut dyn FnMut(CopyProgress) -> bool,
+    ) -> HalResult<()> {
+        if let Some(failure) = self.take_failure() {
+            match failure {
+                InjectedFailure::DiskFull => {
+                    self.record_operation(Operation::InjectedFailure("disk_full"));
+                    return Err(HalError::Io(std::io::Error::from_raw_os_error(
+                        libc::ENOSPC,
+                    )));
+                }
+                InjectedFailure::PermissionDenied => {
+                    self.record_operation(Operation::InjectedFailure("permission_denied"));
+                    return Err(HalError::PermissionDenied);
+                }
+                InjectedFailure::MidCopy { after_bytes } => {
+                    self.record_operation(Operation::InjectedFailure("mid_copy"));
+                    let progress = CopyProgress {
+                        bytes_copied: after_bytes,
+                        bytes_total: after_bytes.saturating_add(1),
+                        files_copied: 1,
+                        files_total: 2,
+                    };
+                    let _ = on_progress(progress);
+                    return Err(HalError::Io(std::io::Error::from(
+                        std::io::ErrorKind::WriteZero,
+                    )));
+                }
+                InjectedFailure::OutOfMemory => {
+                    self.record_operation(Operation::InjectedFailure("out_of_memory"));
+                    return Err(HalError::Other("out of memory".to_string()));
+                }
+            }
+        }
+
+        self.record_operation(Operation::CopyTree {
+            src: src.to_path_buf(),
+            dst: dst.to_path_buf(),
+        });
+        let _ = on_progress(CopyProgress::default());
+        Ok(())
+    }
+}
+
 impl RsyncOps for FakeHal {
     fn rsync_stream_stdout(
         &self,
@@ -603,5 +707,64 @@ mod tests {
         hal.clear();
 
         assert_eq!(hal.operation_count(), 0);
+    }
+
+    #[test]
+    fn injected_disk_full_errors_copy() {
+        let hal = FakeHal::new();
+        hal.set_failure(InjectedFailure::DiskFull);
+        let err = hal
+            .copy_tree_native(
+                Path::new("/src"),
+                Path::new("/dst"),
+                &CopyOptions::archive(),
+                &mut |_p| true,
+            )
+            .unwrap_err();
+        assert!(matches!(err, HalError::Io(e) if e.raw_os_error() == Some(libc::ENOSPC)));
+        assert!(hal.has_operation(|op| matches!(op, Operation::InjectedFailure("disk_full"))));
+    }
+
+    #[test]
+    fn injected_permission_denied_blocks_format() {
+        let hal = FakeHal::new();
+        hal.set_failure(InjectedFailure::PermissionDenied);
+        let err = hal
+            .format_ext4(Path::new("/dev/sdz1"), &FormatOptions::new(false, true))
+            .unwrap_err();
+        assert!(matches!(err, HalError::PermissionDenied));
+        assert!(
+            hal.has_operation(|op| matches!(op, Operation::InjectedFailure("permission_denied")))
+        );
+    }
+
+    #[test]
+    fn injected_mid_copy_triggers_write_zero() {
+        let hal = FakeHal::new();
+        hal.set_failure(InjectedFailure::MidCopy { after_bytes: 1024 });
+        let err = hal
+            .copy_tree_native(
+                Path::new("/src"),
+                Path::new("/dst"),
+                &CopyOptions::archive(),
+                &mut |_p| true,
+            )
+            .unwrap_err();
+        assert!(matches!(err, HalError::Io(e) if e.kind() == std::io::ErrorKind::WriteZero));
+    }
+
+    #[test]
+    fn injected_oom_returns_error() {
+        let hal = FakeHal::new();
+        hal.set_failure(InjectedFailure::OutOfMemory);
+        let err = hal
+            .copy_tree_native(
+                Path::new("/src"),
+                Path::new("/dst"),
+                &CopyOptions::archive(),
+                &mut |_p| true,
+            )
+            .unwrap_err();
+        assert!(matches!(err, HalError::Other(msg) if msg.contains("out of memory")));
     }
 }
