@@ -7,12 +7,17 @@ use super::{
 };
 use crate::{HalError, HalResult};
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use wait_timeout::ChildExt;
+#[cfg(unix)]
+use {
+    std::ffi::CString, std::os::unix::ffi::OsStrExt, std::os::unix::fs::FileTypeExt,
+    std::os::unix::io::AsRawFd,
+};
 
 /// Real HAL implementation for Linux systems.
 #[derive(Debug, Clone, Default)]
@@ -106,12 +111,61 @@ impl ProcessOps for LinuxHal {
 }
 
 const FORMAT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-const WIPEFS_TIMEOUT: Duration = Duration::from_secs(60);
 const PARTED_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-const LOSETUP_TIMEOUT: Duration = Duration::from_secs(30);
 const BTRFS_TIMEOUT: Duration = Duration::from_secs(60);
 const RSYNC_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 const RSYNC_MAX_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
+
+// Loop ioctl constants (from linux/loop.h)
+const LOOP_CTL_GET_FREE: libc::c_ulong = 0x4C82;
+const LOOP_SET_FD: libc::c_ulong = 0x4C00;
+const LOOP_CLR_FD: libc::c_ulong = 0x4C01;
+const LOOP_SET_STATUS64: libc::c_ulong = 0x4C04;
+const LO_NAME_SIZE: usize = 64;
+const LO_KEY_SIZE: usize = 32;
+const LO_FLAGS_AUTOCLEAR: u32 = 1 << 2;
+const LO_FLAGS_PARTSCAN: u32 = 1 << 3;
+
+// Block ioctl constants
+const BLKRRPART: libc::c_ulong = 0x125f;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct LoopInfo64 {
+    lo_device: u64,
+    lo_inode: u64,
+    lo_rdevice: u64,
+    lo_offset: u64,
+    lo_sizelimit: u64,
+    lo_number: u32,
+    lo_encrypt_type: u32,
+    lo_encrypt_key_size: u32,
+    lo_flags: u32,
+    lo_file_name: [u8; LO_NAME_SIZE],
+    lo_crypt_name: [u8; LO_NAME_SIZE],
+    lo_encrypt_key: [u8; LO_KEY_SIZE],
+    lo_init: [u64; 2],
+}
+
+impl Default for LoopInfo64 {
+    fn default() -> Self {
+        LoopInfo64 {
+            lo_device: 0,
+            lo_inode: 0,
+            lo_rdevice: 0,
+            lo_offset: 0,
+            lo_sizelimit: 0,
+            lo_number: 0,
+            lo_encrypt_type: 0,
+            lo_encrypt_key_size: 0,
+            lo_flags: 0,
+            lo_file_name: [0; LO_NAME_SIZE],
+            lo_crypt_name: [0; LO_NAME_SIZE],
+            lo_encrypt_key: [0; LO_KEY_SIZE],
+            lo_init: [0; 2],
+        }
+    }
+}
 
 fn map_command_err(program: &str, err: std::io::Error) -> HalError {
     if err.kind() == std::io::ErrorKind::NotFound {
@@ -501,12 +555,27 @@ impl PartitionOps for LinuxHal {
             return Err(HalError::SafetyLock);
         }
 
-        let mut cmd = Command::new("wipefs");
-        cmd.args(["-a"]).arg(disk);
-        let output = output_with_timeout("wipefs", &mut cmd, WIPEFS_TIMEOUT)?;
-        if !output.status.success() {
-            return Err(output_failed("wipefs", &output));
+        let mut file = fs::OpenOptions::new().read(true).write(true).open(disk)?;
+
+        zero_region(&mut file, 0, 1 << 20)?; // first 1 MiB
+
+        if let Ok(len) = file.metadata().map(|m| m.len()) {
+            if len > (1 << 20) {
+                let tail_start = len.saturating_sub(1 << 20);
+                zero_region(&mut file, tail_start, 1 << 20)?;
+            }
         }
+
+        // Best-effort partition table re-read for block devices.
+        if file
+            .metadata()
+            .ok()
+            .map(|m| m.file_type().is_block_device())
+            .unwrap_or(false)
+        {
+            unsafe { libc::ioctl(file.as_raw_fd(), BLKRRPART) };
+        }
+
         Ok(())
     }
 
@@ -566,29 +635,73 @@ impl PartitionOps for LinuxHal {
 
 impl LoopOps for LinuxHal {
     fn losetup_attach(&self, image: &Path, scan_partitions: bool) -> HalResult<String> {
-        let mut args = vec!["--show".to_string(), "-f".to_string()];
+        // Get a free loop device.
+        let ctl_path = CString::new("/dev/loop-control").unwrap();
+        let ctl_fd = unsafe { libc::open(ctl_path.as_ptr(), libc::O_RDONLY) };
+        if ctl_fd < 0 {
+            return Err(HalError::Io(io::Error::last_os_error()));
+        }
+        let loop_num = unsafe { libc::ioctl(ctl_fd, LOOP_CTL_GET_FREE, 0) };
+        unsafe { libc::close(ctl_fd) };
+        if loop_num < 0 {
+            return Err(HalError::Io(io::Error::last_os_error()));
+        }
+
+        let loop_path = format!("/dev/loop{}", loop_num);
+        let loop_file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&loop_path)?;
+        let img = fs::OpenOptions::new().read(true).open(image)?;
+
+        // Associate file descriptor.
+        let res = unsafe { libc::ioctl(loop_file.as_raw_fd(), LOOP_SET_FD, img.as_raw_fd()) };
+        if res != 0 {
+            return Err(HalError::Io(io::Error::last_os_error()));
+        }
+
+        // Configure flags.
+        let mut info = LoopInfo64 {
+            lo_flags: LO_FLAGS_AUTOCLEAR
+                | if scan_partitions {
+                    LO_FLAGS_PARTSCAN
+                } else {
+                    0
+                },
+            ..LoopInfo64::default()
+        };
+        if let Ok(cstr) = CString::new(image.as_os_str().as_bytes()) {
+            let bytes = cstr.as_bytes();
+            let len = bytes.len().min(LO_NAME_SIZE - 1);
+            info.lo_file_name[..len].copy_from_slice(&bytes[..len]);
+        }
+        let res = unsafe {
+            libc::ioctl(
+                loop_file.as_raw_fd(),
+                LOOP_SET_STATUS64,
+                &info as *const LoopInfo64,
+            )
+        };
+        if res != 0 {
+            return Err(HalError::Io(io::Error::last_os_error()));
+        }
+
+        // Trigger partition re-read if requested.
         if scan_partitions {
-            args.push("-P".to_string());
-        }
-        args.push(image.display().to_string());
-
-        let mut cmd = Command::new("losetup");
-        cmd.args(&args);
-        let output = output_with_timeout("losetup", &mut cmd, LOSETUP_TIMEOUT)?;
-
-        if !output.status.success() {
-            return Err(output_failed("losetup", &output));
+            let _ = unsafe { libc::ioctl(loop_file.as_raw_fd(), BLKRRPART, 0) };
         }
 
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        Ok(loop_path)
     }
 
     fn losetup_detach(&self, loop_device: &str) -> HalResult<()> {
-        let mut cmd = Command::new("losetup");
-        cmd.args(["-d", loop_device]);
-        let output = output_with_timeout("losetup", &mut cmd, LOSETUP_TIMEOUT)?;
-        if !output.status.success() {
-            return Err(output_failed("losetup", &output));
+        let fd = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(loop_device)?;
+        let res = unsafe { libc::ioctl(fd.as_raw_fd(), LOOP_CLR_FD, 0) };
+        if res != 0 {
+            return Err(HalError::Io(io::Error::last_os_error()));
         }
         Ok(())
     }
@@ -792,6 +905,19 @@ fn uuid_for_device_in(base: &Path, device: &Path) -> Option<String> {
     None
 }
 
+fn zero_region(file: &mut fs::File, offset: u64, length: u64) -> HalResult<()> {
+    file.seek(SeekFrom::Start(offset))?;
+    let chunk = [0u8; 4096];
+    let mut remaining = length;
+    while remaining > 0 {
+        let write_len = remaining.min(chunk.len() as u64);
+        file.write_all(&chunk[..write_len as usize])?;
+        remaining -= write_len;
+    }
+    file.flush()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -864,5 +990,23 @@ mod tests {
 
         let found = uuid_for_device_in(&by_uuid, &dev);
         assert_eq!(found.as_deref(), Some("UUID-TEST"));
+    }
+
+    #[test]
+    fn zero_region_overwrites_bytes() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("file.bin");
+        std::fs::write(&path, vec![0xAAu8; 8192]).unwrap();
+
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        zero_region(&mut file, 0, 4096).unwrap();
+
+        let data = std::fs::read(&path).unwrap();
+        assert!(data[..4096].iter().all(|b| *b == 0));
+        assert!(data[4096..].iter().all(|b| *b == 0xAA));
     }
 }
