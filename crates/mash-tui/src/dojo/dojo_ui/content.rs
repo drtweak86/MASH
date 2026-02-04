@@ -87,19 +87,23 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             ));
             items.push("".to_string());
             items.push("⌨️ Keys:".to_string());
-            items.push("  Enter — Proceed to OS selection".to_string());
-            items.push("  q — Quit installer".to_string());
+            items.push("  ↑/↓ or j/k — Move selection up/down".to_string());
+            items.push("  Space — Select/toggle current item".to_string());
+            items.push("  Enter or Tab — Continue".to_string());
+            items.push("  Esc — Quit".to_string());
+            items.push("  ? — Help".to_string());
             push_options(&mut items, &app.welcome_options, app.welcome_index);
         }
         InstallStepType::DiskSelection => {
             items.push("💽 Select a target disk:".to_string());
             items.push("".to_string());
             items.push("⌨️ Keys:".to_string());
-            items.push("  ↑/↓ or Tab — Move selection up/down".to_string());
-            items.push("  Enter — Confirm disk choice".to_string());
+            items.push("  ↑/↓ or j/k — Move selection up/down".to_string());
+            items.push("  Space — Select current disk".to_string());
+            items.push("  Enter or Tab — Continue".to_string());
+            items.push("  Esc — Go back".to_string());
+            items.push("  ? — Help".to_string());
             items.push("  r — Refresh disk list".to_string());
-            items.push("  Esc — Go back to previous step".to_string());
-            items.push("  q — Quit installer".to_string());
             items.push("".to_string());
 
             // Show warning banner if boot detection failed
@@ -162,15 +166,20 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                         disk.path, disk_info
                     ));
                     items.push("".to_string());
-                    items.push("Type 'DESTROY BOOT DISK' to confirm • Esc to go back.".to_string());
+                    items.push(
+                        "Type 'DESTROY BOOT DISK' to confirm, then press Enter/Tab • Esc to go back."
+                            .to_string(),
+                    );
                 } else {
                     items.push("⚠️ Confirm disk destruction:".to_string());
                     items.push("".to_string());
                     items.push(format!("TARGET TO BE WIPED: {} ({})", disk.path, disk_info));
                     items.push("".to_string());
                     items.push("⌨️ Keys:".to_string());
-                    items.push("  Type DESTROY (exactly) — Confirm and proceed".to_string());
+                    items.push("  Type DESTROY (exactly)".to_string());
+                    items.push("  Enter or Tab — Continue".to_string());
                     items.push("  Esc — Cancel and go back".to_string());
+                    items.push("  ? — Help".to_string());
                     items.push("".to_string());
                 }
 
@@ -184,10 +193,17 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::BackupConfirmation => {
             items.push("⚠️ This will erase data on the selected disk.".to_string());
-            items.push("💾 Have you backed up your data? (Y/N)".to_string());
+            items.push("💾 Have you backed up your data?".to_string());
             if app.backup_confirmed {
                 items.push("✅ Backup confirmed.".to_string());
             }
+            items.push("".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  ↑/↓ or j/k — Move selection up/down".to_string());
+            items.push("  Space — Select current item".to_string());
+            items.push("  Enter or Tab — Continue".to_string());
+            items.push("  Esc — Go back".to_string());
+            items.push("  ? — Help".to_string());
             push_options(
                 &mut items,
                 &[
@@ -204,9 +220,10 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("GPT: Modern standard, supports larger disks, UEFI-oriented".to_string());
             items.push("".to_string());
             items.push("⌨️ Keys:".to_string());
-            items.push("  ↑/↓ or Tab — Switch between MBR and GPT".to_string());
-            items.push("  Enter — Confirm choice".to_string());
+            items.push("  ↑/↓ or j/k — Switch between MBR and GPT".to_string());
+            items.push("  Enter or Tab — Continue".to_string());
             items.push("  Esc — Go back".to_string());
+            items.push("  ? — Help".to_string());
             let options = app
                 .partition_schemes
                 .iter()
@@ -232,24 +249,43 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 })
                 .collect::<Vec<_>>();
 
-            push_options(&mut items, &layout_options, app.layout_index);
+            let mut options = layout_options;
+            options.push("Customize manually".to_string());
+            push_options(&mut items, &options, app.layout_index);
 
             // Show detailed preview of selected layout
-            if let Some(layout) = app.partition_layouts.get(app.layout_index) {
+            if app.layout_index < app.partition_layouts.len() {
+                if let Some(layout) = app.partition_layouts.get(app.layout_index) {
+                    items.push("".to_string());
+                    items.push("Partition details:".to_string());
+                    items.extend(format_layout_preview(layout));
+                }
+            } else {
                 items.push("".to_string());
-                items.push("Partition details:".to_string());
-                items.extend(format_layout_preview(layout));
+                items.push(
+                    "Manual mode lets you edit partition sizes on the next screen.".to_string(),
+                );
             }
 
             items.push("".to_string());
-            items.push("⌨️ ↑/↓ or Tab to choose • Enter or Y to accept • M to customize manually • Esc to go back".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  ↑/↓ or j/k — Move selection up/down".to_string());
+            items.push("  Space — Select current item".to_string());
+            items.push("  Enter or Tab — Continue".to_string());
+            items.push("  Esc — Go back".to_string());
+            items.push("  ? — Help".to_string());
         }
         InstallStepType::PartitionCustomize => {
             items.push("🛠️ Customize partitions:".to_string());
-            items.push(
-                "Use Tab/↑/↓ to select • Type to edit • Backspace to delete • R to reset • Enter."
-                    .to_string(),
-            );
+            items.push("".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  ↑/↓ or j/k — Move selection up/down".to_string());
+            items.push("  Type — Edit selected field".to_string());
+            items.push("  Backspace — Delete".to_string());
+            items.push("  R — Reset defaults".to_string());
+            items.push("  Enter or Tab — Continue".to_string());
+            items.push("  Esc — Go back".to_string());
+            items.push("  ? — Help".to_string());
             let options = app
                 .partition_customizations
                 .iter()
@@ -275,8 +311,13 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::DownloadSourceSelection => {
             items.push("📥 Select image source:".to_string());
-            items
-                .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
+            items.push("".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  ↑/↓ or j/k — Move selection up/down".to_string());
+            items.push("  Space — Select current item".to_string());
+            items.push("  Enter or Tab — Continue".to_string());
+            items.push("  Esc — Go back".to_string());
+            items.push("  ? — Help".to_string());
             let options = app
                 .image_sources
                 .iter()
@@ -297,9 +338,11 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("🖼️ Select OS distribution:".to_string());
             items.push("".to_string());
             items.push("⌨️ Keys:".to_string());
-            items.push("  ↑/↓ or Tab — Move between OS options".to_string());
-            items.push("  Enter — Confirm OS choice".to_string());
+            items.push("  ↑/↓ or j/k — Move selection up/down".to_string());
+            items.push("  Space — Select current item".to_string());
+            items.push("  Enter or Tab — Continue".to_string());
             items.push("  Esc — Go back".to_string());
+            items.push("  ? — Help".to_string());
             items.push("".to_string());
 
             // Show OS distro options
@@ -318,9 +361,11 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("Choose the edition or desktop environment for your OS.".to_string());
             items.push("".to_string());
             items.push("⌨️ Keys:".to_string());
-            items.push("  ↑/↓ or Tab — Move between variants".to_string());
-            items.push("  Enter — Confirm variant choice".to_string());
+            items.push("  ↑/↓ or j/k — Move selection up/down".to_string());
+            items.push("  Space — Select current item".to_string());
+            items.push("  Enter or Tab — Continue".to_string());
             items.push("  Esc — Go back to OS selection".to_string());
+            items.push("  ? — Help".to_string());
             items.push("".to_string());
 
             if app.os_variants.is_empty() {
@@ -338,8 +383,13 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::EfiImage => {
             items.push("🧩 Choose how to get the EFI image:".to_string());
-            items
-                .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
+            items.push("".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  ↑/↓ or j/k — Move selection up/down".to_string());
+            items.push("  Space — Select current item".to_string());
+            items.push("  Enter or Tab — Continue".to_string());
+            items.push("  Esc — Go back".to_string());
+            items.push("  ? — Help".to_string());
 
             let uefi_source = app.uefi_sources.get(app.uefi_source_index);
             let is_local = matches!(uefi_source, Some(flash_config::EfiSource::LocalEfiImage));
@@ -363,9 +413,11 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("🗣️ Select locale and keymap:".to_string());
             items.push("".to_string());
             items.push("⌨️ Keys:".to_string());
-            items.push("  ↑/↓ or Tab — Browse locale options".to_string());
-            items.push("  Enter — Confirm locale choice".to_string());
+            items.push("  ↑/↓ or j/k — Move selection up/down".to_string());
+            items.push("  Space — Select current item".to_string());
+            items.push("  Enter or Tab — Continue".to_string());
             items.push("  Esc — Go back".to_string());
+            items.push("  ? — Help".to_string());
             items.push("".to_string());
             push_options(&mut items, &app.locales, app.locale_index);
         }
@@ -373,10 +425,11 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("⚙️ Installation options:".to_string());
             items.push("".to_string());
             items.push("⌨️ Keys:".to_string());
-            items.push("  ↑/↓ — Move between options".to_string());
-            items.push("  Space or Enter — Toggle option on/off".to_string());
-            items.push("  Enter (when done) — Proceed to review".to_string());
+            items.push("  ↑/↓ or j/k — Move selection up/down".to_string());
+            items.push("  Space — Toggle option on/off".to_string());
+            items.push("  Enter or Tab — Continue".to_string());
             items.push("  Esc — Go back".to_string());
+            items.push("  ? — Help".to_string());
             items.push("".to_string());
             let options = app
                 .options
@@ -393,8 +446,13 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
         }
         InstallStepType::FirstBootUser => {
             items.push("🧑‍💻 First-boot user setup:".to_string());
-            items
-                .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
+            items.push("".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  ↑/↓ or j/k — Move selection up/down".to_string());
+            items.push("  Space — Select current item".to_string());
+            items.push("  Enter or Tab — Continue".to_string());
+            items.push("  Esc — Go back".to_string());
+            items.push("  ? — Help".to_string());
             push_options(&mut items, &app.first_boot_options, app.first_boot_index);
         }
         InstallStepType::PlanReview => {
@@ -410,8 +468,9 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 items.push("".to_string());
             }
             items.push("⌨️ Keys:".to_string());
-            items.push("  Enter — Proceed to final confirmation".to_string());
+            items.push("  Enter or Tab — Continue".to_string());
             items.push("  Esc — Go back to modify settings".to_string());
+            items.push("  ? — Help".to_string());
         }
         InstallStepType::Confirmation => {
             items.push("✅ Final confirmation:".to_string());
@@ -430,8 +489,9 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 items.push("".to_string());
             }
             items.push("⌨️ Keys:".to_string());
-            items.push("  Enter — Continue".to_string());
+            items.push("  Enter or Tab — Continue".to_string());
             items.push("  Esc — Go back to review".to_string());
+            items.push("  ? — Help".to_string());
             items.push("".to_string());
             let effective_image = app
                 .downloaded_image_path
@@ -537,8 +597,9 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("".to_string());
             items.push("⌨️ Keys:".to_string());
             items.push("  Type phrase — Input must match exactly".to_string());
-            items.push("  Enter — Submit".to_string());
+            items.push("  Enter or Tab — Submit".to_string());
             items.push("  Esc — Cancel and go back".to_string());
+            items.push("  ? — Help".to_string());
             items.push("".to_string());
 
             // Repeat the destructive intent summary.
@@ -587,8 +648,9 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("".to_string());
             items.push("⌨️ Keys:".to_string());
             items.push("  Type DESTROY (exactly) — Disarm safe mode and ARM installer".to_string());
-            items.push("  Enter — Submit after typing DESTROY".to_string());
+            items.push("  Enter or Tab — Submit".to_string());
             items.push("  Esc — Cancel and go back".to_string());
+            items.push("  ? — Help".to_string());
             items.push("".to_string());
             items.push(format!("Input: {}", app.safe_mode_disarm_input));
             if let Some(error) = &app.error_message {
@@ -603,7 +665,13 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 "⬇️ Ready to simulate Fedora download."
             };
             items.push(status.to_string());
-            items.push("Use ↑/↓ to choose • Enter to continue • Esc to go back.".to_string());
+            items.push("".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  ↑/↓ or j/k — Move selection up/down".to_string());
+            items.push("  Space — Select current item".to_string());
+            items.push("  Enter or Tab — Continue".to_string());
+            items.push("  Esc — Go back".to_string());
+            items.push("  ? — Help".to_string());
             push_options(
                 &mut items,
                 &[
@@ -620,7 +688,13 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 "⬇️ Ready to simulate EFI download."
             };
             items.push(status.to_string());
-            items.push("Use ↑/↓ to choose • Enter to continue • Esc to go back.".to_string());
+            items.push("".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  ↑/↓ or j/k — Move selection up/down".to_string());
+            items.push("  Space — Select current item".to_string());
+            items.push("  Enter or Tab — Continue".to_string());
+            items.push("  Esc — Go back".to_string());
+            items.push("  ? — Help".to_string());
             push_options(
                 &mut items,
                 &[
@@ -653,6 +727,11 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 progress_state.eta_string()
             ));
             items.extend(progress_phase_lines(&progress_state));
+            items.push("".to_string());
+            items.push("⌨️ Keys:".to_string());
+            items.push("  Esc — Request cancellation (safe)".to_string());
+            items.push("  Enter or Tab — Continue when complete".to_string());
+            items.push("  ? — Help".to_string());
             push_options(&mut items, &["Viewing live telemetry".to_string()], 0);
         }
         InstallStepType::Complete => {
@@ -662,7 +741,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 items.extend(app.completion_lines.clone());
             }
             items.push("".to_string());
-            items.push("Press Enter to exit.".to_string());
+            items.push("Press Enter or Tab to exit.".to_string());
             push_options(&mut items, &["Exit installer".to_string()], 0);
         }
     }
@@ -745,36 +824,55 @@ fn build_plan_lines(app: &App) -> Vec<String> {
 }
 
 pub(super) fn expected_actions(step: InstallStepType) -> String {
+    let base =
+        "↑/↓ or j/k: move  Space: select/toggle  Enter/Tab: continue  Esc: back/quit  ?: help";
     match step {
-        InstallStepType::BackupConfirmation => "Up/Down, Y/N, Enter, Esc, q".to_string(),
-        InstallStepType::Flashing => "Enter when complete, C to cancel, q".to_string(),
-        InstallStepType::Complete => "Enter to exit".to_string(),
-        InstallStepType::DiskConfirmation => "Type DESTROY, Enter, Esc, q".to_string(),
-        InstallStepType::DownloadingFedora | InstallStepType::DownloadingUefi => {
-            "Up/Down, Enter, Esc, q".to_string()
+        InstallStepType::DiskConfirmation => format!("{base}  |  Type: DESTROY"),
+        InstallStepType::ExecuteConfirmationGate => {
+            format!("{base}  |  Type: I UNDERSTAND THIS WILL ERASE THE SELECTED DISK")
         }
-        InstallStepType::Options => "Up/Down, Space/Enter, Esc, q".to_string(),
-        InstallStepType::Welcome => "Up/Down, Enter, q".to_string(),
-        InstallStepType::PartitionLayout => {
-            "Up/Down/Tab, Enter/Y (accept), M (manual), Esc, q".to_string()
-        }
-        InstallStepType::PartitionScheme => "Up/Down/Tab, Enter, Esc, q".to_string(),
+        InstallStepType::DisarmSafeMode => format!("{base}  |  Type: DESTROY"),
         InstallStepType::PartitionCustomize => {
-            "Up/Down/Tab, Type, Backspace, R, Enter, Esc, q".to_string()
+            format!("{base}  |  Type: sizes  Backspace: delete  R: reset defaults")
         }
-        InstallStepType::PlanReview => "Enter, Esc, q".to_string(),
-        InstallStepType::Confirmation => "Enter, Esc, q".to_string(),
-        InstallStepType::ExecuteConfirmationGate => "Type EXACT phrase, Enter, Esc, q".to_string(),
-        InstallStepType::DisarmSafeMode => "Type DESTROY, Enter, Esc, q".to_string(),
-        InstallStepType::DiskSelection
-        | InstallStepType::ImageSelection
-        | InstallStepType::VariantSelection
-        | InstallStepType::LocaleSelection
-        | InstallStepType::FirstBootUser => "Up/Down/Tab, Enter, Esc, q".to_string(),
-        InstallStepType::DownloadSourceSelection | InstallStepType::EfiImage => {
-            "Up/Down/Tab, Type, Backspace, Enter, Esc, q".to_string()
-        }
+        _ => base.to_string(),
     }
+}
+
+pub(super) fn help_overlay_text(step: InstallStepType) -> String {
+    // Must reflect global bindings exactly.
+    let mut lines = Vec::new();
+    lines.push("Contextual Help".to_string());
+    lines.push("".to_string());
+    lines.push(format!("Screen: {}", step.title()));
+    lines.push("".to_string());
+    lines.push("Navigation: Arrow Keys / j k  -> Move selection up/down".to_string());
+    lines.push("Selection:  Space            -> Select / Toggle current item".to_string());
+    lines
+        .push("Continue:   Enter OR Tab     -> Continue to next screen / Confirm step".to_string());
+    lines.push("Back/Quit:  Esc              -> Quit installer (or go back if safe)".to_string());
+    lines.push("Help:       ?                -> Open contextual help overlay (modal)".to_string());
+    lines.push("".to_string());
+
+    match step {
+        InstallStepType::DiskConfirmation => {
+            lines.push("This step is destructive. Type the exact confirmation string.".to_string());
+            lines.push("Required: DESTROY".to_string());
+        }
+        InstallStepType::ExecuteConfirmationGate => {
+            lines.push("This step is destructive. Type the exact confirmation string.".to_string());
+            lines.push("Required: I UNDERSTAND THIS WILL ERASE THE SELECTED DISK".to_string());
+        }
+        InstallStepType::DisarmSafeMode => {
+            lines.push("Safe Mode is active. Disarm to enable disk writes.".to_string());
+            lines.push("Required: DESTROY".to_string());
+        }
+        _ => {}
+    }
+
+    lines.push("".to_string());
+    lines.push("Close: Esc or ?".to_string());
+    lines.join("\n")
 }
 
 fn format_disk_entry(disk: &DiskOption) -> String {

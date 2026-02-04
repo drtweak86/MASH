@@ -89,6 +89,8 @@ pub struct App {
     pub state_path: PathBuf,
     /// Completion messaging (post-install).
     pub completion_lines: Vec<String>,
+    /// Global help overlay (modal).
+    pub help_open: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,7 +102,6 @@ enum PendingDestructiveAction {
 enum ListAction {
     Advance,
     Back,
-    Quit,
     None,
 }
 
@@ -347,6 +348,7 @@ impl App {
             mash_root: PathBuf::from("."),
             state_path: PathBuf::from("state.json"),
             completion_lines: Vec::new(),
+            help_open: false,
         }
         .with_partition_defaults()
     }
@@ -367,6 +369,23 @@ impl App {
 
     // New: handle input for step advancement
     pub fn handle_input(&mut self, key: KeyEvent) -> InputResult {
+        // Global help overlay: modal that blocks underlying input.
+        if self.help_open {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('?') => {
+                    self.help_open = false;
+                }
+                _ => {}
+            }
+            return InputResult::Continue;
+        }
+
+        // Global help key.
+        if matches!(key.code, KeyCode::Char('?')) {
+            self.help_open = true;
+            return InputResult::Continue;
+        }
+
         match self.current_step_type {
             InstallStepType::Welcome => self.handle_welcome_input(key),
             InstallStepType::BackupConfirmation => self.handle_backup_confirmation_input(key),
@@ -423,29 +442,29 @@ impl App {
 
     fn handle_welcome_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
-            KeyCode::Up | KeyCode::Left => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 let len = self.welcome_options.len();
                 Self::adjust_index(len, &mut self.welcome_index, -1);
                 InputResult::Continue
             }
-            KeyCode::Down | KeyCode::Right => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 let len = self.welcome_options.len();
                 Self::adjust_index(len, &mut self.welcome_index, 1);
                 InputResult::Continue
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Tab => {
                 self.current_step_type = InstallStepType::DiskSelection;
                 self.error_message = None;
                 InputResult::Continue
             }
-            KeyCode::Esc | KeyCode::Char('q') => InputResult::Quit,
+            KeyCode::Esc => InputResult::Quit,
             _ => InputResult::Continue,
         }
     }
 
     fn handle_generic_config_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Tab => {
                 self.error_message = None;
                 self.go_next();
                 InputResult::Continue
@@ -454,32 +473,27 @@ impl App {
                 self.go_prev();
                 InputResult::Continue
             }
-            KeyCode::Char('q') => InputResult::Quit,
             _ => InputResult::Continue,
         }
     }
 
     fn handle_backup_confirmation_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
-            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => {
-                self.toggle_backup_choice();
+            KeyCode::Up | KeyCode::Char('k') => {
+                Self::adjust_index(2, &mut self.backup_choice_index, -1);
                 InputResult::Continue
             }
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                self.backup_confirmed = true;
-                self.backup_choice_index = 1;
+            KeyCode::Down | KeyCode::Char('j') => {
+                Self::adjust_index(2, &mut self.backup_choice_index, 1);
+                InputResult::Continue
+            }
+            KeyCode::Char(' ') => {
+                // Select current choice (but do not advance).
+                self.backup_confirmed = self.backup_choice_index == 1;
                 self.error_message = None;
-                self.go_next();
                 InputResult::Continue
             }
-            KeyCode::Char('n') | KeyCode::Char('N') => {
-                self.backup_confirmed = false;
-                self.backup_choice_index = 0;
-                self.error_message = Some("Backup confirmation required to proceed.".to_string());
-                self.go_prev();
-                InputResult::Continue
-            }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Tab => {
                 if self.backup_choice_index == 1 {
                     self.backup_confirmed = true;
                     self.error_message = None;
@@ -495,7 +509,6 @@ impl App {
                 self.go_prev();
                 InputResult::Continue
             }
-            KeyCode::Char('q') => InputResult::Quit,
             _ => InputResult::Continue,
         }
     }
@@ -512,15 +525,20 @@ impl App {
                 self.rescan_disks();
                 InputResult::Continue
             }
-            KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 self.adjust_disk_index(-1);
                 InputResult::Continue
             }
-            KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 self.adjust_disk_index(1);
                 InputResult::Continue
             }
-            KeyCode::Enter => {
+            KeyCode::Char(' ') => {
+                // Single-select list: selection is the current highlight.
+                self.error_message = None;
+                InputResult::Continue
+            }
+            KeyCode::Enter | KeyCode::Tab => {
                 if protected && !self.developer_mode {
                     self.error_message = Some(
                         "🛑 This disk is the source/boot media and cannot be selected. Re-run with --developer-mode to override (dangerous)."
@@ -533,41 +551,30 @@ impl App {
                 self.apply_list_action(ListAction::Advance)
             }
             KeyCode::Esc => self.apply_list_action(ListAction::Back),
-            KeyCode::Char('q') => self.apply_list_action(ListAction::Quit),
             _ => InputResult::Continue,
         }
     }
 
     fn handle_options_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
-            KeyCode::Up => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 let len = self.options.len();
                 Self::adjust_index(len, &mut self.options_index, -1);
                 InputResult::Continue
             }
-            KeyCode::Down => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 let len = self.options.len();
                 Self::adjust_index(len, &mut self.options_index, 1);
                 InputResult::Continue
             }
-            KeyCode::Char(' ') | KeyCode::Enter => {
+            KeyCode::Char(' ') => {
                 if let Some(option) = self.options.get_mut(self.options_index) {
                     option.enabled = !option.enabled;
                 }
                 InputResult::Continue
             }
-            KeyCode::Esc => {
-                self.go_prev();
-                InputResult::Continue
-            }
-            KeyCode::Char('q') => InputResult::Quit,
-            _ => InputResult::Continue,
-        }
-    }
-
-    fn handle_plan_review_input(&mut self, key: KeyEvent) -> InputResult {
-        match key.code {
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Tab => {
+                self.error_message = None;
                 self.go_next();
                 InputResult::Continue
             }
@@ -575,7 +582,20 @@ impl App {
                 self.go_prev();
                 InputResult::Continue
             }
-            KeyCode::Char('q') => InputResult::Quit,
+            _ => InputResult::Continue,
+        }
+    }
+
+    fn handle_plan_review_input(&mut self, key: KeyEvent) -> InputResult {
+        match key.code {
+            KeyCode::Enter | KeyCode::Tab => {
+                self.go_next();
+                InputResult::Continue
+            }
+            KeyCode::Esc => {
+                self.go_prev();
+                InputResult::Continue
+            }
             _ => InputResult::Continue,
         }
     }
@@ -604,7 +624,7 @@ impl App {
                 self.wipe_confirmation.pop();
                 InputResult::Continue
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Tab => {
                 // Disk topology can change while the TUI is open; rescan before allowing a
                 // destructive transition so we don't target a disconnected/re-enumerated device.
                 if self.use_real_disks {
@@ -635,14 +655,13 @@ impl App {
                 self.go_prev();
                 InputResult::Continue
             }
-            KeyCode::Char('q') => InputResult::Quit,
             _ => InputResult::Continue,
         }
     }
 
     fn handle_confirmation_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Tab => {
                 // WO-036: execute-mode requires an explicit typed confirmation gate.
                 if !self.dry_run && !self.execute_confirmation_confirmed {
                     self.execute_confirmation_input.clear();
@@ -656,7 +675,6 @@ impl App {
                 self.go_prev();
                 InputResult::Continue
             }
-            KeyCode::Char('q') => InputResult::Quit,
             _ => InputResult::Continue,
         }
     }
@@ -674,7 +692,7 @@ impl App {
                 self.execute_confirmation_input.pop();
                 InputResult::Continue
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Tab => {
                 if self.execute_confirmation_input == REQUIRED {
                     self.execute_confirmation_confirmed = true;
                     self.error_message = None;
@@ -693,7 +711,6 @@ impl App {
                 self.current_step_type = InstallStepType::Confirmation;
                 InputResult::Continue
             }
-            KeyCode::Char('q') => InputResult::Quit,
             _ => InputResult::Continue,
         }
     }
@@ -710,7 +727,7 @@ impl App {
                 self.safe_mode_disarm_input.pop();
                 InputResult::Continue
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Tab => {
                 if self.safe_mode_disarm_input == "DESTROY" {
                     self.destructive_armed = true;
                     self.error_message = None;
@@ -734,7 +751,6 @@ impl App {
                 self.current_step_type = InstallStepType::Confirmation;
                 InputResult::Continue
             }
-            KeyCode::Char('q') => InputResult::Quit,
             _ => InputResult::Continue,
         }
     }
@@ -773,15 +789,15 @@ impl App {
 
     fn handle_downloading_fedora_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
-            KeyCode::Up | KeyCode::Left => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 Self::adjust_index(2, &mut self.downloading_fedora_index, -1);
                 InputResult::Continue
             }
-            KeyCode::Down | KeyCode::Right => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 Self::adjust_index(2, &mut self.downloading_fedora_index, 1);
                 InputResult::Continue
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Tab => {
                 if self.downloading_fedora_index == 0 {
                     self.downloaded_fedora = true;
                     if self.requires_uefi_download() {
@@ -799,22 +815,21 @@ impl App {
                 self.go_prev();
                 InputResult::Continue
             }
-            KeyCode::Char('q') => InputResult::Quit,
             _ => InputResult::Continue,
         }
     }
 
     fn handle_downloading_uefi_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
-            KeyCode::Up | KeyCode::Left => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 Self::adjust_index(2, &mut self.downloading_uefi_index, -1);
                 InputResult::Continue
             }
-            KeyCode::Down | KeyCode::Right => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 Self::adjust_index(2, &mut self.downloading_uefi_index, 1);
                 InputResult::Continue
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Tab => {
                 if self.downloading_uefi_index == 0 {
                     self.downloaded_uefi = true;
                     self.start_flashing();
@@ -827,24 +842,23 @@ impl App {
                 self.go_prev();
                 InputResult::Continue
             }
-            KeyCode::Char('q') => InputResult::Quit,
             _ => InputResult::Continue,
         }
     }
 
     fn handle_os_distro_selection_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
-            KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 Self::adjust_index(self.os_distros.len(), &mut self.os_distro_index, -1);
                 self.refresh_os_variants();
                 InputResult::Continue
             }
-            KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 Self::adjust_index(self.os_distros.len(), &mut self.os_distro_index, 1);
                 self.refresh_os_variants();
                 InputResult::Continue
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Tab => {
                 self.error_message = None;
                 if self.os_variants.is_empty() {
                     self.error_message = Some(
@@ -856,22 +870,21 @@ impl App {
                 self.apply_list_action(ListAction::Advance)
             }
             KeyCode::Esc => self.apply_list_action(ListAction::Back),
-            KeyCode::Char('q') => self.apply_list_action(ListAction::Quit),
             _ => InputResult::Continue,
         }
     }
 
     fn handle_variant_selection_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
-            KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 Self::adjust_index(self.os_variants.len(), &mut self.os_variant_index, -1);
                 InputResult::Continue
             }
-            KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 Self::adjust_index(self.os_variants.len(), &mut self.os_variant_index, 1);
                 InputResult::Continue
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Tab => {
                 if self.os_variants.is_empty() {
                     self.error_message = Some(
                         "Missing metadata: no variants found for this OS. Cannot continue."
@@ -883,7 +896,6 @@ impl App {
                 self.apply_list_action(ListAction::Advance)
             }
             KeyCode::Esc => self.apply_list_action(ListAction::Back),
-            KeyCode::Char('q') => self.apply_list_action(ListAction::Quit),
             _ => InputResult::Continue,
         }
     }
@@ -897,11 +909,11 @@ impl App {
         // If local directory is selected, accept text input for path
         if is_local {
             match key.code {
-                KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
+                KeyCode::Up | KeyCode::Char('k') => {
                     Self::adjust_index(self.uefi_sources.len(), &mut self.uefi_source_index, -1);
                     InputResult::Continue
                 }
-                KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
+                KeyCode::Down | KeyCode::Char('j') => {
                     Self::adjust_index(self.uefi_sources.len(), &mut self.uefi_source_index, 1);
                     InputResult::Continue
                 }
@@ -913,24 +925,23 @@ impl App {
                     self.uefi_source_path.pop();
                     InputResult::Continue
                 }
-                KeyCode::Enter => self.apply_list_action(ListAction::Advance),
+                KeyCode::Enter | KeyCode::Tab => self.apply_list_action(ListAction::Advance),
                 KeyCode::Esc => self.apply_list_action(ListAction::Back),
                 _ => InputResult::Continue,
             }
         } else {
             // Download selected - simple navigation
             match key.code {
-                KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
+                KeyCode::Up | KeyCode::Char('k') => {
                     Self::adjust_index(self.uefi_sources.len(), &mut self.uefi_source_index, -1);
                     InputResult::Continue
                 }
-                KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
+                KeyCode::Down | KeyCode::Char('j') => {
                     Self::adjust_index(self.uefi_sources.len(), &mut self.uefi_source_index, 1);
                     InputResult::Continue
                 }
-                KeyCode::Enter => self.apply_list_action(ListAction::Advance),
+                KeyCode::Enter | KeyCode::Tab => self.apply_list_action(ListAction::Advance),
                 KeyCode::Esc => self.apply_list_action(ListAction::Back),
-                KeyCode::Char('q') => self.apply_list_action(ListAction::Quit),
                 _ => InputResult::Continue,
             }
         }
@@ -947,7 +958,6 @@ impl App {
                 self.go_prev();
                 InputResult::Continue
             }
-            ListAction::Quit => InputResult::Quit,
             ListAction::None => InputResult::Continue,
         }
     }
@@ -1035,17 +1045,16 @@ impl App {
 
     fn list_action(key: KeyEvent, len: usize, index: &mut usize) -> ListAction {
         match key.code {
-            KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 Self::adjust_index(len, index, -1);
                 ListAction::None
             }
-            KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 Self::adjust_index(len, index, 1);
                 ListAction::None
             }
-            KeyCode::Enter => ListAction::Advance,
+            KeyCode::Enter | KeyCode::Tab => ListAction::Advance,
             KeyCode::Esc => ListAction::Back,
-            KeyCode::Char('q') => ListAction::Quit,
             _ => ListAction::None,
         }
     }
@@ -1176,50 +1185,67 @@ impl App {
             .map(|state| state.is_complete)
             .unwrap_or(false);
         match key.code {
-            KeyCode::Char('c') | KeyCode::Char('C') => {
+            KeyCode::Esc => {
+                // Esc means "back/exit if safe". While flashing, it is not safe to exit, so we
+                // interpret Esc as a cancellation request.
                 self.cancel_requested
                     .store(true, std::sync::atomic::Ordering::Relaxed);
                 self.status_message = "🛑 Cancel requested...".to_string();
                 InputResult::Continue
             }
-            KeyCode::Enter if is_complete => {
+            KeyCode::Enter | KeyCode::Tab if is_complete => {
                 self.current_step_type = InstallStepType::Complete;
                 InputResult::Complete
             }
-            KeyCode::Char('q') => InputResult::Quit,
             _ => InputResult::Continue,
         }
     }
 
     fn handle_partition_layout_input(&mut self, key: KeyEvent) -> InputResult {
+        // Include a final option for "Customize manually" without mixing it into the layout
+        // strings (which are parsed for previews).
+        let len = self.partition_layouts.len() + 1;
         match key.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+            KeyCode::Up | KeyCode::Char('k') => {
+                Self::adjust_index(len, &mut self.layout_index, -1);
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                Self::adjust_index(len, &mut self.layout_index, 1);
+                InputResult::Continue
+            }
+            KeyCode::Char(' ') => {
+                // Single-select: highlight is the selection.
                 self.error_message = None;
-                // Accept selected layout and skip customization, go directly to EFI setup.
-                self.current_step_type = InstallStepType::EfiImage;
                 InputResult::Continue
             }
-            KeyCode::Char('m') | KeyCode::Char('M') | KeyCode::Char('n') | KeyCode::Char('N') => {
-                // Manual customization mode
-                self.current_step_type = InstallStepType::PartitionCustomize;
+            KeyCode::Enter | KeyCode::Tab => {
+                self.error_message = None;
+                // If the user selected a default layout, accept and proceed. If they selected the
+                // final option ("Customize manually"), enter the customization screen.
+                if self.layout_index < self.partition_layouts.len() {
+                    self.current_step_type = InstallStepType::EfiImage;
+                } else {
+                    self.current_step_type = InstallStepType::PartitionCustomize;
+                }
                 InputResult::Continue
             }
-            _ => {
-                let len = self.partition_layouts.len();
-                let action = Self::list_action(key, len, &mut self.layout_index);
-                self.apply_list_action(action)
+            KeyCode::Esc => {
+                self.go_prev();
+                InputResult::Continue
             }
+            _ => InputResult::Continue,
         }
     }
 
     fn handle_partition_customize_input(&mut self, key: KeyEvent) -> InputResult {
         match key.code {
-            KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 let len = self.partition_customizations.len();
                 Self::adjust_index(len, &mut self.customize_index, -1);
                 InputResult::Continue
             }
-            KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 let len = self.partition_customizations.len();
                 Self::adjust_index(len, &mut self.customize_index, 1);
                 InputResult::Continue
@@ -1240,7 +1266,7 @@ impl App {
                 }
                 InputResult::Continue
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Tab => {
                 match validate_partition_plan(&self.build_partition_plan()) {
                     Ok(()) => {
                         self.error_message = None;
@@ -1267,7 +1293,6 @@ impl App {
                 self.go_prev();
                 InputResult::Continue
             }
-            KeyCode::Char('q') => InputResult::Quit,
             _ => InputResult::Continue,
         }
     }
@@ -1282,15 +1307,15 @@ impl App {
                 self.image_source_path.pop();
                 InputResult::Continue
             }
-            KeyCode::Up | KeyCode::Left | KeyCode::BackTab => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 Self::adjust_index(len, &mut self.image_source_index, -1);
                 InputResult::Continue
             }
-            KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 Self::adjust_index(len, &mut self.image_source_index, 1);
                 InputResult::Continue
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Tab => {
                 self.error_message = None;
                 self.go_next();
                 InputResult::Continue
@@ -1299,7 +1324,6 @@ impl App {
                 self.go_prev();
                 InputResult::Continue
             }
-            KeyCode::Char('q') => InputResult::Quit,
             _ => InputResult::Continue,
         }
     }
@@ -1746,23 +1770,25 @@ mod tests {
     }
 
     #[test]
-    fn tab_cycles_partition_scheme() {
+    fn down_moves_partition_scheme_selection() {
         let mut app = App::new();
         app.current_step_type = InstallStepType::PartitionScheme;
         let initial = app.scheme_index;
-        app.handle_input(key(KeyCode::Tab));
+        app.handle_input(key(KeyCode::Down));
         assert_ne!(app.scheme_index, initial);
     }
 
     #[test]
-    fn partition_layout_accepts_yes_no() {
+    fn partition_layout_choose_recommended_or_manual() {
         let mut app = App::new();
         app.current_step_type = InstallStepType::PartitionLayout;
-        app.handle_input(key(KeyCode::Char('y')));
+        app.layout_index = 0;
+        app.handle_input(key(KeyCode::Enter));
         assert_eq!(app.current_step_type, InstallStepType::EfiImage);
 
         app.current_step_type = InstallStepType::PartitionLayout;
-        app.handle_input(key(KeyCode::Char('n')));
+        app.layout_index = app.partition_layouts.len();
+        app.handle_input(key(KeyCode::Enter));
         assert_eq!(app.current_step_type, InstallStepType::PartitionCustomize);
     }
 
@@ -1779,11 +1805,11 @@ mod tests {
     }
 
     #[test]
-    fn options_toggle_with_enter() {
+    fn options_toggle_with_space() {
         let mut app = App::new();
         app.current_step_type = InstallStepType::Options;
         let before = app.options[0].enabled;
-        app.handle_input(key(KeyCode::Enter));
+        app.handle_input(key(KeyCode::Char(' ')));
         assert_ne!(app.options[0].enabled, before);
     }
 
