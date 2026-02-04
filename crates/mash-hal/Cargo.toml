@@ -16,6 +16,7 @@ xz2 = "0.1"
 wait-timeout = "0.2"
 gpt = "3.1"
 mbrman = "0.6"
+fatfs = { version = "0.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tempfile = "3"
