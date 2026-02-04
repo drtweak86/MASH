@@ -1,9 +1,8 @@
 use anyhow::{Context, Result};
-use mash_hal::{ProcessOps, SystemOps};
+use mash_hal::{CopyOps, CopyOptions, LinuxHal, SystemOps};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::time::Duration;
 
 pub fn run(args: &[String]) -> Result<()> {
     let data_mount = args.first().map(String::as_str).unwrap_or("/mnt/data");
@@ -15,15 +14,14 @@ pub fn run(args: &[String]) -> Result<()> {
     log::info!("[*] Staging bootstrap into {}", dst.display());
     fs::create_dir_all(&dst)?;
 
-    let hal = mash_hal::LinuxHal::new();
-    let src_arg = format!("{}/", src_root);
-    let dst_arg = format!("{}/", dst.display());
-    hal.command_status(
-        "rsync",
-        &["-a", "--delete", src_arg.as_str(), dst_arg.as_str()],
-        Duration::from_secs(60 * 60),
+    let hal = LinuxHal::new();
+    hal.copy_tree_native(
+        Path::new(src_root),
+        &dst,
+        &CopyOptions::archive(),
+        &mut |_p| true,
     )
-    .context("rsync failed")?;
+    .context("copy failed")?;
 
     let mash_forge = dst.join("mash_forge.py");
     if mash_forge.exists() {

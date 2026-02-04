@@ -41,7 +41,6 @@ impl Default for PreflightConfig {
                 "mkfs.ext4".to_string(),
                 "mkfs.btrfs".to_string(),
                 "mount".to_string(),
-                "rsync".to_string(),
                 "systemctl".to_string(),
             ],
         }

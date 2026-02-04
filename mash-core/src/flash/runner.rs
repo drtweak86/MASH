@@ -7,6 +7,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 use tempfile::Builder as TempDirBuilder;
 
 use crate::cli::PartitionScheme;
@@ -15,8 +16,8 @@ use crate::install_report::{InstallReportWriter, RunMode, SelectionReport};
 use crate::locale::LocaleConfig;
 use crate::progress::{Phase, ProgressUpdate};
 use mash_hal::{
-    FlashOptions, FormatOptions, InstallerHal, LinuxHal, MountOptions, PartedOp, PartedOptions,
-    RsyncOptions, WipeFsOptions,
+    CopyOptions, FlashOptions, FormatOptions, InstallerHal, LinuxHal, MountOptions, PartedOp,
+    PartedOptions, WipeFsOptions,
 };
 
 pub fn flash_raw_image_to_disk(
@@ -210,7 +211,7 @@ fn run_full_loop_from_config(
         .context("failed to create secure temporary work directory")?;
     let work_dir = _work_dir_guard.path().to_path_buf();
 
-    // Normalize UEFI input into a directory suitable for VFAT-safe rsync.
+    // Normalize UEFI input into a directory suitable for VFAT-safe copy.
     // If a file is provided, stage it into a temp dir as RPI_EFI.fd.
     let effective_uefi_dir = if config.uefi_dir.is_file() {
         let staged = work_dir.join("uefi");
@@ -362,14 +363,14 @@ fn execute_copy_root_phase(
 ) -> Result<()> {
     ctx.check_cancel()?;
     ctx.start_phase(Phase::CopyRoot);
-    rsync_with_progress(
+    copy_with_progress(
         ctx,
         &mounts.src_root_subvol,
         &mounts.dst_root_subvol,
         "root subvol",
     )?;
     if subvols.has_home {
-        rsync_with_progress(
+        copy_with_progress(
             ctx,
             &mounts.src_home_subvol,
             &mounts.dst_home_subvol,
@@ -377,7 +378,7 @@ fn execute_copy_root_phase(
         )?;
     }
     if subvols.has_var {
-        rsync_with_progress(
+        copy_with_progress(
             ctx,
             &mounts.src_var_subvol,
             &mounts.dst_var_subvol,
@@ -391,7 +392,7 @@ fn execute_copy_root_phase(
 fn execute_copy_boot_phase(ctx: &FlashContext, mounts: &MountPoints) -> Result<()> {
     ctx.check_cancel()?;
     ctx.start_phase(Phase::CopyBoot);
-    rsync_with_progress(ctx, &mounts.src_boot, &mounts.dst_boot, "boot")?;
+    copy_with_progress(ctx, &mounts.src_boot, &mounts.dst_boot, "boot")?;
     ctx.complete_phase(Phase::CopyBoot);
     Ok(())
 }
@@ -400,13 +401,13 @@ fn execute_copy_efi_phase(ctx: &FlashContext, mounts: &MountPoints) -> Result<()
     ctx.check_cancel()?;
     ctx.start_phase(Phase::CopyEfi);
     // Copy Fedora EFI tree (safe for vfat)
-    rsync_vfat_safe(
+    copy_vfat_safe(
         ctx,
         &mounts.src_efi.join("EFI"),
         &mounts.dst_efi.join("EFI"),
     )?;
     // Copy UEFI firmware (LAST - overwrites any conflicts)
-    rsync_vfat_safe(ctx, &ctx.uefi_dir, &mounts.dst_efi)?;
+    copy_vfat_safe(ctx, &ctx.uefi_dir, &mounts.dst_efi)?;
     // Write config.txt
     write_config_txt(&mounts.dst_efi)?;
     ctx.complete_phase(Phase::CopyEfi);
@@ -941,94 +942,52 @@ fn create_dest_subvols(
 // Copy Functions
 // ============================================================================
 
-fn rsync_with_progress(ctx: &FlashContext, src: &Path, dst: &Path, label: &str) -> Result<()> {
+fn copy_with_progress(ctx: &FlashContext, src: &Path, dst: &Path, label: &str) -> Result<()> {
     ctx.status(&format!("📦 Copying {}...", label));
+    let started = Instant::now();
 
-    let mut on_line = |line: &str| -> bool {
+    let mut on_progress = |p: mash_hal::CopyProgress| -> bool {
         if cancel_requested() {
             return false;
         }
-        if let Some(progress) = parse_rsync_progress(line) {
-            ctx.send_progress(ProgressUpdate::RsyncProgress {
-                percent: progress.percent,
-                speed_mbps: progress.speed_mbps,
-                files_done: progress.files_done,
-                files_total: progress.files_total,
-            });
-        }
+
+        let percent = if p.bytes_total > 0 {
+            (p.bytes_copied as f64 / p.bytes_total as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let elapsed = started.elapsed().as_secs_f64();
+        let speed_mbps = if elapsed > 0.0 {
+            (p.bytes_copied as f64 / elapsed) / (1024.0 * 1024.0)
+        } else {
+            0.0
+        };
+
+        ctx.send_progress(ProgressUpdate::RsyncProgress {
+            percent,
+            speed_mbps,
+            files_done: p.files_copied,
+            files_total: p.files_total,
+        });
+
         true
     };
 
     ctx.hal
-        .rsync_stream_stdout(src, dst, &RsyncOptions::progress2_archive(), &mut on_line)
+        .copy_tree_native(src, dst, &CopyOptions::archive(), &mut on_progress)
         .map_err(anyhow::Error::new)
-        .with_context(|| format!("rsync failed for {}", label))?;
+        .with_context(|| format!("copy failed for {}", label))?;
     Ok(())
 }
-/// VFAT-safe rsync (no ownership/permissions)
-fn rsync_vfat_safe(ctx: &FlashContext, src: &Path, dst: &Path) -> Result<()> {
+
+/// VFAT-safe copy (no ownership/permissions)
+fn copy_vfat_safe(ctx: &FlashContext, src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
-    let mut on_line = |_line: &str| -> bool { true };
+    let mut on_progress = |_p: mash_hal::CopyProgress| -> bool { true };
     ctx.hal
-        .rsync_stream_stdout(src, dst, &RsyncOptions::vfat_safe(), &mut on_line)
+        .copy_tree_native(src, dst, &CopyOptions::vfat_safe(), &mut on_progress)
         .map_err(anyhow::Error::new)
-}
-
-struct RsyncProgress {
-    percent: f64,
-    speed_mbps: f64,
-    files_done: u64,
-    files_total: u64,
-}
-
-fn parse_rsync_progress(line: &str) -> Option<RsyncProgress> {
-    let percent_idx = line.find('%')?;
-    let percent_start = line[..percent_idx]
-        .rfind(char::is_whitespace)
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    let percent: f64 = line[percent_start..percent_idx].trim().parse().ok()?;
-
-    let speed_mbps = if let Some(speed_end) = line.find("/s") {
-        let speed_part = &line[..speed_end];
-        let speed_start = speed_part.rfind(char::is_whitespace).unwrap_or(0);
-        let speed_str = speed_part[speed_start..].trim();
-        let (value, mult) = if speed_str.ends_with("GB") {
-            (speed_str.trim_end_matches("GB"), 1024.0)
-        } else if speed_str.ends_with("MB") {
-            (speed_str.trim_end_matches("MB"), 1.0)
-        } else if speed_str.ends_with("kB") {
-            (speed_str.trim_end_matches("kB"), 0.001)
-        } else {
-            (speed_str, 0.000001)
-        };
-        value.parse::<f64>().unwrap_or(0.0) * mult
-    } else {
-        0.0
-    };
-
-    let (files_done, files_total) = if let Some(xfr_start) = line.find("xfr#") {
-        let xfr_end = line[xfr_start..].find(',').map(|i| i + xfr_start)?;
-        let done: u64 = line[xfr_start + 4..xfr_end].parse().ok()?;
-        if let Some(chk_start) = line.find("to-chk=") {
-            let chk_part = &line[chk_start + 7..];
-            let slash = chk_part.find('/')?;
-            let paren = chk_part.find(')')?;
-            let total: u64 = chk_part[slash + 1..paren].parse().ok()?;
-            (done, total)
-        } else {
-            (done, done)
-        }
-    } else {
-        (0, 0)
-    };
-
-    Some(RsyncProgress {
-        percent,
-        speed_mbps,
-        files_done,
-        files_total,
-    })
 }
 
 // ============================================================================

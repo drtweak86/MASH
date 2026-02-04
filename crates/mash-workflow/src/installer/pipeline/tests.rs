@@ -92,14 +92,7 @@ fn prepare_preflight_env(tmp: &TempDir) -> PreflightEnv {
     let env_lock = crate::test_env::lock();
     let bin_dir = tmp.path().join("bin");
     fs::create_dir_all(&bin_dir).unwrap();
-    for binary in &[
-        "dnf",
-        "mkfs.ext4",
-        "mkfs.btrfs",
-        "mount",
-        "rsync",
-        "systemctl",
-    ] {
+    for binary in &["dnf", "mkfs.ext4", "mkfs.btrfs", "mount", "systemctl"] {
         let path = bin_dir.join(binary);
         fs::write(&path, "#!/bin/sh\n").unwrap();
         #[cfg(unix)]

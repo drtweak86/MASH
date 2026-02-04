@@ -4,6 +4,7 @@
 //! both real (LinuxHal) and fake (FakeHal) implementations.
 
 pub mod btrfs_ops;
+pub mod copy_ops;
 pub mod fake_hal;
 pub mod flash_ops;
 pub mod format_ops;
@@ -14,10 +15,10 @@ pub mod mount_ops;
 pub mod partition_ops;
 pub mod probe_ops;
 pub mod process_ops;
-pub mod rsync_ops;
 pub mod system_ops;
 
 pub use btrfs_ops::BtrfsOps;
+pub use copy_ops::{CopyOps, CopyOptions, CopyProgress};
 pub use fake_hal::{FakeHal, Operation};
 pub use flash_ops::{FlashOps, FlashOptions};
 pub use format_ops::{FormatOps, FormatOptions};
@@ -28,7 +29,6 @@ pub use mount_ops::{MountOps, MountOptions};
 pub use partition_ops::{PartedOp, PartedOptions, PartitionOps, WipeFsOptions};
 pub use probe_ops::ProbeOps;
 pub use process_ops::ProcessOps;
-pub use rsync_ops::{RsyncOps, RsyncOptions};
 pub use system_ops::SystemOps;
 
 /// Complete HAL combining all system operation traits.
@@ -48,7 +48,7 @@ pub trait InstallerHal:
     + PartitionOps
     + LoopOps
     + BtrfsOps
-    + RsyncOps
+    + CopyOps
     + Send
     + Sync
 {
@@ -63,7 +63,7 @@ impl<T> InstallerHal for T where
         + PartitionOps
         + LoopOps
         + BtrfsOps
-        + RsyncOps
+        + CopyOps
         + Send
         + Sync
 {
