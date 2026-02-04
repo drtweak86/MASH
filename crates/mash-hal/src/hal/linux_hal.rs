@@ -953,7 +953,7 @@ impl RsyncOps for LinuxHal {
             })
         });
 
-        let (tx, rx) = mpsc::channel::<io::Result<String>>();
+        let (tx, rx) = mpsc::sync_channel::<io::Result<String>>(256);
         if let Some(stdout) = child.stdout.take() {
             std::thread::spawn(move || {
                 let reader = BufReader::new(stdout);

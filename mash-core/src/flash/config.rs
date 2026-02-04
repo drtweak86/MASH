@@ -2,7 +2,7 @@ use super::cancel::cancel_requested;
 use anyhow::{bail, Result};
 use log::info;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 
 use crate::cli::PartitionScheme;
@@ -30,7 +30,7 @@ pub struct FlashContext {
     pub auto_unmount: bool,
     pub locale: Option<LocaleConfig>,
     pub early_ssh: bool,
-    pub progress_tx: Option<Sender<ProgressUpdate>>,
+    pub progress_tx: Option<SyncSender<ProgressUpdate>>,
     pub work_dir: PathBuf,
     pub loop_device: Option<String>,
     pub efi_size: String,
@@ -100,7 +100,7 @@ pub struct FlashConfig {
     pub auto_unmount: bool,
     pub locale: Option<LocaleConfig>,
     pub early_ssh: bool,
-    pub progress_tx: Option<Sender<ProgressUpdate>>,
+    pub progress_tx: Option<SyncSender<ProgressUpdate>>,
     pub efi_size: String,
     pub boot_size: String,
     pub root_end: String,

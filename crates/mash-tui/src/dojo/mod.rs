@@ -108,7 +108,7 @@ pub fn run_new_ui(
                         }
                         app.is_running = true;
                         app.status_message = "⬇️ Starting downloads...".to_string();
-                        let (tx, rx) = mpsc::channel();
+                        let (tx, rx) = mpsc::sync_channel(1);
                         flash_result_rx = Some(rx);
                         let cancel_flag = app.cancel_requested.clone();
                         let yes_i_know = app.destructive_armed;
