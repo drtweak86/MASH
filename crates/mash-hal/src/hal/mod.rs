@@ -9,7 +9,6 @@ pub mod fake_hal;
 pub mod flash_ops;
 pub mod format_ops;
 pub mod guards;
-pub mod host_info_ops;
 pub mod linux_hal;
 pub mod loop_ops;
 pub mod mount_ops;
@@ -25,7 +24,6 @@ pub use fake_hal::{FakeHal, Operation};
 pub use flash_ops::{FlashOps, FlashOptions};
 pub use format_ops::{FormatOps, FormatOptions};
 pub use guards::{LoopGuard, MountGuard};
-pub use host_info_ops::{HostInfoOps, OsReleaseInfo};
 pub use linux_hal::LinuxHal;
 pub use loop_ops::LoopOps;
 pub use mount_ops::{MountOps, MountOptions};
@@ -46,7 +44,6 @@ impl<T> SystemHal for T where T: MountOps + FormatOps + FlashOps + Send + Sync {
 pub trait InstallerHal:
     SystemHal
     + SystemOps
-    + HostInfoOps
     + ProcessOps
     + ProbeOps
     + PartitionOps
@@ -61,7 +58,6 @@ pub trait InstallerHal:
 impl<T> InstallerHal for T where
     T: SystemHal
         + SystemOps
-        + HostInfoOps
         + ProcessOps
         + ProbeOps
         + PartitionOps
