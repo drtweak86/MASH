@@ -388,21 +388,8 @@ impl App {
 
     // New: handle input for step advancement
     pub fn handle_input(&mut self, key: KeyEvent) -> InputResult {
-        // Global help overlay: modal that blocks underlying input.
-        if self.help_open {
-            match key.code {
-                KeyCode::Esc | KeyCode::Char('?') => {
-                    self.help_open = false;
-                }
-                _ => {}
-            }
-            return InputResult::Continue;
-        }
-
-        // Global help key.
-        if matches!(key.code, KeyCode::Char('?')) {
-            self.help_open = true;
-            return InputResult::Continue;
+        if let Some(result) = self.handle_global_input(key) {
+            return result;
         }
 
         match self.current_step_type {
@@ -457,7 +444,6 @@ impl App {
                 self.error_message = None;
                 InputResult::Continue
             }
-            KeyCode::Esc => InputResult::Quit,
             _ => InputResult::Continue,
         }
     }
@@ -467,10 +453,6 @@ impl App {
             KeyCode::Enter | KeyCode::Tab => {
                 self.error_message = None;
                 self.go_next();
-                InputResult::Continue
-            }
-            KeyCode::Esc => {
-                self.go_prev();
                 InputResult::Continue
             }
             _ => InputResult::Continue,
@@ -501,10 +483,6 @@ impl App {
                     self.error_message =
                         Some("Backup confirmation required to proceed.".to_string());
                 }
-                InputResult::Continue
-            }
-            KeyCode::Esc => {
-                self.go_prev();
                 InputResult::Continue
             }
             _ => InputResult::Continue,
@@ -561,7 +539,6 @@ impl App {
                 self.error_message = None;
                 self.apply_list_action(ListAction::Advance)
             }
-            KeyCode::Esc => self.apply_list_action(ListAction::Back),
             _ => InputResult::Continue,
         }
     }
@@ -589,10 +566,6 @@ impl App {
                 self.go_next();
                 InputResult::Continue
             }
-            KeyCode::Esc => {
-                self.go_prev();
-                InputResult::Continue
-            }
             _ => InputResult::Continue,
         }
     }
@@ -601,10 +574,6 @@ impl App {
         match key.code {
             KeyCode::Enter | KeyCode::Tab => {
                 self.go_next();
-                InputResult::Continue
-            }
-            KeyCode::Esc => {
-                self.go_prev();
                 InputResult::Continue
             }
             _ => InputResult::Continue,
@@ -630,10 +599,6 @@ impl App {
             KeyCode::Enter | KeyCode::Tab => {
                 self.error_message = None;
                 self.go_next();
-                InputResult::Continue
-            }
-            KeyCode::Esc => {
-                self.go_prev();
                 InputResult::Continue
             }
             _ => InputResult::Continue,
@@ -675,10 +640,6 @@ impl App {
                 self.go_next();
                 InputResult::Continue
             }
-            KeyCode::Esc => {
-                self.go_prev();
-                InputResult::Continue
-            }
             _ => InputResult::Continue,
         }
     }
@@ -704,10 +665,6 @@ impl App {
                 self.go_next();
                 InputResult::Continue
             }
-            KeyCode::Esc => {
-                self.go_prev();
-                InputResult::Continue
-            }
             _ => InputResult::Continue,
         }
     }
@@ -731,10 +688,6 @@ impl App {
             KeyCode::Enter | KeyCode::Tab => {
                 self.error_message = None;
                 self.go_next();
-                InputResult::Continue
-            }
-            KeyCode::Esc => {
-                self.go_prev();
                 InputResult::Continue
             }
             _ => InputResult::Continue,
@@ -791,11 +744,6 @@ impl App {
                 }
                 InputResult::Continue
             }
-            KeyCode::Esc => {
-                self.wipe_confirmation.clear();
-                self.go_prev();
-                InputResult::Continue
-            }
             _ => InputResult::Continue,
         }
     }
@@ -811,10 +759,6 @@ impl App {
                     return InputResult::Continue;
                 }
                 self.try_start_flash()
-            }
-            KeyCode::Esc => {
-                self.go_prev();
-                InputResult::Continue
             }
             _ => InputResult::Continue,
         }
@@ -845,12 +789,6 @@ impl App {
                         Some(format!("Type the full phrase exactly: {}", REQUIRED));
                     InputResult::Continue
                 }
-            }
-            KeyCode::Esc => {
-                self.execute_confirmation_input.clear();
-                self.execute_confirmation_confirmed = false;
-                self.current_step_type = InstallStepType::Confirmation;
-                InputResult::Continue
             }
             _ => InputResult::Continue,
         }
@@ -885,12 +823,6 @@ impl App {
                         Some("Type DESTROY (exactly) to disarm Safe Mode.".to_string());
                     InputResult::Continue
                 }
-            }
-            KeyCode::Esc => {
-                self.safe_mode_disarm_input.clear();
-                self.pending_destructive_action = None;
-                self.current_step_type = InstallStepType::Confirmation;
-                InputResult::Continue
             }
             _ => InputResult::Continue,
         }
@@ -950,10 +882,6 @@ impl App {
                 } else {
                     self.go_prev();
                 }
-                InputResult::Continue
-            }
-            KeyCode::Esc => {
-                self.go_prev();
                 InputResult::Continue
             }
             _ => InputResult::Continue,
@@ -1177,6 +1105,50 @@ impl App {
             }
             self.current_step_type = prev;
         }
+    }
+
+    /// Global handler for key events that apply across all steps.
+    /// Returns Some(InputResult) if the event was consumed globally, otherwise None.
+    fn handle_global_input(&mut self, key: KeyEvent) -> Option<InputResult> {
+        // Global help overlay: modal that blocks underlying input.
+        // It consumes all keys except Esc or '?' to close itself.
+        if self.help_open {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('?') => {
+                    self.help_open = false;
+                }
+                _ => {}
+            }
+            return Some(InputResult::Continue);
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                // If not running, Esc can quit or go back.
+                if !self.is_running {
+                    if self.current_step_type == InstallStepType::Welcome {
+                        return Some(InputResult::Quit);
+                    } else if self.prev_step_for(self.current_step_type).is_some() {
+                        self.go_prev();
+                        return Some(InputResult::Continue);
+                    }
+                }
+                // If running, Esc acts as a cancel request.
+                if self.is_running {
+                    self.cancel_requested
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                    self.status_message = "🛑 Cancel requested...".to_string();
+                    return Some(InputResult::Continue);
+                }
+            }
+            // Global help key.
+            KeyCode::Char('?') => {
+                self.help_open = true;
+                return Some(InputResult::Continue);
+            }
+            _ => {}
+        }
+        None
     }
 
     fn adjust_index(len: usize, index: &mut usize, delta: isize) {

@@ -4,7 +4,7 @@ use super::config::{
 };
 use anyhow::{Context, Result};
 use mash_core::downloader;
-use mash_core::state_manager::{self, DownloadArtifact};
+use mash_core::state_manager;
 use mash_core::{boot_config, system_config};
 use std::env;
 use std::path::PathBuf;
@@ -40,13 +40,7 @@ pub(super) fn run_download_stage(
         resume: true,
     };
     let artifact = downloader::download(&opts)?;
-    state.record_download(DownloadArtifact::new(
-        artifact.name.clone(),
-        &artifact.path,
-        artifact.size,
-        artifact.checksum.clone(),
-        artifact.resumed,
-    ));
+    state.record_download(artifact.clone());
     state.mark_checksum_verified(&artifact.checksum);
     state.set_partial_resume(artifact.resumed);
     Ok(())

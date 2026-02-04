@@ -3,8 +3,8 @@ use anyhow::{Context, Result};
 use mash_core::config_states::{ArmedConfig, HasRunMode, ValidateConfig, ValidatedConfig};
 use mash_core::downloader::{self, DownloadOptions, ImageKey, OsKind};
 use mash_core::progress::ProgressUpdate;
-use mash_core::state_manager::{DownloadArtifact, InstallState};
-use std::path::{Path, PathBuf};
+use mash_core::state_manager::{DownloadArtifact, InstallState, StageName};
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 
@@ -132,7 +132,7 @@ where
     let progress_intent = cfg.progress_tx.clone();
     let report_intent = report.clone();
     stages.push(StageDefinition {
-        name: "Record install intent",
+        name: StageName::Other("Record install intent".into()),
         run: Box::new(move |state, _dry_run| {
             if let Some(ref report) = report_intent {
                 report.stage_started("Record install intent");
@@ -156,7 +156,7 @@ where
     let cancel_dl = cancel;
     let report_dl = report.clone();
     stages.push(StageDefinition {
-        name: "Download OS image",
+        name: StageName::Other("Download OS image".into()),
         run: Box::new(move |state, dry_run| {
             if let Some(ref report) = report_dl {
                 report.stage_started("Download OS image");
@@ -210,9 +210,9 @@ where
             };
             state.record_download(DownloadArtifact::new(
                 artifact.name.clone(),
-                &artifact.path,
-                artifact.size,
+                artifact.path.clone(),
                 artifact.checksum.clone(),
+                artifact.size,
                 artifact.resumed,
             ));
             state.mark_checksum_verified(&artifact.checksum);
@@ -230,7 +230,7 @@ where
     let hal_flash = hal.clone();
     let report_flash = report.clone();
     stages.push(StageDefinition {
-        name: "Flash OS image",
+        name: StageName::Other("Flash OS image".into()),
         run: Box::new(move |state, dry_run| {
             if let Some(ref report) = report_flash {
                 report.stage_started("Flash OS image");
@@ -291,7 +291,7 @@ where
     let cfg_rules = cfg.clone();
     let report_rules = report.clone();
     stages.push(StageDefinition {
-        name: "Apply OS-specific rules",
+        name: StageName::Other("Apply OS-specific rules".into()),
         run: Box::new(move |state, dry_run| {
             if let Some(ref report) = report_rules {
                 report.stage_started("Apply OS-specific rules");
@@ -346,11 +346,13 @@ fn resolve_image_path(cfg: &OsInstallConfig, state: &InstallState) -> Result<Pat
                 .find(|a| a.name == expected_name)
                 .context("download artifact not found in state; cannot flash")?;
 
-            let path = Path::new(&artifact.path);
-            if !path.exists() {
-                anyhow::bail!("downloaded image missing on disk: {}", artifact.path);
+            if !artifact.path.exists() {
+                anyhow::bail!(
+                    "downloaded image missing on disk: {}",
+                    artifact.path.display()
+                );
             }
-            Ok(path.to_path_buf())
+            Ok(artifact.path.clone())
         }
     }
 }

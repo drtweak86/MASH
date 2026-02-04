@@ -1,9 +1,8 @@
 use anyhow::{Context, Result};
 use log::info;
-use once_cell::sync::Lazy;
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, Write};
@@ -11,78 +10,11 @@ use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
-pub enum OsKind {
-    Fedora,
-    Ubuntu,
-    #[serde(rename = "raspberry_pi_os")]
-    RaspberryPiOS,
-    Manjaro,
-}
+mod index;
+mod types;
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct DownloadIndex {
-    #[serde(default)]
-    pub images: Vec<ImageSpec>,
-
-    // Present for the scheduled health-check action (issue #45).
-    #[serde(default)]
-    pub health_checks: Vec<HealthCheckSpec>,
-
-    #[serde(default)]
-    pub assets: Vec<AssetSpec>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct HealthCheckSpec {
-    pub name: String,
-    pub url: String,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
-pub enum AssetKind {
-    Zip,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct AssetSpec {
-    pub name: String,
-    pub kind: AssetKind,
-    pub file_name: String,
-    pub checksum_sha256: String,
-    #[serde(default)]
-    pub checksum_url: Option<String>,
-    pub mirrors: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ImageSpec {
-    pub os: OsKind,
-    pub variant: String,
-    pub arch: String,
-    pub file_name: String,
-    pub checksum_sha256: String,
-    #[serde(default)]
-    pub checksum_url: Option<String>,
-    pub mirrors: Vec<String>,
-}
-
-pub static DOWNLOAD_INDEX: Lazy<Result<DownloadIndex>> = Lazy::new(|| {
-    let index = include_str!("../../../docs/os-download-links.toml");
-    parse_index(index).context("failed to parse docs/os-download-links.toml (download index)")
-});
-
-pub fn download_index() -> Result<&'static DownloadIndex> {
-    DOWNLOAD_INDEX
-        .as_ref()
-        .map_err(|err| anyhow::anyhow!("{:#}", err))
-}
-
-pub fn parse_index(toml_text: &str) -> Result<DownloadIndex> {
-    toml::from_str(toml_text).context("failed to parse download index TOML")
-}
+pub use index::{download_index, parse_index, DownloadIndex, DOWNLOAD_INDEX};
+pub use types::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageKey {
@@ -132,7 +64,7 @@ pub struct DownloadProgress {
     pub speed_bytes_per_sec: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DownloadArtifact {
     pub name: String,
     pub path: PathBuf,

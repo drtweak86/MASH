@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use mash_hal::ProcessOps;
 use std::env;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub trait PackageManager {
@@ -8,14 +9,22 @@ pub trait PackageManager {
     fn update(&self) -> Result<()>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DnfShell {
     pub dry_run: bool,
+    hal: Arc<dyn ProcessOps>,
 }
 
 impl DnfShell {
     pub fn new(dry_run: bool) -> Self {
-        Self { dry_run }
+        Self {
+            dry_run,
+            hal: std::sync::Arc::new(mash_hal::LinuxHal::new()),
+        }
+    }
+
+    pub fn new_with_hal(dry_run: bool, hal: std::sync::Arc<dyn ProcessOps>) -> Self {
+        Self { dry_run, hal }
     }
 }
 
@@ -33,7 +42,7 @@ impl PackageManager for DnfShell {
             return Ok(());
         }
         let spec = install_command_spec(pkgs);
-        run_command(&spec)
+        run_command(&*self.hal, &spec)
     }
 
     fn update(&self) -> Result<()> {
@@ -46,7 +55,7 @@ impl PackageManager for DnfShell {
             return Ok(());
         }
         let spec = update_command_spec();
-        run_command(&spec)
+        run_command(&*self.hal, &spec)
     }
 }
 
@@ -82,13 +91,10 @@ pub fn update_command_spec() -> CommandSpec {
     }
 }
 
-fn run_command(spec: &CommandSpec) -> Result<()> {
-    let hal = mash_hal::LinuxHal::new();
+fn run_command(hal: &dyn ProcessOps, spec: &CommandSpec) -> Result<()> {
     let args: Vec<&str> = spec.args.iter().map(String::as_str).collect();
-    if let Err(_err) = hal.command_status(&spec.program, &args, Duration::from_secs(60 * 60)) {
-        return Err(anyhow!("Command failed: {}", spec.program));
-    }
-    Ok(())
+    hal.command_status(&spec.program, &args, Duration::from_secs(60 * 60))
+        .map_err(|_err| anyhow!("Command failed: {}", spec.program))
 }
 
 fn skip_dnf_commands() -> bool {

@@ -6,19 +6,18 @@ use std::path::Path;
 
 pub use proc_mountinfo::MountInfo;
 
-pub fn is_mounted(path: &Path) -> Result<bool> {
-    let hal = mash_hal::LinuxHal::new();
+pub fn is_mounted(hal: &dyn MountOps, path: &Path) -> Result<bool> {
     Ok(hal.is_mounted(path)?)
 }
 
 pub fn mount_device(
+    hal: &dyn MountOps,
     device: &Path,
     target: &Path,
     fstype: Option<&str>,
     _flags: MsFlags,
     dry_run: bool,
 ) -> Result<()> {
-    let hal = mash_hal::LinuxHal::new();
     hal.mount_device(
         device,
         target,
@@ -30,8 +29,7 @@ pub fn mount_device(
     Ok(())
 }
 
-pub fn unmount(target: &Path, dry_run: bool) -> Result<()> {
-    let hal = mash_hal::LinuxHal::new();
+pub fn unmount(hal: &dyn MountOps, target: &Path, dry_run: bool) -> Result<()> {
     hal.unmount(target, dry_run).context("Failed to unmount")?;
     Ok(())
 }
