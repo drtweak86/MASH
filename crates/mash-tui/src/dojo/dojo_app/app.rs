@@ -695,22 +695,25 @@ impl App {
     }
 
     fn handle_disk_confirmation_input(&mut self, key: KeyEvent) -> InputResult {
-        let is_boot_or_source_disk = self
+        let selected_path = self
             .disks
             .get(self.disk_selected)
-            .map(|disk| disk.boot_confidence.is_boot() || disk.is_source_disk)
-            .unwrap_or(false);
+            .map(|disk| disk.path.clone())
+            .unwrap_or_default();
 
-        let required_text = if is_boot_or_source_disk {
-            "DESTROY BOOT DISK"
-        } else {
-            "DESTROY"
-        };
+        if selected_path.is_empty() {
+            self.error_message = Some(
+                "No disk selected; cannot confirm destructive action without a target.".to_string(),
+            );
+            return InputResult::Continue;
+        }
+
+        let required_text = selected_path.as_str();
 
         match key.code {
-            KeyCode::Char(c) if c.is_ascii_alphanumeric() || c == ' ' => {
-                if self.wipe_confirmation.len() < 32 {
-                    self.wipe_confirmation.push(c.to_ascii_uppercase());
+            KeyCode::Char(c) if !c.is_control() => {
+                if self.wipe_confirmation.len() < 64 {
+                    self.wipe_confirmation.push(c);
                 }
                 InputResult::Continue
             }
@@ -733,14 +736,10 @@ impl App {
                     self.wipe_confirmation.clear();
                     self.go_next();
                 } else {
-                    self.error_message = if is_boot_or_source_disk {
-                        Some(
-                            "⚠️ Type 'DESTROY BOOT DISK' to confirm destruction of BOOT DEVICE."
-                                .to_string(),
-                        )
-                    } else {
-                        Some("Type DESTROY to confirm disk destruction.".to_string())
-                    };
+                    self.error_message = Some(format!(
+                        "Type {} to confirm destruction of the selected disk.",
+                        required_text
+                    ));
                 }
                 InputResult::Continue
             }
@@ -1945,10 +1944,10 @@ mod tests {
         app.disk_index = 0;
         app.disk_selected = 0;
 
-        for ch in "DESTROY".chars() {
+        for ch in "/dev/sdb".chars() {
             app.handle_input(key(KeyCode::Char(ch)));
         }
-        assert_eq!(app.wipe_confirmation, "DESTROY");
+        assert_eq!(app.wipe_confirmation, "/dev/sdb");
         app.handle_input(key(KeyCode::Enter));
         assert_eq!(app.current_step_type, InstallStepType::BackupConfirmation);
     }
@@ -1970,8 +1969,8 @@ mod tests {
         })];
         app.disk_index = 0;
 
-        // Regular DESTROY should not work for boot disk
-        for ch in "DESTROY".chars() {
+        // Any incorrect string should not work for boot disk
+        for ch in "WRONG".chars() {
             app.handle_input(key(KeyCode::Char(ch)));
         }
         app.handle_input(key(KeyCode::Enter));
@@ -1980,10 +1979,10 @@ mod tests {
 
         // Clear and type correct phrase
         app.wipe_confirmation.clear();
-        for ch in "DESTROY BOOT DISK".chars() {
+        for ch in "/dev/sda".chars() {
             app.handle_input(key(KeyCode::Char(ch)));
         }
-        assert_eq!(app.wipe_confirmation, "DESTROY BOOT DISK");
+        assert_eq!(app.wipe_confirmation, "/dev/sda");
         app.handle_input(key(KeyCode::Enter));
         assert_eq!(app.current_step_type, InstallStepType::BackupConfirmation);
         assert!(app.error_message.is_none());

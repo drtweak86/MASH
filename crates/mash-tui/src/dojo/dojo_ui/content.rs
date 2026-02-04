@@ -39,6 +39,12 @@ pub(super) fn build_info_panel(app: &App, progress_state: &ProgressState) -> Str
     // Disk selection
     if let Some(disk) = app.disks.get(app.disk_selected) {
         lines.push(format!("Disk: {} ({})", disk.label, disk.path));
+        lines.push(format!(
+            "Fingerprint: {} | model={} | serial={}",
+            mash_core::progress::ProgressState::format_bytes(disk.identity.size_bytes),
+            disk.identity.model.as_deref().unwrap_or("<unknown>"),
+            disk.identity.serial.as_deref().unwrap_or("<unknown>")
+        ));
     }
 
     // Partition scheme
@@ -176,22 +182,19 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                         disk.path, disk_info
                     ));
                     items.push("".to_string());
-                    items.push(
-                        "Type 'DESTROY BOOT DISK' to confirm, then press Enter/Tab • Esc to go back."
-                            .to_string(),
-                    );
                 } else {
                     items.push("⚠️ Confirm disk destruction:".to_string());
                     items.push("".to_string());
                     items.push(format!("TARGET TO BE WIPED: {} ({})", disk.path, disk_info));
                     items.push("".to_string());
-                    items.push("⌨️ Keys:".to_string());
-                    items.push("  Type DESTROY (exactly)".to_string());
-                    items.push("  Enter or Tab — Continue".to_string());
-                    items.push("  Esc — Cancel and go back".to_string());
-                    items.push("  ? — Help".to_string());
-                    items.push("".to_string());
                 }
+
+                items.push("⌨️ Keys:".to_string());
+                items.push(format!("  Type the disk path exactly: {}", disk.path));
+                items.push("  Enter or Tab — Continue".to_string());
+                items.push("  Esc — Cancel and go back".to_string());
+                items.push("  ? — Help".to_string());
+                items.push("".to_string());
 
                 items.push(format!("Input: {}", app.wipe_confirmation));
             } else {
@@ -906,7 +909,7 @@ fn build_plan_lines(app: &App) -> Vec<String> {
 pub(super) fn expected_actions(step: InstallStepType) -> String {
     let base = "↑/↓ or j/k: move  Space: select/toggle  Enter/Tab: continue  Esc: back  ?: help";
     match step {
-        InstallStepType::DiskConfirmation => format!("{base}  |  Type: DESTROY"),
+        InstallStepType::DiskConfirmation => format!("{base}  |  Type: <disk path>"),
         InstallStepType::ExecuteConfirmationGate => {
             format!("{base}  |  Type: I UNDERSTAND THIS WILL ERASE THE SELECTED DISK")
         }
