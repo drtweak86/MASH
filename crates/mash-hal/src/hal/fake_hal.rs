@@ -279,6 +279,14 @@ impl MountOps for FakeHal {
             return Ok(());
         }
 
+        if self.is_mounted(target)? {
+            log::info!(
+                "FAKE HAL: mount skipped, already mounted -> {}",
+                target.display()
+            );
+            return Ok(());
+        }
+
         log::info!(
             "FAKE HAL: mount {} -> {} (type: {:?})",
             device.display(),
@@ -299,6 +307,14 @@ impl MountOps for FakeHal {
     fn unmount(&self, target: &Path, dry_run: bool) -> HalResult<()> {
         if dry_run {
             log::info!("FAKE HAL DRY RUN: unmount {}", target.display());
+            return Ok(());
+        }
+
+        if !self.is_mounted(target)? {
+            log::info!(
+                "FAKE HAL: unmount skipped, not mounted -> {}",
+                target.display()
+            );
             return Ok(());
         }
 
@@ -634,6 +650,34 @@ mod tests {
 
         assert_eq!(hal.operation_count(), 2);
         assert!(hal.has_operation(|op| matches!(op, Operation::Unmount { .. })));
+        assert!(!hal.is_mounted(target).unwrap());
+    }
+
+    #[test]
+    fn fake_hal_mount_unmount_idempotent() {
+        let hal = FakeHal::new();
+        let target = Path::new("/mnt/idempotent");
+
+        hal.mount_device(
+            Path::new("/dev/sdb1"),
+            target,
+            Some("ext4"),
+            MountOptions::new(),
+            false,
+        )
+        .unwrap();
+        hal.mount_device(
+            Path::new("/dev/sdb1"),
+            target,
+            Some("ext4"),
+            MountOptions::new(),
+            false,
+        )
+        .unwrap();
+        hal.unmount(target, false).unwrap();
+        hal.unmount(target, false).unwrap();
+
+        assert_eq!(hal.operation_count(), 2);
         assert!(!hal.is_mounted(target).unwrap());
     }
 

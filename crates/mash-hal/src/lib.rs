@@ -19,7 +19,7 @@ pub mod error;
 pub mod hal;
 pub use hal::*;
 
-pub use error::{HalError, HalResult};
+pub use error::{HalError, HalResult, MashError, MashResult};
 
 // Re-export commonly used types
 pub use procfs::mountinfo::MountInfo;
