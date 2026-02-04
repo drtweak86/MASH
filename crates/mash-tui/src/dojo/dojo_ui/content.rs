@@ -16,7 +16,7 @@ pub(super) fn build_info_panel(app: &App, progress_state: &ProgressState) -> Str
 
     // Safety status (prominent)
     let arming_status = if app.destructive_armed {
-        "🔴 ARMED (writes enabled)"
+        "🔴 ARMED (target disk locked)"
     } else {
         "🟢 SAFE (disarmed)"
     };
@@ -25,6 +25,9 @@ pub(super) fn build_info_panel(app: &App, progress_state: &ProgressState) -> Str
 
     // Current selections
     lines.push("Selections:".to_string());
+    if app.resume_available {
+        lines.push("↩️ Resume state detected (will continue)".to_string());
+    }
 
     // OS selection
     if let Some(distro) = app.os_distros.get(app.os_distro_selected) {

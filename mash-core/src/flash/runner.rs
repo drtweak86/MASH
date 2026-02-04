@@ -7,6 +7,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 use tempfile::Builder as TempDirBuilder;
 
 use crate::cli::PartitionScheme;
@@ -15,9 +16,11 @@ use crate::install_report::{InstallReportWriter, RunMode, SelectionReport};
 use crate::locale::LocaleConfig;
 use crate::progress::{Phase, ProgressUpdate};
 use mash_hal::{
-    FlashOptions, FormatOptions, InstallerHal, LinuxHal, MountOptions, PartedOp, PartedOptions,
-    RsyncOptions, WipeFsOptions,
+    CopyOptions, CopyProgress, FlashOptions, FormatOptions, InstallerHal, LinuxHal, MountOptions,
+    PartedOp, PartedOptions, WipeFsOptions,
 };
+use sha2::{Digest, Sha256};
+use walkdir::WalkDir;
 
 pub fn flash_raw_image_to_disk(
     hal: &dyn mash_hal::FlashOps,
@@ -362,14 +365,14 @@ fn execute_copy_root_phase(
 ) -> Result<()> {
     ctx.check_cancel()?;
     ctx.start_phase(Phase::CopyRoot);
-    rsync_with_progress(
+    copy_with_progress(
         ctx,
         &mounts.src_root_subvol,
         &mounts.dst_root_subvol,
         "root subvol",
     )?;
     if subvols.has_home {
-        rsync_with_progress(
+        copy_with_progress(
             ctx,
             &mounts.src_home_subvol,
             &mounts.dst_home_subvol,
@@ -377,7 +380,7 @@ fn execute_copy_root_phase(
         )?;
     }
     if subvols.has_var {
-        rsync_with_progress(
+        copy_with_progress(
             ctx,
             &mounts.src_var_subvol,
             &mounts.dst_var_subvol,
@@ -391,7 +394,7 @@ fn execute_copy_root_phase(
 fn execute_copy_boot_phase(ctx: &FlashContext, mounts: &MountPoints) -> Result<()> {
     ctx.check_cancel()?;
     ctx.start_phase(Phase::CopyBoot);
-    rsync_with_progress(ctx, &mounts.src_boot, &mounts.dst_boot, "boot")?;
+    copy_with_progress(ctx, &mounts.src_boot, &mounts.dst_boot, "boot")?;
     ctx.complete_phase(Phase::CopyBoot);
     Ok(())
 }
@@ -400,13 +403,13 @@ fn execute_copy_efi_phase(ctx: &FlashContext, mounts: &MountPoints) -> Result<()
     ctx.check_cancel()?;
     ctx.start_phase(Phase::CopyEfi);
     // Copy Fedora EFI tree (safe for vfat)
-    rsync_vfat_safe(
+    copy_vfat_safe(
         ctx,
         &mounts.src_efi.join("EFI"),
         &mounts.dst_efi.join("EFI"),
     )?;
     // Copy UEFI firmware (LAST - overwrites any conflicts)
-    rsync_vfat_safe(ctx, &ctx.uefi_dir, &mounts.dst_efi)?;
+    copy_vfat_safe(ctx, &ctx.uefi_dir, &mounts.dst_efi)?;
     // Write config.txt
     write_config_txt(&mounts.dst_efi)?;
     ctx.complete_phase(Phase::CopyEfi);
@@ -938,97 +941,162 @@ fn create_dest_subvols(
 }
 
 // ============================================================================
-// Copy Functions
+// Copy & Verify Functions
 // ============================================================================
 
-fn rsync_with_progress(ctx: &FlashContext, src: &Path, dst: &Path, label: &str) -> Result<()> {
+fn copy_with_progress(ctx: &FlashContext, src: &Path, dst: &Path, label: &str) -> Result<()> {
     ctx.status(&format!("📦 Copying {}...", label));
+    let started = Instant::now();
 
-    let mut on_line = |line: &str| -> bool {
+    let mut on_progress = |p: CopyProgress| -> bool {
         if cancel_requested() {
             return false;
         }
-        if let Some(progress) = parse_rsync_progress(line) {
-            ctx.send_progress(ProgressUpdate::RsyncProgress {
-                percent: progress.percent,
-                speed_mbps: progress.speed_mbps,
-                files_done: progress.files_done,
-                files_total: progress.files_total,
-            });
-        }
+
+        let percent = if p.bytes_total > 0 {
+            (p.bytes_copied as f64 / p.bytes_total as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let elapsed = started.elapsed().as_secs_f64();
+        let speed_mbps = if elapsed > 0.0 {
+            (p.bytes_copied as f64 / elapsed) / (1024.0 * 1024.0)
+        } else {
+            0.0
+        };
+
+        ctx.send_progress(ProgressUpdate::RsyncProgress {
+            percent,
+            speed_mbps,
+            files_done: p.files_copied,
+            files_total: p.files_total,
+        });
+
         true
     };
 
     ctx.hal
-        .rsync_stream_stdout(src, dst, &RsyncOptions::progress2_archive(), &mut on_line)
+        .copy_tree_native(src, dst, &CopyOptions::archive(), &mut on_progress)
         .map_err(anyhow::Error::new)
-        .with_context(|| format!("rsync failed for {}", label))?;
+        .with_context(|| format!("copy failed for {}", label))?;
+    fsync_path(dst)?;
+    verify_trees(src, dst, label)?;
     Ok(())
 }
-/// VFAT-safe rsync (no ownership/permissions)
-fn rsync_vfat_safe(ctx: &FlashContext, src: &Path, dst: &Path) -> Result<()> {
+
+/// VFAT-safe copy (no ownership/permissions)
+fn copy_vfat_safe(ctx: &FlashContext, src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
-    let mut on_line = |_line: &str| -> bool { true };
+    let mut on_progress = |_p: CopyProgress| -> bool { true };
     ctx.hal
-        .rsync_stream_stdout(src, dst, &RsyncOptions::vfat_safe(), &mut on_line)
-        .map_err(anyhow::Error::new)
+        .copy_tree_native(src, dst, &CopyOptions::vfat_safe(), &mut on_progress)
+        .map_err(anyhow::Error::new)?;
+    fsync_path(dst)?;
+    verify_trees(src, dst, "EFI")?;
+    Ok(())
 }
 
-struct RsyncProgress {
-    percent: f64,
-    speed_mbps: f64,
-    files_done: u64,
-    files_total: u64,
+fn fsync_path(path: &Path) -> Result<()> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(path)
+        .with_context(|| format!("open for fsync: {}", path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("fsync failed for {}", path.display()))?;
+    Ok(())
 }
 
-fn parse_rsync_progress(line: &str) -> Option<RsyncProgress> {
-    let percent_idx = line.find('%')?;
-    let percent_start = line[..percent_idx]
-        .rfind(char::is_whitespace)
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    let percent: f64 = line[percent_start..percent_idx].trim().parse().ok()?;
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TreeEntry {
+    File([u8; 32], u64),
+    Symlink(PathBuf),
+}
 
-    let speed_mbps = if let Some(speed_end) = line.find("/s") {
-        let speed_part = &line[..speed_end];
-        let speed_start = speed_part.rfind(char::is_whitespace).unwrap_or(0);
-        let speed_str = speed_part[speed_start..].trim();
-        let (value, mult) = if speed_str.ends_with("GB") {
-            (speed_str.trim_end_matches("GB"), 1024.0)
-        } else if speed_str.ends_with("MB") {
-            (speed_str.trim_end_matches("MB"), 1.0)
-        } else if speed_str.ends_with("kB") {
-            (speed_str.trim_end_matches("kB"), 0.001)
-        } else {
-            (speed_str, 0.000001)
-        };
-        value.parse::<f64>().unwrap_or(0.0) * mult
-    } else {
-        0.0
-    };
-
-    let (files_done, files_total) = if let Some(xfr_start) = line.find("xfr#") {
-        let xfr_end = line[xfr_start..].find(',').map(|i| i + xfr_start)?;
-        let done: u64 = line[xfr_start + 4..xfr_end].parse().ok()?;
-        if let Some(chk_start) = line.find("to-chk=") {
-            let chk_part = &line[chk_start + 7..];
-            let slash = chk_part.find('/')?;
-            let paren = chk_part.find(')')?;
-            let total: u64 = chk_part[slash + 1..paren].parse().ok()?;
-            (done, total)
-        } else {
-            (done, done)
+fn tree_fingerprint(root: &Path) -> Result<std::collections::HashMap<PathBuf, TreeEntry>> {
+    let mut map = std::collections::HashMap::new();
+    for entry in WalkDir::new(root).follow_links(false) {
+        let entry = entry?;
+        let rel = entry
+            .path()
+            .strip_prefix(root)
+            .context("failed to compute relative path")?;
+        if rel.as_os_str().is_empty() {
+            continue;
         }
-    } else {
-        (0, 0)
-    };
+        let meta = entry.metadata()?;
+        let ft = meta.file_type();
+        if ft.is_dir() {
+            continue;
+        }
+        if ft.is_symlink() {
+            let target = fs::read_link(entry.path())?;
+            map.insert(rel.to_path_buf(), TreeEntry::Symlink(target));
+            continue;
+        }
+        if ft.is_file() {
+            let mut hasher = Sha256::new();
+            let mut f = std::fs::File::open(entry.path())?;
+            std::io::copy(&mut f, &mut hasher)?;
+            let digest = hasher.finalize();
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&digest);
+            map.insert(rel.to_path_buf(), TreeEntry::File(arr, meta.len()));
+        }
+    }
+    Ok(map)
+}
 
-    Some(RsyncProgress {
-        percent,
-        speed_mbps,
-        files_done,
-        files_total,
-    })
+fn verify_trees(src: &Path, dst: &Path, label: &str) -> Result<()> {
+    let src_map = tree_fingerprint(src).with_context(|| format!("hashing {}", src.display()))?;
+    let dst_map = tree_fingerprint(dst).with_context(|| format!("hashing {}", dst.display()))?;
+
+    if src_map.len() != dst_map.len() {
+        bail!(
+            "verification failed for {}: entry count mismatch ({} vs {})",
+            label,
+            src_map.len(),
+            dst_map.len()
+        );
+    }
+
+    for (rel, src_entry) in &src_map {
+        let dst_entry = dst_map.get(rel).ok_or_else(|| {
+            anyhow::anyhow!(format!(
+                "verification failed for {}: missing {}",
+                label,
+                rel.display()
+            ))
+        })?;
+        match (src_entry, dst_entry) {
+            (TreeEntry::Symlink(a), TreeEntry::Symlink(b)) => {
+                if a != b {
+                    bail!(
+                        "verification failed for {}: symlink target differs at {}",
+                        label,
+                        rel.display()
+                    );
+                }
+            }
+            (TreeEntry::File(hash_a, len_a), TreeEntry::File(hash_b, len_b)) => {
+                if len_a != len_b || hash_a != hash_b {
+                    bail!(
+                        "verification failed for {}: checksum/len differs at {}",
+                        label,
+                        rel.display()
+                    );
+                }
+            }
+            _ => {
+                bail!(
+                    "verification failed for {}: entry type differs at {}",
+                    label,
+                    rel.display()
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 // ============================================================================

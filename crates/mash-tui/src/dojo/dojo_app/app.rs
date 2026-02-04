@@ -101,6 +101,8 @@ pub struct App {
     pub completion_lines: Vec<String>,
     /// Global help overlay (modal).
     pub help_open: bool,
+    /// Resume available from prior run.
+    pub resume_available: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -368,6 +370,7 @@ impl App {
             state_path: PathBuf::from("state.json"),
             completion_lines: Vec::new(),
             help_open: false,
+            resume_available: false,
         }
         .with_partition_defaults()
     }
@@ -383,6 +386,12 @@ impl App {
         app.mash_root = mash_root.clone();
         app.state_path = mash_root.join("var/lib/mash/state.json");
         app.developer_mode = developer_mode;
+        if app.state_path.exists() {
+            app.resume_available = true;
+            app.status_message =
+                "⏪ Found prior install state. Resume will continue from last checkpoint."
+                    .to_string();
+        }
         app
     }
 
@@ -490,6 +499,13 @@ impl App {
     }
 
     fn handle_disk_selection_input(&mut self, key: KeyEvent) -> InputResult {
+        if !self.dry_run && self.destructive_armed {
+            self.error_message = Some(
+                "Target disk is locked after DESTROY. Restart installer to choose a different disk."
+                    .to_string(),
+            );
+            return InputResult::Continue;
+        }
         let protected_cursor = self
             .disks
             .get(self.disk_index)
@@ -1099,6 +1115,21 @@ impl App {
 
     fn go_prev(&mut self) {
         if let Some(prev) = self.prev_step_for(self.current_step_type) {
+            if !self.dry_run
+                && self.destructive_armed
+                && matches!(
+                    prev,
+                    InstallStepType::DiskSelection
+                        | InstallStepType::DiskConfirmation
+                        | InstallStepType::BackupConfirmation
+                )
+            {
+                self.error_message = Some(
+                    "Target disk locked after DESTROY. Restart to change disk or backup choice."
+                        .to_string(),
+                );
+                return;
+            }
             if !self.is_running {
                 self.execute_confirmation_confirmed = false;
                 self.execute_confirmation_input.clear();
@@ -1197,6 +1228,13 @@ impl App {
     }
 
     fn rescan_disks(&mut self) {
+        if !self.dry_run && self.destructive_armed {
+            self.error_message = Some(
+                "Target disk is locked after DESTROY. Restart installer to rescan disks."
+                    .to_string(),
+            );
+            return;
+        }
         if !self.use_real_disks {
             return;
         }

@@ -4,9 +4,9 @@
 //! allowing for CI-safe testing without root privileges or real hardware.
 
 use super::{
-    BtrfsOps, FlashOps, FormatOps, FormatOptions, HostInfoOps, LoopOps, MountOps, MountOptions,
-    OsReleaseInfo, PartedOp, PartedOptions, PartitionOps, ProbeOps, ProcessOps, RsyncOps,
-    RsyncOptions, SystemOps, WipeFsOptions,
+    BtrfsOps, CopyOps, CopyOptions, CopyProgress, FlashOps, FormatOps, FormatOptions, HostInfoOps,
+    LoopOps, MountOps, MountOptions, OsReleaseInfo, PartedOp, PartedOptions, PartitionOps,
+    ProbeOps, ProcessOps, SystemOps, WipeFsOptions,
 };
 use crate::{HalError, HalResult};
 use std::collections::HashSet;
@@ -65,7 +65,7 @@ pub enum Operation {
     BtrfsSubvolumeCreate {
         path: PathBuf,
     },
-    Rsync {
+    CopyTree {
         src: PathBuf,
         dst: PathBuf,
     },
@@ -476,18 +476,20 @@ impl BtrfsOps for FakeHal {
     }
 }
 
-impl RsyncOps for FakeHal {
-    fn rsync_stream_stdout(
+impl CopyOps for FakeHal {
+    fn copy_tree_native(
         &self,
         src: &Path,
         dst: &Path,
-        _opts: &RsyncOptions,
-        _on_stdout_line: &mut dyn FnMut(&str) -> bool,
+        _opts: &CopyOptions,
+        on_progress: &mut dyn FnMut(CopyProgress) -> bool,
     ) -> HalResult<()> {
-        self.record_operation(Operation::Rsync {
+        self.record_operation(Operation::CopyTree {
             src: src.to_path_buf(),
             dst: dst.to_path_buf(),
         });
+        // Emit a simple zeroed progress snapshot to keep callers happy.
+        let _ = on_progress(CopyProgress::default());
         Ok(())
     }
 }

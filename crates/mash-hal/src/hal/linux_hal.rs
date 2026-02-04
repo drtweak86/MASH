@@ -1,18 +1,24 @@
 //! Linux HAL implementation using real system calls.
 
 use super::{
-    BtrfsOps, FlashOps, FlashOptions, FormatOps, FormatOptions, HostInfoOps, LoopOps, MountOps,
-    MountOptions, OsReleaseInfo, PartedOp, PartedOptions, PartitionOps, ProbeOps, ProcessOps,
-    RsyncOps, RsyncOptions, SystemOps, WipeFsOptions,
+    BtrfsOps, CopyOps, CopyOptions, CopyProgress, FlashOps, FlashOptions, FormatOps, FormatOptions,
+    HostInfoOps, LoopOps, MountOps, MountOptions, OsReleaseInfo, PartedOp, PartedOptions,
+    PartitionOps, ProbeOps, ProcessOps, SystemOps, WipeFsOptions,
 };
 use crate::{HalError, HalResult};
+use filetime::FileTime;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::{self, Read};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use wait_timeout::ChildExt;
+use walkdir::WalkDir;
+#[cfg(unix)]
+use {
+    nix::unistd::{chown, Gid, Uid},
+    std::os::unix::fs::{symlink, MetadataExt},
+};
 
 /// Real HAL implementation for Linux systems.
 #[derive(Debug, Clone, Default)]
@@ -21,6 +27,13 @@ pub struct LinuxHal;
 impl LinuxHal {
     pub fn new() -> Self {
         Self
+    }
+
+    // Helper for running commands and capturing output, without cwd.
+    fn command_output(&self, program: &str, args: &[&str], timeout: Duration) -> HalResult<Output> {
+        let mut cmd = Command::new(program);
+        cmd.args(args);
+        output_with_timeout(program, &mut cmd, timeout)
     }
 }
 
@@ -112,8 +125,6 @@ const WIPEFS_TIMEOUT: Duration = Duration::from_secs(60);
 const PARTED_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const LOSETUP_TIMEOUT: Duration = Duration::from_secs(30);
 const BTRFS_TIMEOUT: Duration = Duration::from_secs(60);
-const RSYNC_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
-const RSYNC_MAX_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 
 fn map_command_err(program: &str, err: std::io::Error) -> HalError {
     if err.kind() == std::io::ErrorKind::NotFound {
@@ -579,159 +590,165 @@ impl BtrfsOps for LinuxHal {
     }
 }
 
-impl RsyncOps for LinuxHal {
-    fn rsync_stream_stdout(
+impl CopyOps for LinuxHal {
+    fn copy_tree_native(
         &self,
         src: &Path,
         dst: &Path,
-        opts: &RsyncOptions,
-        on_stdout_line: &mut dyn FnMut(&str) -> bool,
+        opts: &CopyOptions,
+        on_progress: &mut dyn FnMut(CopyProgress) -> bool,
     ) -> HalResult<()> {
-        let mut args: Vec<String> = Vec::new();
-
-        if opts.archive && opts.extra_args.is_empty() {
-            // Default to the existing full-loop settings.
-            args.push("-aHAX".to_string());
+        if !src.exists() {
+            return Err(HalError::ValidationFailed(format!(
+                "source {} does not exist",
+                src.display()
+            )));
+        }
+        if !src.is_dir() {
+            return Err(HalError::ValidationFailed(format!(
+                "source {} is not a directory",
+                src.display()
+            )));
         }
 
-        if opts.numeric_ids {
-            args.push("--numeric-ids".to_string());
-        }
+        fs::create_dir_all(dst)?;
 
-        if let Some(info) = &opts.info {
-            args.push(format!("--info={}", info));
-        }
+        let to_io_err = |e: walkdir::Error| -> io::Error { io::Error::other(e.to_string()) };
 
-        args.extend(opts.extra_args.iter().cloned());
-
-        // Ensure trailing slash on src to copy contents.
-        let src_str = format!("{}/", src.display());
-        args.push(src_str);
-        args.push(dst.display().to_string());
-
-        let mut child = Command::new("rsync")
-            .args(&args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| map_command_err("rsync", e))?;
-
-        // Drain stderr in the background to avoid deadlocks if rsync is chatty.
-        let mut stderr_handle = child.stderr.take().map(|stderr| {
-            std::thread::spawn(move || {
-                let mut s = String::new();
-                let mut reader = BufReader::new(stderr);
-                let _ = reader.read_to_string(&mut s);
-                s
-            })
-        });
-
-        let (tx, rx) = mpsc::channel::<io::Result<String>>();
-        if let Some(stdout) = child.stdout.take() {
-            std::thread::spawn(move || {
-                let reader = BufReader::new(stdout);
-                for line in reader.lines() {
-                    if tx.send(line).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        let start = Instant::now();
-        let mut last_output = Instant::now();
-        let watch_idle = opts.info.is_some();
-        loop {
-            // Hard upper bound.
-            if start.elapsed() > RSYNC_MAX_TIMEOUT {
-                let _ = child.kill();
-                let _ = child.wait();
-                if let Some(h) = stderr_handle.take() {
-                    let _ = h.join();
-                }
-                return Err(HalError::CommandTimeout {
-                    program: "rsync".to_string(),
-                    timeout_secs: RSYNC_MAX_TIMEOUT.as_secs(),
-                });
-            }
-
-            // Idle detection (no stdout lines observed) only when the caller asked for progress
-            // output; otherwise rsync may be intentionally quiet.
-            if watch_idle && last_output.elapsed() > RSYNC_IDLE_TIMEOUT {
-                let _ = child.kill();
-                let _ = child.wait();
-                if let Some(h) = stderr_handle.take() {
-                    let _ = h.join();
-                }
-                return Err(HalError::CommandTimeout {
-                    program: "rsync".to_string(),
-                    timeout_secs: RSYNC_IDLE_TIMEOUT.as_secs(),
-                });
-            }
-
-            match rx.recv_timeout(Duration::from_millis(250)) {
-                Ok(Ok(line)) => {
-                    last_output = Instant::now();
-                    if !on_stdout_line(&line) {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        if let Some(h) = stderr_handle.take() {
-                            let _ = h.join();
-                        }
-                        return Err(HalError::Other("rsync cancelled".to_string()));
-                    }
-                }
-                Ok(Err(err)) => return Err(HalError::Io(err)),
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    // Poll for process exit while waiting for output.
-                    if let Some(status) = child.try_wait()? {
-                        if !status.success() {
-                            let stderr_s = stderr_handle
-                                .take()
-                                .and_then(|h| h.join().ok())
-                                .unwrap_or_default();
-                            return Err(HalError::CommandFailed {
-                                program: "rsync".to_string(),
-                                code: status.code(),
-                                stderr: stderr_s.trim().to_string(),
-                            });
-                        }
-                        // Success.
-                        let _ = stderr_handle.take().and_then(|h| h.join().ok());
-                        return Ok(());
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        // First pass: totals for progress.
+        let mut total_bytes = 0u64;
+        let mut files_total = 0u64;
+        for entry in WalkDir::new(src).follow_links(false) {
+            let entry = entry.map_err(|e| HalError::Io(to_io_err(e)))?;
+            let meta = fs::symlink_metadata(entry.path())?;
+            let ft = meta.file_type();
+            if ft.is_file() {
+                total_bytes = total_bytes.saturating_add(meta.len());
+                files_total += 1;
+            } else if ft.is_symlink() {
+                files_total += 1;
             }
         }
 
-        let status = match child
-            .wait_timeout(Duration::from_secs(5))
-            .map_err(HalError::Io)?
-        {
-            Some(status) => status,
-            None => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(HalError::CommandTimeout {
-                    program: "rsync".to_string(),
-                    timeout_secs: 5,
-                });
-            }
+        let mut progress = CopyProgress {
+            bytes_copied: 0,
+            bytes_total: total_bytes,
+            files_copied: 0,
+            files_total,
         };
-        if !status.success() {
-            let stderr_s = stderr_handle
-                .take()
-                .and_then(|h| h.join().ok())
-                .unwrap_or_default();
-            return Err(HalError::CommandFailed {
-                program: "rsync".to_string(),
-                code: status.code(),
-                stderr: stderr_s.trim().to_string(),
-            });
+
+        let mut emit = |prog: &CopyProgress| -> HalResult<()> {
+            if !on_progress(prog.clone()) {
+                return Err(HalError::Other("copy cancelled".to_string()));
+            }
+            Ok(())
+        };
+
+        for entry in WalkDir::new(src).follow_links(false) {
+            let entry = entry.map_err(|e| HalError::Io(to_io_err(e)))?;
+            let rel = entry.path().strip_prefix(src).map_err(|_| {
+                HalError::ValidationFailed("failed to strip source prefix".to_string())
+            })?;
+            let meta = fs::symlink_metadata(entry.path())?;
+            let ft = meta.file_type();
+
+            if rel.as_os_str().is_empty() {
+                apply_metadata(dst, &meta, opts)?;
+                continue;
+            }
+
+            let target = dst.join(rel);
+            if ft.is_dir() {
+                ensure_directory(&target)?;
+                apply_metadata(&target, &meta, opts)?;
+                continue;
+            }
+
+            if ft.is_symlink() {
+                copy_symlink(entry.path(), &target)?;
+                progress.files_copied += 1;
+                emit(&progress)?;
+                continue;
+            }
+
+            if ft.is_file() {
+                let bytes = copy_file(entry.path(), &target, &meta, opts)?;
+                progress.bytes_copied = progress.bytes_copied.saturating_add(bytes);
+                progress.files_copied += 1;
+                emit(&progress)?;
+                continue;
+            }
         }
+
+        // Best-effort fsync on destination root to flush directory metadata.
+        if let Ok(dir) = fs::File::open(dst) {
+            let _ = dir.sync_all();
+        }
+
         Ok(())
     }
+}
+
+fn ensure_directory(path: &Path) -> HalResult<()> {
+    if path.exists() && !path.is_dir() {
+        fs::remove_file(path)?;
+    }
+    fs::create_dir_all(path)?;
+    Ok(())
+}
+
+fn copy_symlink(src: &Path, dst: &Path) -> HalResult<()> {
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if dst.exists() {
+        fs::remove_file(dst)?;
+    }
+    let target = fs::read_link(src)?;
+    symlink(&target, dst)?;
+    Ok(())
+}
+
+fn copy_file(src: &Path, dst: &Path, meta: &fs::Metadata, opts: &CopyOptions) -> HalResult<u64> {
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if dst.exists() {
+        fs::remove_file(dst)?;
+    }
+
+    let bytes = fs::copy(src, dst)?;
+
+    // Flush data to storage; best-effort if the platform supports it.
+    if let Ok(f) = fs::OpenOptions::new().read(true).write(true).open(dst) {
+        let _ = f.sync_data();
+    }
+
+    apply_metadata(dst, meta, opts)?;
+
+    Ok(bytes)
+}
+
+fn apply_metadata(path: &Path, meta: &fs::Metadata, opts: &CopyOptions) -> HalResult<()> {
+    #[cfg(unix)]
+    {
+        if opts.preserve_perms {
+            fs::set_permissions(path, meta.permissions())?;
+        }
+        if opts.preserve_owner {
+            let uid = meta.uid();
+            let gid = meta.gid();
+            chown(path, Some(Uid::from_raw(uid)), Some(Gid::from_raw(gid)))?;
+        }
+    }
+
+    if opts.preserve_times {
+        let atime = FileTime::from_last_access_time(meta);
+        let mtime = FileTime::from_last_modification_time(meta);
+        filetime::set_file_times(path, atime, mtime)?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
