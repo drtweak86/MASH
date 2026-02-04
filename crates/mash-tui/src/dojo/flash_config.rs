@@ -1,7 +1,7 @@
 use mash_core::cli::PartitionScheme;
 use mash_core::locale::LocaleConfig;
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::SyncSender;
 
 use crate::progress::ProgressUpdate;
 
@@ -169,7 +169,7 @@ pub struct TuiFlashConfig {
     pub watch: bool,
     pub locale: Option<LocaleConfig>,
     pub early_ssh: bool,
-    pub progress_tx: Option<Sender<ProgressUpdate>>,
+    pub progress_tx: Option<SyncSender<ProgressUpdate>>,
     pub efi_size: String,
     pub boot_size: String,
     pub root_end: String,

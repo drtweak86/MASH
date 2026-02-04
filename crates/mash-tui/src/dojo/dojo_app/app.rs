@@ -9,7 +9,7 @@ use mash_core::cli::PartitionScheme;
 use mash_core::locale::{LocaleConfig, LOCALES};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -24,8 +24,8 @@ pub struct App {
     pub resolved_layout: Option<ResolvedPartitionLayout>,
     pub cleanup: Cleanup,
     pub progress_rx: Option<Receiver<ProgressEvent>>, // Existing
-    pub progress_tx: Option<Sender<ProgressEvent>>,   // Existing
-    pub flash_progress_sender: Option<Sender<crate::progress::ProgressUpdate>>, // NEW
+    pub progress_tx: Option<SyncSender<ProgressEvent>>, // Existing
+    pub flash_progress_sender: Option<SyncSender<crate::progress::ProgressUpdate>>, // NEW
     pub flash_progress_receiver: Option<Receiver<crate::progress::ProgressUpdate>>, // NEW
     pub progress_state: Arc<Mutex<ProgressState>>,
     pub backup_confirmed: bool,
@@ -123,8 +123,9 @@ impl Default for App {
 
 impl App {
     pub fn new() -> Self {
-        let (tx, rx) = std::sync::mpsc::channel(); // Existing for ProgressEvent
-        let (flash_tx, flash_rx) = std::sync::mpsc::channel(); // NEW for ProgressUpdate
+        const PROGRESS_BOUND: usize = 64;
+        let (tx, rx) = std::sync::mpsc::sync_channel(PROGRESS_BOUND); // Existing for ProgressEvent
+        let (flash_tx, flash_rx) = std::sync::mpsc::sync_channel(PROGRESS_BOUND); // NEW for ProgressUpdate
         let progress_state = Arc::new(Mutex::new(ProgressState::default()));
         let progress_state_thread = Arc::clone(&progress_state);
         std::thread::spawn(move || {

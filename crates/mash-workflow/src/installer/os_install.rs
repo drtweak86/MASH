@@ -6,7 +6,7 @@ use mash_core::progress::ProgressUpdate;
 use mash_core::state_manager::{DownloadArtifact, InstallState, StageName};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::SyncSender;
 
 /// Where the OS image comes from.
 #[derive(Debug, Clone)]
@@ -28,7 +28,7 @@ pub struct OsInstallConfig {
     pub download_dir: PathBuf,
     pub image_source: ImageSource,
     pub dry_run: bool,
-    pub progress_tx: Option<Sender<ProgressUpdate>>,
+    pub progress_tx: Option<SyncSender<ProgressUpdate>>,
 }
 
 impl OsInstallConfig {
