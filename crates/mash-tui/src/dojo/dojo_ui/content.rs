@@ -1,215 +1,9 @@
-#![allow(clippy::items_after_test_module)]
-//! Dojo UI module for the single-screen TUI
-
-use super::dojo_app::{App, InstallStepType};
+use super::super::dojo_app::{App, CustomizeField, DiskOption, InstallStepType};
+use super::super::{data_sources, flash_config};
 use crate::progress::{Phase, ProgressState};
-use ratatui::{
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph},
-    Frame,
-};
 use std::path::PathBuf;
 
-pub fn draw(f: &mut Frame, app: &App) {
-    let progress_state = app.progress_state_snapshot();
-
-    // Main layout: Title | Main Body | Progress Bar | Key Legend
-    let main_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .margin(1)
-        .constraints(
-            [
-                Constraint::Length(3), // Title bar
-                Constraint::Min(10),   // Main body (3-panel)
-                Constraint::Length(3), // Progress bar
-                Constraint::Length(3), // Key legend
-            ]
-            .as_ref(),
-        )
-        .split(f.area());
-
-    // Title bar: mode + SAFE/ARMED indicator (must be unambiguous).
-    let (mode_label, mode_color) = if app.dry_run {
-        ("DRY-RUN", Color::Yellow)
-    } else {
-        ("EXECUTE", Color::Red)
-    };
-    let (arming_label, arming_color) = if app.destructive_armed {
-        ("ARMED", Color::Red)
-    } else {
-        ("SAFE", Color::Green)
-    };
-    let title_line = Line::from(vec![
-        Span::styled("MASH Installer", Style::default().fg(Color::White)),
-        Span::raw(" | "),
-        Span::styled(mode_label, Style::default().fg(mode_color)),
-        Span::raw(" | "),
-        Span::styled(arming_label, Style::default().fg(arming_color)),
-    ]);
-    let title = Block::default().borders(Borders::ALL).title(title_line);
-    f.render_widget(title, main_chunks[0]);
-
-    // Three-panel layout: Sidebar | Content | Info Panel
-    let body_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(
-            [
-                Constraint::Percentage(20), // Left: Step sidebar
-                Constraint::Percentage(55), // Center: Main content
-                Constraint::Percentage(25), // Right: Info panel
-            ]
-            .as_ref(),
-        )
-        .split(main_chunks[1]);
-
-    // Left sidebar: Step progress
-    let sidebar_content = build_step_sidebar(app);
-    let sidebar = Paragraph::new(sidebar_content)
-        .block(Block::default().borders(Borders::ALL).title("Steps"));
-    f.render_widget(sidebar, body_chunks[0]);
-
-    // Center: Main content (current step)
-    let dojo_lines = build_dojo_lines(app);
-    let list_items = dojo_lines
-        .into_iter()
-        .map(ListItem::new)
-        .collect::<Vec<_>>();
-    let content = List::new(list_items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(app.current_step_type.title()),
-    );
-    f.render_widget(content, body_chunks[1]);
-
-    // Right panel: Info summary
-    let info_content = build_info_panel(app, &progress_state);
-    let info_panel =
-        Paragraph::new(info_content).block(Block::default().borders(Borders::ALL).title("Info"));
-    f.render_widget(info_panel, body_chunks[2]);
-
-    // Progress bar
-    let percent = progress_state.overall_percent.round().clamp(0.0, 100.0) as u16;
-    let gauge = Gauge::default()
-        .block(Block::default().borders(Borders::ALL).title("Progress"))
-        .gauge_style(Style::default().fg(Color::Yellow))
-        .percent(percent);
-    f.render_widget(gauge, main_chunks[2]);
-
-    // Key legend (always visible, context-specific)
-    let key_help = expected_actions(app.current_step_type);
-    let status_msg = status_message(app, &progress_state);
-    let legend_text = format!("{}\n{}", status_msg, key_help);
-    let legend =
-        Paragraph::new(legend_text).block(Block::default().borders(Borders::ALL).title("Keys"));
-    f.render_widget(legend, main_chunks[3]);
-}
-
-pub fn dump_step(app: &App) -> String {
-    let progress_state = app.progress_state_snapshot();
-    let dojo_lines = build_dojo_lines(app);
-    let header = "MASH Installer";
-    let dojo_hint = dojo_lines
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "🧭 Step: (unknown)".to_string());
-    let body_lines = if dojo_lines.len() > 1 {
-        dojo_lines[1..].join("\n")
-    } else {
-        "(no body content)".to_string()
-    };
-    let percent = progress_state.overall_percent.round().clamp(0.0, 100.0) as u16;
-    let phase_line = phase_line(&progress_state);
-    let eta_line = format!("⏱️ ETA: {}", progress_state.eta_string());
-    let phase_percent = progress_state.phase_percent.round().clamp(0.0, 100.0) as u16;
-    let overall_line = format!("📈 Overall: {}% | Phase: {}%", percent, phase_percent);
-    let telemetry = progress_detail(&progress_state, &phase_line, &overall_line, &eta_line);
-    let status = status_message(app, &progress_state);
-    let actions = expected_actions(app.current_step_type);
-
-    format!(
-        "STEP: {}\n\n- Header: {}\n- Dojo hint line: {}\n- Body contents:\n{}\n- Footer/progress/telemetry/status blocks:\nProgress: {}%\nTelemetry: {}\nStatus: {}\n- Expected user actions (keys): {}\n",
-        app.current_step_type.title(),
-        header,
-        dojo_hint,
-        body_lines,
-        percent,
-        telemetry,
-        status,
-        actions
-    )
-}
-
-/// Build the left sidebar showing step progression
-fn build_step_sidebar(app: &App) -> String {
-    let all_steps = [
-        (InstallStepType::Welcome, "Welcome"),
-        (InstallStepType::ImageSelection, "Select OS"),
-        (InstallStepType::VariantSelection, "Select Flavour"),
-        (InstallStepType::DownloadSourceSelection, "Image Source"),
-        (InstallStepType::DiskSelection, "Select Disk"),
-        (InstallStepType::DiskConfirmation, "Confirm Disk"),
-        (InstallStepType::PartitionScheme, "Partition Scheme"),
-        (InstallStepType::PartitionLayout, "Partition Layout"),
-        (InstallStepType::EfiImage, "EFI Setup"),
-        (InstallStepType::LocaleSelection, "Locale/Keymap"),
-        (InstallStepType::Options, "Options"),
-        (InstallStepType::PlanReview, "Review Plan"),
-        (InstallStepType::Confirmation, "Confirm"),
-        (InstallStepType::ExecuteConfirmationGate, "Execute Gate"),
-        (InstallStepType::Flashing, "Installing..."),
-        (InstallStepType::Complete, "Complete!"),
-    ];
-
-    let mut lines = Vec::new();
-    for (step, label) in &all_steps {
-        let marker = if *step == app.current_step_type {
-            "▶"
-        } else if is_step_before(*step, app.current_step_type) {
-            "✓"
-        } else {
-            " "
-        };
-        lines.push(format!("{} {}", marker, label));
-    }
-    lines.join("\n")
-}
-
-/// Check if step_a comes before step_b in the flow
-fn is_step_before(step_a: InstallStepType, step_b: InstallStepType) -> bool {
-    let order = [
-        InstallStepType::Welcome,
-        InstallStepType::ImageSelection,
-        InstallStepType::VariantSelection,
-        InstallStepType::DownloadSourceSelection,
-        InstallStepType::DiskSelection,
-        InstallStepType::DiskConfirmation,
-        InstallStepType::PartitionScheme,
-        InstallStepType::PartitionLayout,
-        InstallStepType::PartitionCustomize,
-        InstallStepType::EfiImage,
-        InstallStepType::LocaleSelection,
-        InstallStepType::Options,
-        InstallStepType::PlanReview,
-        InstallStepType::Confirmation,
-        InstallStepType::ExecuteConfirmationGate,
-        InstallStepType::DisarmSafeMode,
-        InstallStepType::Flashing,
-        InstallStepType::Complete,
-    ];
-
-    let pos_a = order.iter().position(|&s| s == step_a);
-    let pos_b = order.iter().position(|&s| s == step_b);
-
-    match (pos_a, pos_b) {
-        (Some(a), Some(b)) => a < b,
-        _ => false,
-    }
-}
-
-/// Build the right info panel showing current selections and status
-fn build_info_panel(app: &App, progress_state: &ProgressState) -> String {
+pub(super) fn build_info_panel(app: &App, progress_state: &ProgressState) -> String {
     let mut lines = Vec::new();
 
     // Mode status (prominent; DRY-RUN must not look destructive)
@@ -270,7 +64,7 @@ fn build_info_panel(app: &App, progress_state: &ProgressState) -> String {
     lines.join("\n")
 }
 
-fn build_dojo_lines(app: &App) -> Vec<String> {
+pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
     let current_step_title = app.current_step_type.title();
     let mut items = Vec::new();
     items.push(format!("🧭 Step: {}", current_step_title));
@@ -309,7 +103,7 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("".to_string());
 
             // Show warning banner if boot detection failed
-            use super::data_sources::BootConfidence;
+            use data_sources::BootConfidence;
             if app
                 .disks
                 .iter()
@@ -462,9 +256,9 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                 .enumerate()
                 .map(|(idx, option)| {
                     let field = match idx {
-                        0 => Some(super::dojo_app::CustomizeField::Efi),
-                        1 => Some(super::dojo_app::CustomizeField::Boot),
-                        2 => Some(super::dojo_app::CustomizeField::Root),
+                        0 => Some(CustomizeField::Efi),
+                        1 => Some(CustomizeField::Boot),
+                        2 => Some(CustomizeField::Root),
                         _ => None,
                     };
                     if field.is_some() && app.customize_error_field == field {
@@ -492,7 +286,7 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
             if app
                 .image_sources
                 .get(app.image_source_index)
-                .map(|source| source.value == super::flash_config::ImageSource::LocalFile)
+                .map(|source| source.value == flash_config::ImageSource::LocalFile)
                 .unwrap_or(false)
             {
                 items.push("Local image path:".to_string());
@@ -550,7 +344,7 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
             let uefi_source = app.uefi_sources.get(app.uefi_source_index);
             let is_local = matches!(
                 uefi_source,
-                Some(super::flash_config::EfiSource::LocalEfiImage)
+                Some(flash_config::EfiSource::LocalEfiImage)
             );
 
             // Show EFI source options (intent-only)
@@ -653,7 +447,7 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
                 .unwrap_or_else(|| PathBuf::from(app.image_source_path.clone()));
             let download_efi = matches!(
                 app.uefi_sources.get(app.uefi_source_index),
-                Some(super::flash_config::EfiSource::DownloadEfiImage)
+                Some(flash_config::EfiSource::DownloadEfiImage)
             );
             let effective_efi = if download_efi {
                 PathBuf::from("/tmp/mash-downloads/uefi")
@@ -773,7 +567,7 @@ fn build_dojo_lines(app: &App) -> Vec<String> {
             ));
             let download_efi = matches!(
                 app.uefi_sources.get(app.uefi_source_index),
-                Some(super::flash_config::EfiSource::DownloadEfiImage)
+                Some(flash_config::EfiSource::DownloadEfiImage)
             );
             if download_efi {
                 items.push("EFI image: Download".to_string());
@@ -904,7 +698,7 @@ fn push_options(items: &mut Vec<String>, options: &[String], selected: usize) {
     }
 }
 
-fn build_plan_lines(app: &super::dojo_app::App) -> Vec<String> {
+fn build_plan_lines(app: &App) -> Vec<String> {
     let mut lines = Vec::new();
 
     let distro = app.os_distros.get(app.os_distro_index).copied();
@@ -927,13 +721,13 @@ fn build_plan_lines(app: &super::dojo_app::App) -> Vec<String> {
         lines.push("Disk: <not selected>".to_string());
     }
 
-    if matches!(distro, Some(super::flash_config::OsDistro::Fedora)) {
+    if matches!(distro, Some(flash_config::OsDistro::Fedora)) {
         if let Some(uefi_source) = app.uefi_sources.get(app.uefi_source_index) {
             match uefi_source {
-                super::flash_config::EfiSource::LocalEfiImage => {
+                flash_config::EfiSource::LocalEfiImage => {
                     lines.push(format!("EFI: Local ({})", app.uefi_source_path));
                 }
-                super::flash_config::EfiSource::DownloadEfiImage => {
+                flash_config::EfiSource::DownloadEfiImage => {
                     lines.push("EFI: Download image".to_string());
                 }
             }
@@ -944,7 +738,7 @@ fn build_plan_lines(app: &super::dojo_app::App) -> Vec<String> {
         lines.push("Reboots: 1".to_string());
     } else {
         lines.push("Action: flash upstream full-disk image (no repartition)".to_string());
-        if matches!(distro, Some(super::flash_config::OsDistro::Manjaro)) {
+        if matches!(distro, Some(flash_config::OsDistro::Manjaro)) {
             lines.push("Note: post-boot partition expansion required".to_string());
         }
         lines.push("Reboots: 0".to_string());
@@ -953,7 +747,7 @@ fn build_plan_lines(app: &super::dojo_app::App) -> Vec<String> {
     lines
 }
 
-fn expected_actions(step: InstallStepType) -> String {
+pub(super) fn expected_actions(step: InstallStepType) -> String {
     match step {
         InstallStepType::BackupConfirmation => "Up/Down, Y/N, Enter, Esc, q".to_string(),
         InstallStepType::Flashing => "Enter when complete, C to cancel, q".to_string(),
@@ -986,8 +780,8 @@ fn expected_actions(step: InstallStepType) -> String {
     }
 }
 
-fn format_disk_entry(disk: &super::dojo_app::DiskOption) -> String {
-    use super::data_sources::BootConfidence;
+fn format_disk_entry(disk: &DiskOption) -> String {
+    use data_sources::BootConfidence;
 
     // CRITICAL: Use DiskIdentity::display_string() exclusively - no UI-side reconstruction
     let identity_str = disk.identity.display_string();
@@ -1024,7 +818,7 @@ fn format_disk_entry(disk: &super::dojo_app::DiskOption) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::dojo::dojo_ui::dump_step;
 
     #[test]
     fn plan_review_renders_summary() {
@@ -1036,7 +830,7 @@ mod tests {
     }
 }
 
-fn status_message(app: &App, progress_state: &ProgressState) -> String {
+pub(super) fn status_message(app: &App, progress_state: &ProgressState) -> String {
     let message = if !progress_state.status.is_empty() {
         progress_state.status.clone()
     } else {
@@ -1118,7 +912,7 @@ fn ensure_emoji_prefix(message: String) -> String {
     }
 }
 
-fn phase_line(progress_state: &ProgressState) -> String {
+pub(super) fn phase_line(progress_state: &ProgressState) -> String {
     match progress_state.current_phase {
         Some(phase) => {
             let phase_number = phase.number();
@@ -1135,7 +929,7 @@ fn phase_line(progress_state: &ProgressState) -> String {
     }
 }
 
-fn progress_detail(
+pub(super) fn progress_detail(
     progress_state: &ProgressState,
     phase_line: &str,
     overall_line: &str,
