@@ -74,7 +74,7 @@ pub fn dump_all_steps() -> Result<()> {
     for step in dojo_app::InstallStepType::all() {
         app.current_step_type = *step;
         let dump = dojo_ui::dump_step(&app);
-        println!("{}", dump);
+        log::info!("{}", dump);
     }
     Ok(())
 }

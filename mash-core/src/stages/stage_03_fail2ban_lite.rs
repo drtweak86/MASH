@@ -15,7 +15,7 @@ enabled = true
 "#;
 
 pub fn run(_args: &[String]) -> Result<()> {
-    println!("🛡️  fail2ban-lite: enabling sshd jail (LAN safe)");
+    log::info!("🛡️  fail2ban-lite: enabling sshd jail (LAN safe)");
 
     let hal = mash_hal::LinuxHal::new();
     let _ = hal.command_status(
@@ -38,6 +38,6 @@ pub fn run(_args: &[String]) -> Result<()> {
         Duration::from_secs(60),
     );
 
-    println!("✅ fail2ban running. LAN ignored. 🛡️");
+    log::info!("✅ fail2ban running. LAN ignored. 🛡️");
     Ok(())
 }

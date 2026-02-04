@@ -19,7 +19,7 @@ dtoverlay=upstream-pi4
 pub fn run(args: &[String]) -> Result<()> {
     let efi_mount = args.first().map(String::as_str).unwrap_or("/boot/efi");
     let cfg_path = Path::new(efi_mount).join("config.txt");
-    println!(
+    log::info!(
         "[*] Writing safe Pi4 UEFI config.txt -> {}",
         cfg_path.display()
     );

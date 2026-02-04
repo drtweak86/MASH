@@ -191,7 +191,7 @@ pub fn run() -> anyhow::Result<()> {
             };
 
             let plan = mash_workflow::installer::pipeline::run_pipeline(&cfg)?;
-            println!("{}", plan);
+            log::info!("{}", plan);
             return Ok(());
         }
     }

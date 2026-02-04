@@ -12,7 +12,7 @@ pub fn run(args: &[String]) -> Result<()> {
         .map(String::as_str)
         .ok_or_else(|| anyhow::anyhow!("need path to mash_helpers root"))?;
     let dst = Path::new(data_mount).join("bootstrap");
-    println!("[*] Staging bootstrap into {}", dst.display());
+    log::info!("[*] Staging bootstrap into {}", dst.display());
     fs::create_dir_all(&dst)?;
 
     let hal = mash_hal::LinuxHal::new();
@@ -42,7 +42,7 @@ pub fn run(args: &[String]) -> Result<()> {
     }
 
     let _ = hal.sync();
-    println!(
+    log::info!(
         "[+] Staged. On Fedora first boot run: sudo /data/bootstrap/mash_forge.py firstboot ..."
     );
     Ok(())
