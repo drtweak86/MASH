@@ -4,26 +4,78 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-type StageName = String;
+pub use crate::downloader::DownloadArtifact;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DownloadArtifact {
-    pub name: String,
-    pub path: String,
-    pub size: u64,
-    pub checksum: String,
-    pub resumed: bool,
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum StageName {
+    Preflight,
+    DownloadAssets,
+    MountPlan,
+    FormatPlan,
+    PackagePlan,
+    KernelFixCheck,
+    ResumeUnit,
+    Other(String),
 }
 
-impl DownloadArtifact {
-    pub fn new(name: String, path: &Path, size: u64, checksum: String, resumed: bool) -> Self {
-        Self {
-            name,
-            path: path.to_string_lossy().into_owned(),
-            size,
-            checksum,
-            resumed,
+impl StageName {
+    pub fn as_str(&self) -> &str {
+        match self {
+            StageName::Preflight => "Preflight",
+            StageName::DownloadAssets => "Download assets",
+            StageName::MountPlan => "Mount plan",
+            StageName::FormatPlan => "Format plan",
+            StageName::PackagePlan => "Package plan",
+            StageName::KernelFixCheck => "Kernel fix check",
+            StageName::ResumeUnit => "Resume unit",
+            StageName::Other(s) => s.as_str(),
         }
+    }
+}
+
+impl std::fmt::Display for StageName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl From<&str> for StageName {
+    fn from(s: &str) -> Self {
+        match s {
+            "Preflight" => StageName::Preflight,
+            "Download assets" => StageName::DownloadAssets,
+            "Mount plan" => StageName::MountPlan,
+            "Format plan" => StageName::FormatPlan,
+            "Package plan" => StageName::PackagePlan,
+            "Kernel fix check" => StageName::KernelFixCheck,
+            "Resume unit" => StageName::ResumeUnit,
+            other => StageName::Other(other.to_string()),
+        }
+    }
+}
+
+impl From<String> for StageName {
+    fn from(value: String) -> Self {
+        StageName::from(value.as_str())
+    }
+}
+
+impl Serialize for StageName {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for StageName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(StageName::from(s.as_str()))
     }
 }
 
@@ -33,6 +85,8 @@ pub struct InstallState {
     pub dry_run: bool,
     pub current_stage: Option<StageName>,
     pub completed_stages: Vec<StageName>,
+    pub armed_execute: bool,
+    pub typed_confirmation: bool,
     pub download_artifacts: Vec<DownloadArtifact>,
     pub verified_checksums: Vec<String>,
     pub formatted_devices: Vec<String>,
@@ -55,6 +109,8 @@ impl InstallState {
             dry_run,
             current_stage: None,
             completed_stages: Vec::new(),
+            armed_execute: false,
+            typed_confirmation: false,
             download_artifacts: Vec::new(),
             verified_checksums: Vec::new(),
             formatted_devices: Vec::new(),
@@ -67,19 +123,19 @@ impl InstallState {
         }
     }
 
-    pub fn is_completed(&self, stage: &str) -> bool {
+    pub fn is_completed(&self, stage: &StageName) -> bool {
         self.completed_stages.iter().any(|s| s == stage)
     }
 
-    pub fn mark_completed(&mut self, stage: &str) {
+    pub fn mark_completed(&mut self, stage: &StageName) {
         if !self.is_completed(stage) {
-            self.completed_stages.push(stage.to_string());
+            self.completed_stages.push(stage.clone());
         }
         self.current_stage = None;
     }
 
-    pub fn set_current(&mut self, stage: &str) {
-        self.current_stage = Some(stage.to_string());
+    pub fn set_current(&mut self, stage: &StageName) {
+        self.current_stage = Some(stage.clone());
     }
 
     pub fn record_download(&mut self, artifact: DownloadArtifact) {
@@ -111,6 +167,21 @@ impl InstallState {
         if partial {
             self.partial_ok_resume = true;
         }
+    }
+
+    pub fn arm_execute(&mut self) {
+        self.armed_execute = true;
+        self.typed_confirmation = true;
+    }
+
+    pub fn ensure_armed(&self) -> Result<()> {
+        if self.dry_run {
+            return Ok(());
+        }
+        if !self.armed_execute {
+            anyhow::bail!("execute path requires armed confirmation (resume not armed)");
+        }
+        Ok(())
     }
 }
 
@@ -174,13 +245,13 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("state.json");
         let mut state = InstallState::new(true);
-        state.set_current("stage-1");
-        state.mark_completed("stage-0");
+        state.set_current(&StageName::Other("stage-1".into()));
+        state.mark_completed(&StageName::Other("stage-0".into()));
         state.record_download(DownloadArtifact::new(
             "disk.img".to_string(),
-            &dir.path().join("disk.img"),
-            1024,
+            dir.path().join("disk.img"),
             "abc".to_string(),
+            1024,
             false,
         ));
         state.mark_checksum_verified("abc");

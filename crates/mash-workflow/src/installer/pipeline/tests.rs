@@ -2,6 +2,7 @@ use super::stages::run_download_stage;
 use super::stages::{run_boot_stage, run_disk_stage};
 use super::*;
 use crate::install_runner::{StageDefinition, StageRunner};
+use mash_core::state_manager::StageName;
 
 use httpmock::Method::GET;
 use httpmock::MockServer;
@@ -21,7 +22,7 @@ fn run_download_stage_with_runner(
 ) -> state_manager::InstallState {
     let stage_cfg = DownloadStageConfig::from_install_config(cfg);
     let stage_def = StageDefinition {
-        name: "Download assets",
+        name: StageName::DownloadAssets,
         run: Box::new(move |state, dry_run| run_download_stage(state, &stage_cfg, dry_run)),
     };
     StageRunner::new(state_path.to_path_buf(), false)
@@ -360,9 +361,7 @@ fn download_stage_records_artifact() {
     let saved = run_download_stage_with_runner(&cfg, &state_path);
     let persisted = state_manager::load_state(&state_path).unwrap().unwrap();
     assert_eq!(saved, persisted);
-    assert!(saved
-        .completed_stages
-        .contains(&"Download assets".to_string()));
+    assert!(saved.completed_stages.contains(&StageName::DownloadAssets));
     assert_eq!(saved.download_artifacts.len(), 1);
     assert_eq!(saved.verified_checksums, vec![checksum]);
     assert_eq!(saved.download_artifacts[0].size, body.len() as u64);
@@ -381,13 +380,13 @@ fn download_stage_skips_when_completed() {
     let mut preset = state_manager::InstallState::new(false);
     preset.record_download(DownloadArtifact::new(
         "Fedora-43-KDE-aarch64.raw.xz".to_string(),
-        &artifact_path,
-        6,
+        artifact_path.clone(),
         checksum.clone(),
+        6,
         false,
     ));
     preset.mark_checksum_verified(&checksum);
-    preset.mark_completed("Download assets");
+    preset.mark_completed(&StageName::DownloadAssets);
     state_manager::save_state_atomic(&state_path, &preset).unwrap();
 
     let cfg = make_download_config(
@@ -400,7 +399,7 @@ fn download_stage_skips_when_completed() {
 
     let download_cfg = DownloadStageConfig::from_install_config(&cfg);
     let stage = StageDefinition {
-        name: "Download assets",
+        name: StageName::DownloadAssets,
         run: Box::new(move |state, dry_run| run_download_stage(state, &download_cfg, dry_run)),
     };
     let runner = StageRunner::new(state_path.clone(), false);
@@ -408,9 +407,7 @@ fn download_stage_skips_when_completed() {
     let persisted = state_manager::load_state(&state_path).unwrap().unwrap();
     assert_eq!(saved, persisted);
     assert_eq!(saved.download_artifacts.len(), 1);
-    assert!(saved
-        .completed_stages
-        .contains(&"Download assets".to_string()));
+    assert!(saved.completed_stages.contains(&StageName::DownloadAssets));
 }
 
 #[test]
@@ -434,15 +431,13 @@ fn download_stage_checksum_failure() {
 
     let download_cfg = DownloadStageConfig::from_install_config(&cfg);
     let stage = StageDefinition {
-        name: "Download assets",
+        name: StageName::DownloadAssets,
         run: Box::new(move |state, dry_run| run_download_stage(state, &download_cfg, dry_run)),
     };
     let runner = StageRunner::new(state_path.clone(), false);
     assert!(runner.run(&[stage]).is_err());
     let saved = state_manager::load_state(&state_path).unwrap().unwrap();
-    assert!(!saved
-        .completed_stages
-        .contains(&"Download assets".to_string()));
+    assert!(!saved.completed_stages.contains(&StageName::DownloadAssets));
     assert!(saved.download_artifacts.is_empty());
 }
 
@@ -574,7 +569,7 @@ fn disk_stage_formats_commands_when_confirmed() {
     let disk_cfg = DiskStageConfig::from_install_config(&cfg);
     let hal = mash_hal::LinuxHal::new();
     let stage = StageDefinition {
-        name: "Format plan",
+        name: StageName::FormatPlan,
         run: Box::new(move |state, dry_run| run_disk_stage(&hal, state, &disk_cfg, dry_run)),
     };
 
@@ -607,7 +602,7 @@ fn disk_stage_dry_run_skips_formatting() {
     let disk_cfg = DiskStageConfig::from_install_config(&cfg);
     let hal = mash_hal::LinuxHal::new();
     let stage = StageDefinition {
-        name: "Format plan",
+        name: StageName::FormatPlan,
         run: Box::new(move |state, dry_run| run_disk_stage(&hal, state, &disk_cfg, dry_run)),
     };
 
@@ -632,7 +627,7 @@ fn boot_stage_applies_kernel_fix() {
     );
     let boot_cfg = BootStageConfig::from_install_config(&cfg);
     let stage = StageDefinition {
-        name: "Kernel fix check",
+        name: StageName::KernelFixCheck,
         run: Box::new(move |state, dry_run| run_boot_stage(state, &boot_cfg, dry_run)),
     };
 
@@ -666,7 +661,7 @@ fn boot_stage_dry_run_leaves_files_untouched() {
     );
     let boot_cfg = BootStageConfig::from_install_config(&cfg);
     let stage = StageDefinition {
-        name: "Kernel fix check",
+        name: StageName::KernelFixCheck,
         run: Box::new(move |state, dry_run| run_boot_stage(state, &boot_cfg, dry_run)),
     };
 
