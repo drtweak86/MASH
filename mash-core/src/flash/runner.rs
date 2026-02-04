@@ -1,29 +1,19 @@
-//! Flash module - Full installation pipeline for MASH
-//!
-//! Handles partitioning, formatting, copying, and configuration of
-//! Fedora KDE for Raspberry Pi 4 with UEFI boot.
-//!
-//! Based on holy-loop-fedora-uefi-gpt.sh - GPT with 4 partitions:
-//!   p1: EFI (vfat) - esp flag
-//!   p2: BOOT (ext4)
-//!   p3: ROOT (btrfs with subvols: root, home, var)
-//!   p4: DATA (ext4) - for mash-staging
-
+use super::config::{BtrfsSubvols, FlashConfig, FlashContext};
+use super::cancel::cancel_requested;
+use super::mounts::MountPoints;
 use anyhow::{bail, Context, Result};
 use log::info;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 use tempfile::Builder as TempDirBuilder;
 
 use crate::cli::PartitionScheme;
 use crate::config_states::{
-    ArmedConfig, ExecuteArmToken, HasRunMode, UnvalidatedConfig, ValidateConfig, ValidatedConfig,
+    ArmedConfig, ExecuteArmToken, UnvalidatedConfig, ValidatedConfig,
 };
-use crate::install_report::{DiskIdentityReport, InstallReportWriter, RunMode, SelectionReport};
+use crate::install_report::{InstallReportWriter, RunMode, SelectionReport};
 use crate::locale::LocaleConfig;
 use crate::progress::{Phase, ProgressUpdate};
 use mash_hal::{
@@ -31,13 +21,6 @@ use mash_hal::{
     RsyncOptions, WipeFsOptions,
 };
 
-/// Flash a full-disk image to a target block device.
-///
-/// - Supports raw images and `.xz`-compressed images.
-/// - Uses streaming decompression for `.xz` so it does not require an intermediate uncompressed file.
-///
-/// This is used for non-Fedora OS profiles (Ubuntu, Raspberry Pi OS, Manjaro) which ship as full
-/// disk images with their own partition tables.
 pub fn flash_raw_image_to_disk(
     hal: &dyn mash_hal::FlashOps,
     image_path: &Path,
@@ -53,214 +36,6 @@ pub fn flash_raw_image_to_disk(
     hal.flash_raw_image(image_path, target_disk, opts)
         .map_err(anyhow::Error::new)
         .context("Failed to flash raw image to target disk")
-}
-
-/// Mount points for the installation
-struct MountPoints {
-    // Source (image) mounts
-    src_efi: PathBuf,
-    src_boot: PathBuf,
-    src_root_top: PathBuf,
-    src_root_subvol: PathBuf,
-    src_home_subvol: PathBuf,
-    src_var_subvol: PathBuf,
-    // Destination (target) mounts
-    dst_efi: PathBuf,
-    dst_boot: PathBuf,
-    dst_data: PathBuf,
-    dst_root_top: PathBuf,
-    dst_root_subvol: PathBuf,
-    dst_home_subvol: PathBuf,
-    dst_var_subvol: PathBuf,
-}
-
-impl MountPoints {
-    fn new(work_dir: &Path) -> Self {
-        let src = work_dir.join("src");
-        let dst = work_dir.join("dst");
-        Self {
-            src_efi: src.join("efi"),
-            src_boot: src.join("boot"),
-            src_root_top: src.join("root_top"),
-            src_root_subvol: src.join("root_sub_root"),
-            src_home_subvol: src.join("root_sub_home"),
-            src_var_subvol: src.join("root_sub_var"),
-            dst_efi: dst.join("efi"),
-            dst_boot: dst.join("boot"),
-            dst_data: dst.join("data"),
-            dst_root_top: dst.join("root_top"),
-            dst_root_subvol: dst.join("root_sub_root"),
-            dst_home_subvol: dst.join("root_sub_home"),
-            dst_var_subvol: dst.join("root_sub_var"),
-        }
-    }
-
-    fn create_all(&self) -> Result<()> {
-        for dir in [
-            &self.src_efi,
-            &self.src_boot,
-            &self.src_root_top,
-            &self.src_root_subvol,
-            &self.src_home_subvol,
-            &self.src_var_subvol,
-            &self.dst_efi,
-            &self.dst_boot,
-            &self.dst_data,
-            &self.dst_root_top,
-            &self.dst_root_subvol,
-            &self.dst_home_subvol,
-            &self.dst_var_subvol,
-        ] {
-            fs::create_dir_all(dir)
-                .with_context(|| format!("Failed to create mount point: {}", dir.display()))?;
-        }
-        Ok(())
-    }
-}
-
-/// Detected btrfs subvolumes in source image
-struct BtrfsSubvols {
-    has_root: bool,
-    has_home: bool,
-    has_var: bool,
-}
-
-/// Installation context with all configuration
-pub struct FlashContext {
-    pub hal: Arc<dyn InstallerHal>,
-    pub image: PathBuf,
-    pub disk: String,
-    pub scheme: PartitionScheme,
-    pub uefi_dir: PathBuf,
-    pub dry_run: bool,
-    pub auto_unmount: bool,
-    pub locale: Option<LocaleConfig>,
-    pub early_ssh: bool,
-    pub progress_tx: Option<Sender<ProgressUpdate>>,
-    pub work_dir: PathBuf,
-    pub loop_device: Option<String>,
-    pub efi_size: String,
-    pub boot_size: String,
-    pub root_end: String,
-    pub report: Option<InstallReportWriter>,
-}
-
-impl FlashContext {
-    fn send_progress(&self, update: ProgressUpdate) {
-        if let Some(ref report) = self.report {
-            report.record_progress_update(&update);
-        }
-        if let Some(ref tx) = self.progress_tx {
-            let _ = tx.send(update);
-        }
-    }
-
-    fn check_cancel(&self) -> Result<()> {
-        if cancel_requested() {
-            self.status("🧹 Cleaning up...");
-            bail!("Cancelled");
-        }
-        Ok(())
-    }
-
-    fn start_phase(&self, phase: Phase) {
-        info!("📍 Starting phase: {}", phase.name());
-        self.send_progress(ProgressUpdate::PhaseStarted(phase));
-    }
-
-    fn complete_phase(&self, phase: Phase) {
-        info!("✅ Completed phase: {}", phase.name());
-        self.send_progress(ProgressUpdate::PhaseCompleted(phase));
-    }
-
-    fn status(&self, msg: &str) {
-        info!("{}", msg);
-        self.send_progress(ProgressUpdate::Status(msg.to_string()));
-    }
-
-    /// Get partition device path (handles nvme/mmcblk naming)
-    fn partition_path(&self, num: u32) -> String {
-        if self.disk.contains("nvme") || self.disk.contains("mmcblk") {
-            format!("{}p{}", self.disk, num)
-        } else {
-            format!("{}{}", self.disk, num)
-        }
-    }
-}
-
-/// Core flashing configuration.
-///
-/// This is the validated, non-UI-specific input required to execute a flash.
-/// (UI-only selections like "download Fedora" belong in the TUI layer.)
-#[derive(Debug, Clone)]
-pub struct FlashConfig {
-    /// Human label for the selected OS (for reporting / completion messaging).
-    pub os_distro: Option<String>,
-    /// Human label for the selected flavour/variant (for reporting / completion messaging).
-    pub os_flavour: Option<String>,
-    /// Selected target disk identity (best-effort; may be missing on some hardware).
-    pub disk_identity: Option<DiskIdentityReport>,
-    /// Where EFI came from (e.g. "download" or "local") for reporting.
-    pub efi_source: Option<String>,
-    pub image: PathBuf,
-    pub disk: String,
-    pub scheme: PartitionScheme,
-    pub uefi_dir: PathBuf,
-    pub dry_run: bool,
-    pub auto_unmount: bool,
-    pub locale: Option<LocaleConfig>,
-    pub early_ssh: bool,
-    pub progress_tx: Option<Sender<ProgressUpdate>>,
-    pub efi_size: String,
-    pub boot_size: String,
-    pub root_end: String,
-}
-
-impl FlashConfig {
-    pub fn validate(&self) -> Result<()> {
-        if !self.image.exists() {
-            bail!("Image file not found: {}", self.image.display());
-        }
-        if !self.uefi_dir.exists() {
-            bail!("UEFI directory not found: {}", self.uefi_dir.display());
-        }
-
-        // Check for required UEFI file. Allow either:
-        // - a directory containing RPI_EFI.fd (bundle), or
-        // - a direct path to an EFI image file (will be staged into a temp dir at runtime)
-        if self.uefi_dir.is_dir() {
-            let rpi_efi = self.uefi_dir.join("RPI_EFI.fd");
-            if !rpi_efi.exists() {
-                bail!("Missing required UEFI file: {}", rpi_efi.display());
-            }
-        } else if self.uefi_dir.is_file() {
-            // File path is accepted here; it will be normalized in `run_with_progress`.
-        } else {
-            bail!(
-                "UEFI path is neither a file nor directory: {}",
-                self.uefi_dir.display()
-            );
-        }
-
-        let disk = normalize_disk(&self.disk);
-        if !Path::new(&disk).exists() {
-            bail!("Disk device not found: {}", disk);
-        }
-
-        Ok(())
-    }
-}
-
-impl ValidateConfig for FlashConfig {
-    fn validate_cfg(&self) -> Result<()> {
-        self.validate()
-    }
-}
-
-impl HasRunMode for FlashConfig {
-    fn is_dry_run(&self) -> bool {
-        self.dry_run
-    }
 }
 
 /// Simple run function for CLI compatibility
@@ -1192,32 +967,6 @@ fn rsync_with_progress(ctx: &FlashContext, src: &Path, dst: &Path, label: &str) 
         .with_context(|| format!("rsync failed for {}", label))?;
     Ok(())
 }
-
-static CANCEL_FLAG: OnceLock<Mutex<Option<Arc<AtomicBool>>>> = OnceLock::new();
-
-pub fn set_cancel_flag(flag: Arc<AtomicBool>) {
-    let lock = CANCEL_FLAG.get_or_init(|| Mutex::new(None));
-    if let Ok(mut guard) = lock.lock() {
-        *guard = Some(flag);
-    }
-}
-
-pub fn clear_cancel_flag() {
-    if let Some(lock) = CANCEL_FLAG.get() {
-        if let Ok(mut guard) = lock.lock() {
-            *guard = None;
-        }
-    }
-}
-
-fn cancel_requested() -> bool {
-    CANCEL_FLAG
-        .get()
-        .and_then(|lock| lock.lock().ok())
-        .and_then(|guard| guard.as_ref().map(|flag| flag.load(Ordering::Relaxed)))
-        .unwrap_or(false)
-}
-
 /// VFAT-safe rsync (no ownership/permissions)
 fn rsync_vfat_safe(ctx: &FlashContext, src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
@@ -1603,7 +1352,7 @@ fn stage_dojo(ctx: &FlashContext, data_mount: &Path, target_root: &Path) -> Resu
 
     // Create install_dojo.sh
     let dojo_script = staging_dir.join("install_dojo.sh");
-    let script_content = include_str!("dojo_install_template.sh");
+    let script_content = include_str!("../dojo_install_template.sh");
     fs::write(&dojo_script, script_content.replace("{{PLACEHOLDER}}", ""))?;
     fs::set_permissions(&dojo_script, fs::Permissions::from_mode(0o755))?;
 
@@ -1756,7 +1505,7 @@ fn cleanup(ctx: &FlashContext) {
     let _ = ctx.hal.udev_settle();
 }
 
-fn normalize_disk(d: &str) -> String {
+pub(super) fn normalize_disk(d: &str) -> String {
     if d.starts_with("/dev/") {
         d.to_string()
     } else {

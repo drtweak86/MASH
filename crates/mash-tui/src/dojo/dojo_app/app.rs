@@ -1,356 +1,19 @@
-//! New application state machine for the single-screen TUI
-
-#![allow(dead_code)]
-
-use super::flash_config::{ImageSource, TuiFlashConfig};
+use super::input::InputResult;
+use super::steps::InstallStepType;
+use super::types::*;
+use super::super::{data_sources, flash_config};
+use crate::progress::ProgressState;
 use clap::ValueEnum;
-use crossterm::event::{KeyCode, KeyEvent}; // New import for KeyEvent
+use crossterm::event::{KeyCode, KeyEvent};
 use mash_core::cli::PartitionScheme;
 use mash_core::locale::{LocaleConfig, LOCALES};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-// ============================================================================
-// Step State
-// ============================================================================
-
-/// Represents the state of an installation step
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StepState {
-    Pending,
-    Running,
-    Completed,
-    Failed,
-    Skipped,
-}
-
-// ============================================================================
-// Stub UI Options (Phase B1)
-// ============================================================================
-
-#[derive(Debug, Clone)]
-pub struct DiskOption {
-    pub identity: super::data_sources::DiskIdentity,
-    pub stable_id: String,
-    pub path: String,
-    pub removable: bool,
-    pub boot_confidence: super::data_sources::BootConfidence,
-    pub is_source_disk: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct SourceOption {
-    pub label: String,
-    pub value: ImageSource,
-}
-
-#[derive(Debug, Clone)]
-pub struct OsVariantOption {
-    pub id: String,    // Variant id from docs/os-download-links.toml
-    pub label: String, // Human display label
-}
-
-#[derive(Debug, Clone)]
-pub struct ImageOption {
-    pub label: String,
-    pub version: String,
-    pub edition: String,
-    pub path: PathBuf,
-}
-
-#[derive(Debug, Clone)]
-pub struct OptionToggle {
-    pub label: String,
-    pub enabled: bool,
-}
-
-// ============================================================================
-// Install Step (old struct, to be eventually removed)
-// ============================================================================
-
-/// Represents an installation step (old struct, to be eventually removed)
-pub struct InstallStep {
-    pub name: String,
-    pub state: StepState,
-    pub task: Box<dyn Fn() -> Result<(), String> + Send>,
-}
-
-// ============================================================================
-// Partition Plan
-// ============================================================================
-
-/// Represents the user's partition plan
-#[derive(Debug, Clone)]
-pub struct PartitionPlan {
-    pub scheme: PartitionScheme,
-    pub partitions: Vec<Partition>,
-}
-
-/// Represents a partition in the plan
-#[derive(Debug, Clone)]
-pub struct Partition {
-    pub name: String,
-    pub size: String, // e.g., "1024M", "2G", "100%"
-    pub format: String,
-    pub flags: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CustomizeField {
-    Efi,
-    Boot,
-    Root,
-}
-
-// ============================================================================
-// Resolved Layout
-// ============================================================================
-
-/// Represents the resolved partition layout
-#[derive(Debug, Clone)]
-pub struct ResolvedPartitionLayout {
-    pub scheme: PartitionScheme,
-    pub partitions: Vec<ResolvedPartition>,
-}
-
-/// Represents a resolved partition with a specific size in bytes
-#[derive(Debug, Clone)]
-pub struct ResolvedPartition {
-    pub name: String,
-    pub size_bytes: u64,
-    pub format: String,
-    pub flags: Vec<String>,
-}
-
-// ============================================================================
-// Progress Event
-// ============================================================================
-
-/// Represents a progress event
-#[derive(Debug, Clone)]
-pub struct ProgressEvent {
-    pub step_id: usize, // The index of the step in the `InstallStep` vector
-    pub message: String,
-    pub progress: f32, // A value between 0.0 and 1.0
-}
-
-// ============================================================================
-// Cleanup
-// ============================================================================
-
-/// The cleanup guard
-pub struct Cleanup {
-    // A list of cleanup tasks to perform
-    pub tasks: Vec<Box<dyn Fn() + Send>>,
-}
-
-impl Drop for Cleanup {
-    fn drop(&mut self) {
-        for task in &self.tasks {
-            task();
-        }
-    }
-}
-
-// ============================================================================
-// Result of handling input
-// ============================================================================
-
-/// Result of handling input
-pub enum InputResult {
-    Continue,
-    Quit,
-    Complete,
-    StartFlash(Box<TuiFlashConfig>),
-    StartDownload(DownloadType),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DownloadType {
-    FedoraImage {
-        version: String,
-        edition: String,
-        dest_dir: PathBuf,
-    },
-    UefiFirmware {
-        dest_dir: PathBuf,
-    },
-}
-
-// ============================================================================
-// TUI Install Steps
-// ============================================================================
-
-/// Defines the sequence of steps in the Dojo UI
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InstallStepType {
-    Welcome,
-    DiskSelection,
-    DiskConfirmation,
-    BackupConfirmation, // New step for backup
-    PartitionScheme,
-    PartitionLayout,
-    PartitionCustomize,
-    DownloadSourceSelection,
-    ImageSelection,
-    VariantSelection,
-    EfiImage,
-    LocaleSelection,
-    Options,
-    FirstBootUser,
-    PlanReview,
-    Confirmation,
-    ExecuteConfirmationGate,
-    DisarmSafeMode,
-    DownloadingFedora,
-    DownloadingUefi,
-    Flashing,
-    Complete,
-}
-
-impl InstallStepType {
-    pub fn all() -> &'static [InstallStepType] {
-        &[
-            InstallStepType::Welcome,
-            InstallStepType::ImageSelection,
-            InstallStepType::VariantSelection,
-            InstallStepType::DownloadSourceSelection,
-            InstallStepType::DiskSelection,
-            InstallStepType::DiskConfirmation,
-            InstallStepType::BackupConfirmation,
-            InstallStepType::PartitionScheme,
-            InstallStepType::PartitionLayout,
-            InstallStepType::PartitionCustomize,
-            InstallStepType::EfiImage,
-            InstallStepType::LocaleSelection,
-            InstallStepType::Options,
-            InstallStepType::FirstBootUser,
-            InstallStepType::PlanReview,
-            InstallStepType::Confirmation,
-            InstallStepType::ExecuteConfirmationGate,
-            InstallStepType::DisarmSafeMode,
-            InstallStepType::DownloadingFedora,
-            InstallStepType::DownloadingUefi,
-            InstallStepType::Flashing,
-            InstallStepType::Complete,
-        ]
-    }
-
-    pub fn title(&self) -> &'static str {
-        match self {
-            InstallStepType::Welcome => "Enter the Dojo",
-            InstallStepType::DiskSelection => "Select Target Disk",
-            InstallStepType::DiskConfirmation => "Confirm Disk Destruction",
-            InstallStepType::BackupConfirmation => "Backup Confirmation", // Title for new step
-            InstallStepType::PartitionScheme => "Partition Scheme",
-            InstallStepType::PartitionLayout => "Partition Layout",
-            InstallStepType::PartitionCustomize => "Customize Partitions",
-            InstallStepType::DownloadSourceSelection => "Select Image Source",
-            InstallStepType::ImageSelection => "Select OS",
-            InstallStepType::VariantSelection => "Select Variant",
-            InstallStepType::EfiImage => "EFI Image",
-            InstallStepType::LocaleSelection => "Locale & Keymap",
-            InstallStepType::Options => "Installation Options",
-            InstallStepType::FirstBootUser => "First-Boot User",
-            InstallStepType::PlanReview => "Execution Plan",
-            InstallStepType::Confirmation => "Final Confirmation",
-            InstallStepType::ExecuteConfirmationGate => "Final Execute Gate",
-            InstallStepType::DisarmSafeMode => "Disarm Safe Mode",
-            InstallStepType::DownloadingFedora => "Downloading Fedora Image",
-            InstallStepType::DownloadingUefi => "Downloading EFI Image",
-            InstallStepType::Flashing => "Installing...",
-            InstallStepType::Complete => "Installation Complete!",
-        }
-    }
-
-    // Helper to get the next step in the sequence
-    // Flow: Welcome → Distro → Flavour → Download Source → Disk → Partition → EFI → Locale → Options → Review → Confirm
-    pub fn next(&self) -> Option<InstallStepType> {
-        match self {
-            InstallStepType::Welcome => Some(InstallStepType::ImageSelection),
-            InstallStepType::ImageSelection => Some(InstallStepType::VariantSelection),
-            InstallStepType::VariantSelection => Some(InstallStepType::DownloadSourceSelection),
-            InstallStepType::DownloadSourceSelection => Some(InstallStepType::DiskSelection),
-            InstallStepType::DiskSelection => Some(InstallStepType::DiskConfirmation),
-            InstallStepType::DiskConfirmation => Some(InstallStepType::PartitionScheme),
-            InstallStepType::BackupConfirmation => Some(InstallStepType::PartitionScheme),
-            InstallStepType::PartitionScheme => Some(InstallStepType::PartitionLayout),
-            InstallStepType::PartitionLayout => Some(InstallStepType::PartitionCustomize),
-            InstallStepType::PartitionCustomize => Some(InstallStepType::EfiImage),
-            InstallStepType::EfiImage => Some(InstallStepType::LocaleSelection),
-            InstallStepType::LocaleSelection => Some(InstallStepType::Options),
-            InstallStepType::Options => Some(InstallStepType::PlanReview),
-            InstallStepType::FirstBootUser => Some(InstallStepType::PlanReview),
-            InstallStepType::PlanReview => Some(InstallStepType::Confirmation),
-            InstallStepType::Confirmation => None,
-            InstallStepType::ExecuteConfirmationGate => None,
-            InstallStepType::DisarmSafeMode => None,
-            InstallStepType::DownloadingFedora => None, // Execution steps do not have 'next' in this flow
-            InstallStepType::DownloadingUefi => None, // Execution steps do not have 'next' in this flow
-            InstallStepType::Flashing => Some(InstallStepType::Complete),
-            InstallStepType::Complete => None,
-        }
-    }
-
-    // Helper to get the previous step in the sequence
-    pub fn prev(&self) -> Option<InstallStepType> {
-        match self {
-            InstallStepType::Welcome => None,
-            InstallStepType::ImageSelection => Some(InstallStepType::Welcome),
-            InstallStepType::VariantSelection => Some(InstallStepType::ImageSelection),
-            InstallStepType::DownloadSourceSelection => Some(InstallStepType::VariantSelection),
-            InstallStepType::DiskSelection => Some(InstallStepType::DownloadSourceSelection),
-            InstallStepType::DiskConfirmation => Some(InstallStepType::DiskSelection),
-            InstallStepType::BackupConfirmation => Some(InstallStepType::DiskConfirmation),
-            InstallStepType::PartitionScheme => Some(InstallStepType::DiskConfirmation),
-            InstallStepType::PartitionLayout => Some(InstallStepType::PartitionScheme),
-            InstallStepType::PartitionCustomize => Some(InstallStepType::PartitionLayout),
-            InstallStepType::EfiImage => Some(InstallStepType::PartitionCustomize),
-            InstallStepType::LocaleSelection => Some(InstallStepType::EfiImage),
-            InstallStepType::Options => Some(InstallStepType::LocaleSelection),
-            InstallStepType::FirstBootUser => Some(InstallStepType::Options),
-            InstallStepType::PlanReview => Some(InstallStepType::Options),
-            InstallStepType::Confirmation => Some(InstallStepType::PlanReview),
-            InstallStepType::ExecuteConfirmationGate => Some(InstallStepType::Confirmation),
-            InstallStepType::DisarmSafeMode => Some(InstallStepType::Confirmation),
-            _ => None, // Execution steps do not have 'prev' in this flow
-        }
-    }
-
-    // Check if this step is part of the configuration phase
-    pub fn is_config_step(&self) -> bool {
-        matches!(
-            self,
-            InstallStepType::Welcome
-                | InstallStepType::DiskSelection
-                | InstallStepType::DiskConfirmation
-                | InstallStepType::BackupConfirmation
-                | InstallStepType::PartitionScheme
-                | InstallStepType::PartitionLayout
-                | InstallStepType::PartitionCustomize
-                | InstallStepType::DownloadSourceSelection
-                | InstallStepType::ImageSelection
-                | InstallStepType::VariantSelection
-                | InstallStepType::EfiImage
-                | InstallStepType::LocaleSelection
-                | InstallStepType::Options
-                | InstallStepType::FirstBootUser
-                | InstallStepType::PlanReview
-                | InstallStepType::Confirmation
-                | InstallStepType::ExecuteConfirmationGate
-                | InstallStepType::DisarmSafeMode
-        )
-    }
-}
-
-// ============================================================================
-// App
-// ============================================================================
-
-use super::data_sources;
-use crate::progress::ProgressState; // New import
+use flash_config::{ImageSource, TuiFlashConfig};
 
 // ...
 
@@ -383,7 +46,7 @@ pub struct App {
     pub efi_size: String,
     pub boot_size: String,
     pub root_end: String,
-    pub os_distros: Vec<super::flash_config::OsDistro>,
+    pub os_distros: Vec<flash_config::OsDistro>,
     pub os_distro_index: usize,
     pub os_variants: Vec<OsVariantOption>,
     pub os_variant_index: usize,
@@ -391,7 +54,7 @@ pub struct App {
     pub image_source_index: usize,
     pub images: Vec<ImageOption>,
     pub image_index: usize,
-    pub uefi_sources: Vec<super::flash_config::EfiSource>,
+    pub uefi_sources: Vec<flash_config::EfiSource>,
     pub uefi_source_index: usize,
     pub locales: Vec<String>,
     pub locale_index: usize,
@@ -418,7 +81,7 @@ pub struct App {
     pub execute_confirmation_confirmed: bool,
     pub safe_mode_disarm_input: String,
     pending_destructive_action: Option<PendingDestructiveAction>,
-    pub cancel_requested: Arc<std::sync::atomic::AtomicBool>,
+    pub cancel_requested: Arc<AtomicBool>,
     pub customize_error_field: Option<CustomizeField>,
     pub dry_run: bool,
     pub developer_mode: bool,
@@ -619,7 +282,7 @@ impl App {
             efi_size: "1024MiB".to_string(),
             boot_size: "2048MiB".to_string(),
             root_end: "1800GiB".to_string(),
-            os_distros: super::flash_config::OsDistro::all().to_vec(),
+            os_distros: super::super::flash_config::OsDistro::all().to_vec(),
             os_distro_index: 0, // Default to Fedora
             os_variants: Vec::new(),
             os_variant_index: 0,
@@ -636,7 +299,7 @@ impl App {
             image_source_index: 0,
             images,
             image_index: 0,
-            uefi_sources: super::flash_config::EfiSource::all().to_vec(),
+            uefi_sources: super::super::flash_config::EfiSource::all().to_vec(),
             uefi_source_index: 1, // Default to local EFI image
             locales,
             locale_index: 0,
@@ -1228,7 +891,7 @@ impl App {
     fn handle_uefi_source_selection_input(&mut self, key: KeyEvent) -> InputResult {
         let is_local = matches!(
             self.uefi_sources.get(self.uefi_source_index),
-            Some(super::flash_config::EfiSource::LocalEfiImage)
+            Some(super::super::flash_config::EfiSource::LocalEfiImage)
         );
 
         // If local directory is selected, accept text input for path
@@ -1300,7 +963,7 @@ impl App {
             S::ImageSelection => Some(S::VariantSelection),
             S::VariantSelection => Some(S::DownloadSourceSelection),
             S::DownloadSourceSelection => {
-                if matches!(distro, super::flash_config::OsDistro::Fedora) {
+                if matches!(distro, super::super::flash_config::OsDistro::Fedora) {
                     Some(S::PartitionScheme)
                 } else {
                     Some(S::LocaleSelection)
@@ -1334,7 +997,7 @@ impl App {
             S::PartitionCustomize => Some(S::PartitionLayout),
             S::EfiImage => Some(S::PartitionCustomize),
             S::LocaleSelection => {
-                if matches!(distro, super::flash_config::OsDistro::Fedora) {
+                if matches!(distro, super::super::flash_config::OsDistro::Fedora) {
                     Some(S::EfiImage)
                 } else {
                     Some(S::DownloadSourceSelection)
@@ -1722,15 +1385,15 @@ impl App {
     fn requires_uefi_download(&self) -> bool {
         matches!(
             self.uefi_sources.get(self.uefi_source_index),
-            Some(super::flash_config::EfiSource::DownloadEfiImage)
+            Some(super::super::flash_config::EfiSource::DownloadEfiImage)
         )
     }
 
-    fn selected_distro(&self) -> super::flash_config::OsDistro {
+    fn selected_distro(&self) -> super::super::flash_config::OsDistro {
         self.os_distros
             .get(self.os_distro_index)
             .copied()
-            .unwrap_or(super::flash_config::OsDistro::Fedora)
+            .unwrap_or(super::super::flash_config::OsDistro::Fedora)
     }
 
     fn refresh_os_variants(&mut self) {
@@ -1785,7 +1448,7 @@ impl App {
     pub fn build_flash_config(&self) -> Option<TuiFlashConfig> {
         let download_uefi_firmware = matches!(
             self.uefi_sources.get(self.uefi_source_index),
-            Some(super::flash_config::EfiSource::DownloadEfiImage)
+            Some(super::super::flash_config::EfiSource::DownloadEfiImage)
         );
 
         let os_distro = self.selected_distro();
