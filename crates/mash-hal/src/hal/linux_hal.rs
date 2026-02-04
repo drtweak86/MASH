@@ -6,6 +6,8 @@ use super::{
     RsyncOps, RsyncOptions, SystemOps, WipeFsOptions,
 };
 use crate::{HalError, HalResult};
+use gpt::{disk::LogicalBlockSize, partition_types, GptConfig};
+use mbrman::{MBRPartitionEntry, CHS};
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -588,11 +590,44 @@ impl PartitionOps for LinuxHal {
             return Err(HalError::SafetyLock);
         }
 
+        match self.parted_native(disk, &op) {
+            Ok(()) => Ok(String::new()),
+            Err(err) => {
+                log::warn!(
+                    "native partition op failed, falling back to parted: {}",
+                    err
+                );
+                match self.parted_fallback(disk, &op) {
+                    Ok(s) => Ok(s),
+                    Err(_) => Err(err),
+                }
+            }
+        }
+    }
+}
+
+impl LinuxHal {
+    fn parted_native(&self, disk: &Path, op: &PartedOp) -> HalResult<()> {
+        match op {
+            PartedOp::MkLabel { label } => self.create_label(disk, label),
+            PartedOp::MkPart {
+                part_type,
+                fs_type,
+                start,
+                end,
+            } => self.create_partition(disk, part_type, fs_type, start, end),
+            PartedOp::SetFlag { .. } | PartedOp::Print => Err(HalError::Other(
+                "native path does not handle this op".into(),
+            )),
+        }
+    }
+
+    fn parted_fallback(&self, disk: &Path, op: &PartedOp) -> HalResult<String> {
         let mut args: Vec<String> = vec!["-s".to_string(), disk.display().to_string()];
         match op {
             PartedOp::MkLabel { label } => {
                 args.push("mklabel".to_string());
-                args.push(label);
+                args.push(label.clone());
             }
             PartedOp::MkPart {
                 part_type,
@@ -603,10 +638,10 @@ impl PartitionOps for LinuxHal {
                 args.push("-a".to_string());
                 args.push("optimal".to_string());
                 args.push("mkpart".to_string());
-                args.push(part_type);
-                args.push(fs_type);
-                args.push(start);
-                args.push(end);
+                args.push(part_type.clone());
+                args.push(fs_type.clone());
+                args.push(start.clone());
+                args.push(end.clone());
             }
             PartedOp::SetFlag {
                 part_num,
@@ -615,8 +650,8 @@ impl PartitionOps for LinuxHal {
             } => {
                 args.push("set".to_string());
                 args.push(part_num.to_string());
-                args.push(flag);
-                args.push(state);
+                args.push(flag.clone());
+                args.push(state.clone());
             }
             PartedOp::Print => {
                 args.push("print".to_string());
@@ -631,6 +666,130 @@ impl PartitionOps for LinuxHal {
         }
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
+
+    fn create_label(&self, disk: &Path, label: &str) -> HalResult<()> {
+        match label {
+            l if l.eq_ignore_ascii_case("gpt") => {
+                let mut file = fs::OpenOptions::new().read(true).write(true).open(disk)?;
+                let cfg = GptConfig::new()
+                    .writable(true)
+                    .initialized(false)
+                    .logical_block_size(LogicalBlockSize::Lb512);
+                let gpt = cfg.create_from_device(Box::new(&mut file), None)?;
+                gpt.write()?;
+                Ok(())
+            }
+            l if l.eq_ignore_ascii_case("msdos") || l.eq_ignore_ascii_case("mbr") => {
+                let mut file = fs::OpenOptions::new().read(true).write(true).open(disk)?;
+                let mut mbr = mbrman::MBR::new_from(&mut file, 512, [0u8; 4]).map_err(
+                    |e: mbrman::Error| HalError::Other(format!("mbr init failed: {}", e)),
+                )?;
+                mbr.write_into(&mut file)
+                    .map_err(|e: mbrman::Error| HalError::Other(e.to_string()))?;
+                Ok(())
+            }
+            other => Err(HalError::Other(format!("unsupported label {}", other))),
+        }
+    }
+
+    fn create_partition(
+        &self,
+        disk: &Path,
+        part_type: &str,
+        fs_type: &str,
+        start: &str,
+        end: &str,
+    ) -> HalResult<()> {
+        let disk_size = fs::metadata(disk)?.len();
+        let (start_bytes, end_bytes) = parse_range_mib(start, end, disk_size)
+            .ok_or_else(|| HalError::Parse("invalid partition range".into()))?;
+        let start_lba = start_bytes / 512;
+        let end_lba = end_bytes / 512;
+        if end_lba <= start_lba {
+            return Err(HalError::ValidationFailed("partition length zero".into()));
+        }
+        let size_lba = end_lba - start_lba;
+        // Try GPT first (existing table).
+        if let Ok(mut gpt) = {
+            let file = fs::OpenOptions::new().read(true).write(true).open(disk)?;
+            GptConfig::new()
+                .writable(true)
+                .logical_block_size(LogicalBlockSize::Lb512)
+                .initialized(true)
+                .open_from_device(Box::new(file))
+        } {
+            let ptype = match fs_type.to_ascii_lowercase().as_str() {
+                "fat32" | "efi" => partition_types::EFI,
+                _ => partition_types::LINUX_FS,
+            };
+            gpt.add_partition(part_type, size_lba, ptype, 0u64, Some(2048u64))?;
+            gpt.write()?;
+            return Ok(());
+        }
+        // Try existing MBR.
+        if let Ok(mut mbr) = {
+            let mut file = fs::OpenOptions::new().read(true).write(true).open(disk)?;
+            mbrman::MBR::read_from(&mut file, 512)
+        } {
+            let mut file = fs::OpenOptions::new().read(true).write(true).open(disk)?;
+            let entry = MBRPartitionEntry {
+                boot: 0,
+                first_chs: CHS::empty(),
+                sys: 0x83,
+                last_chs: CHS::empty(),
+                starting_lba: start_lba as u32,
+                sectors: size_lba as u32,
+            };
+            mbr[1] = entry;
+            mbr.write_into(&mut file)
+                .map_err(|e: mbrman::Error| HalError::Other(e.to_string()))?;
+            return Ok(());
+        }
+        // Fresh GPT creation.
+        let mut gpt = {
+            let file = fs::OpenOptions::new().read(true).write(true).open(disk)?;
+            GptConfig::new()
+                .writable(true)
+                .initialized(false)
+                .logical_block_size(LogicalBlockSize::Lb512)
+                .create_from_device(Box::new(file), None)?
+        };
+        let ptype = match fs_type.to_ascii_lowercase().as_str() {
+            "fat32" | "efi" => partition_types::EFI,
+            _ => partition_types::LINUX_FS,
+        };
+        gpt.add_partition(part_type, size_lba, ptype, 0u64, Some(2048u64))?;
+        gpt.write()?;
+        Ok(())
+    }
+}
+
+fn parse_range_mib(start: &str, end: &str, disk_size: u64) -> Option<(u64, u64)> {
+    let sb = parse_mib_value(start, disk_size)?;
+    let eb = if end.trim_end_matches('%') == "100" || end == "100%" {
+        disk_size
+    } else {
+        parse_mib_value(end, disk_size)?
+    };
+    Some((align_1m(sb), align_1m(eb)))
+}
+
+fn parse_mib_value(s: &str, disk_size: u64) -> Option<u64> {
+    let t = s.trim().to_ascii_lowercase();
+    if t.ends_with("mib") {
+        let v: f64 = t.trim_end_matches("mib").trim().parse().ok()?;
+        return Some((v * 1024.0 * 1024.0) as u64);
+    }
+    if t.ends_with('%') {
+        let pct: f64 = t.trim_end_matches('%').trim().parse().ok()?;
+        return Some(((pct / 100.0) * disk_size as f64) as u64);
+    }
+    None
+}
+
+fn align_1m(bytes: u64) -> u64 {
+    const ONE_MIB: u64 = 1024 * 1024;
+    bytes.div_ceil(ONE_MIB) * ONE_MIB
 }
 
 impl LoopOps for LinuxHal {
