@@ -1,4 +1,4 @@
-# MASH 🍠 v1.4.0
+# MASH 🍠 v1.2.14
 
 **Minimal, Automated, Self-Hosting installer for Fedora on Raspberry Pi 4B**
 
