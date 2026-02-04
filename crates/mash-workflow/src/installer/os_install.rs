@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use mash_core::config_states::{ArmedConfig, HasRunMode, ValidateConfig, ValidatedConfig};
 use mash_core::downloader::{self, DownloadOptions, ImageKey, OsKind};
 use mash_core::progress::ProgressUpdate;
-use mash_core::state_manager::{save_state_atomic, DownloadArtifact, InstallState};
+use mash_core::state_manager::{DownloadArtifact, InstallState};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
@@ -322,7 +322,6 @@ where
     if let Some(ref report) = report {
         report.record_progress_update(&ProgressUpdate::Complete);
     }
-    save_state_atomic(&state_path, &final_state)?;
     Ok(final_state)
 }
 
