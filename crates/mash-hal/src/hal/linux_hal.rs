@@ -105,8 +105,6 @@ impl ProcessOps for LinuxHal {
     }
 }
 
-const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
-const SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 const FORMAT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const WIPEFS_TIMEOUT: Duration = Duration::from_secs(60);
 const PARTED_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -431,53 +429,65 @@ impl SystemOps for LinuxHal {
     }
 
     fn udev_settle(&self) -> HalResult<()> {
-        let mut cmd = Command::new("udevadm");
-        cmd.arg("settle");
-        status_with_timeout("udevadm", &mut cmd, SYNC_TIMEOUT)
+        // Best-effort wait: small sleep to allow udev to settle without external command.
+        std::thread::sleep(Duration::from_millis(150));
+        Ok(())
     }
 }
 
 impl ProbeOps for LinuxHal {
     fn lsblk_mountpoints(&self, disk: &Path) -> HalResult<Vec<std::path::PathBuf>> {
-        let mut cmd = Command::new("lsblk");
-        cmd.args(["-lnpo", "MOUNTPOINT"]).arg(disk);
-        let output = output_with_timeout("lsblk", &mut cmd, PROBE_TIMEOUT)?;
-
-        if !output.status.success() {
-            return Err(output_failed("lsblk", &output));
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut mountpoints = Vec::new();
-        for line in stdout.lines().map(str::trim).filter(|l| !l.is_empty()) {
-            mountpoints.push(std::path::PathBuf::from(line));
-        }
-        Ok(mountpoints)
+        let content = fs::read_to_string("/proc/self/mountinfo")?;
+        let mounts = crate::procfs::mountinfo::mounted_under_device(&content, disk)
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        Ok(mounts)
     }
 
     fn lsblk_table(&self, disk: &Path) -> HalResult<String> {
-        let mut cmd = Command::new("lsblk");
-        cmd.args(["-o", "NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS,MODEL"])
-            .arg(disk);
-        let output = output_with_timeout("lsblk", &mut cmd, PROBE_TIMEOUT)?;
+        let devices = crate::sysfs::block::scan_block_devices()
+            .map_err(|e| HalError::Other(e.to_string()))?;
+        let name = disk
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| HalError::Parse(format!("invalid disk path {}", disk.display())))?;
+        let info = devices
+            .into_iter()
+            .find(|d| d.name == name)
+            .ok_or_else(|| HalError::Other(format!("disk {} not found", disk.display())))?;
 
-        if !output.status.success() {
-            return Err(output_failed("lsblk", &output));
-        }
+        let mounts = self.lsblk_mountpoints(disk)?;
+        let mounts_str = if mounts.is_empty() {
+            "-".to_string()
+        } else {
+            mounts
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let model = info
+            .model
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("unknown");
+        let serial = info
+            .serial
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("n/a");
+        let size_gib = (info.size_bytes as f64) / (1024.0 * 1024.0 * 1024.0);
 
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        Ok(format!(
+            "NAME\tSIZE(GB)\tTYPE\tMODEL\tSERIAL\tMOUNTS\n{}\t{:.2}\tdisk\t{}\t{}\t{}",
+            info.name, size_gib, model, serial, mounts_str
+        ))
     }
 
     fn blkid_uuid(&self, device: &Path) -> HalResult<String> {
-        let mut cmd = Command::new("blkid");
-        cmd.args(["-s", "UUID", "-o", "value"]).arg(device);
-        let output = output_with_timeout("blkid", &mut cmd, PROBE_TIMEOUT)?;
-
-        if !output.status.success() {
-            return Err(output_failed("blkid", &output));
-        }
-
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        uuid_for_device_in(Path::new("/dev/disk/by-uuid"), device)
+            .ok_or_else(|| HalError::Other(format!("UUID not found for {}", device.display())))
     }
 }
 
@@ -761,6 +771,27 @@ impl RsyncOps for LinuxHal {
     }
 }
 
+fn uuid_for_device_in(base: &Path, device: &Path) -> Option<String> {
+    let target = device.to_path_buf();
+    let entries = fs::read_dir(base).ok()?;
+    for entry in entries.flatten() {
+        let link_path = entry.path();
+        let target_path = fs::read_link(&link_path).ok().map(|p| {
+            if p.is_absolute() {
+                p
+            } else {
+                link_path.parent().unwrap_or(base).join(p)
+            }
+        })?;
+        if target_path == target {
+            if let Some(name) = link_path.file_name().and_then(|s| s.to_str()) {
+                return Some(name.to_string());
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -817,5 +848,21 @@ mod tests {
 
         let result = std::fs::read(&target).unwrap();
         assert_eq!(result, b"compressed data");
+    }
+
+    #[test]
+    fn uuid_lookup_finds_match() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let dev = dir.path().join("sda1");
+        std::fs::write(&dev, b"fake").unwrap();
+        let by_uuid = dir.path().join("by-uuid");
+        std::fs::create_dir(&by_uuid).unwrap();
+        let link = by_uuid.join("UUID-TEST");
+        symlink(&dev, &link).unwrap();
+
+        let found = uuid_for_device_in(&by_uuid, &dev);
+        assert_eq!(found.as_deref(), Some("UUID-TEST"));
     }
 }
