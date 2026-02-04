@@ -10,6 +10,7 @@
 //! - `FakeHal`: Mock implementation for CI-safe testing
 
 pub mod os_release;
+pub mod path;
 pub mod procfs;
 pub mod sysfs;
 

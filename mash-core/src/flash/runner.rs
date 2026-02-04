@@ -1327,7 +1327,10 @@ fn generate_fstab(ctx: &FlashContext, target_root: &Path, subvols: &BtrfsSubvols
     ));
 
     let fstab_path = target_root.join("etc/fstab");
-    fs::create_dir_all(fstab_path.parent().unwrap())?;
+    let parent = fstab_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("fstab path missing parent"))?;
+    fs::create_dir_all(parent)?;
     fs::write(&fstab_path, fstab)?;
     info!("📋 Written {}", fstab_path.display());
     Ok(())
