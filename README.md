@@ -108,6 +108,31 @@ The binary is output to `mash-installer/target/release/mash`.
 
 ---
 
+## 🧪 Maelstrom Test Isolation
+
+MASH uses Maelstrom to run tests in an isolated environment (required in CI).
+
+### Install (one-time)
+
+```bash
+cargo install cargo-maelstrom
+```
+
+Alternatively, you can download a prebuilt `cargo-maelstrom` binary from the Maelstrom releases.
+
+### Run
+
+From the repo root:
+
+```bash
+cargo maelstrom --all-features
+```
+
+Notes:
+- Maelstrom relies on Linux user namespaces and `clone3`. Running inside restricted containers (e.g., Docker default seccomp) may block required syscalls.
+
+---
+
 ## 📚 Documentation
 
 - [Quick Start Guide](docs/QUICKSTART.md) — Get running in minutes

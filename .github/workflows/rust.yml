@@ -41,6 +41,35 @@ jobs:
         working-directory: mash-installer
         run: cargo test
 
+  maelstrom:
+    name: Maelstrom (isolated tests)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-maelstrom
+        run: |
+          set -euo pipefail
+          VERSION="0.14.0"
+          ARCH="x86_64-unknown-linux-gnu"
+          URL="https://github.com/maelstrom-software/maelstrom/releases/download/v${VERSION}/cargo-maelstrom-${ARCH}.tgz"
+          curl -fsSL "${URL}" -o /tmp/cargo-maelstrom.tgz
+          mkdir -p "${HOME}/.cargo/bin"
+          tar -xzf /tmp/cargo-maelstrom.tgz -C "${HOME}/.cargo/bin"
+          chmod +x "${HOME}/.cargo/bin/cargo-maelstrom"
+          cargo maelstrom --version
+
+      - name: Maelstrom
+        run: cargo maelstrom --all-features
+
   libdnf_feature:
     runs-on: ubuntu-latest
     container: fedora:41
