@@ -27,22 +27,22 @@ pub(super) fn build_info_panel(app: &App, progress_state: &ProgressState) -> Str
     lines.push("Selections:".to_string());
 
     // OS selection
-    if let Some(distro) = app.os_distros.get(app.os_distro_index) {
+    if let Some(distro) = app.os_distros.get(app.os_distro_selected) {
         lines.push(format!("OS: {}", distro.display()));
     }
 
     // Variant selection
-    if let Some(variant) = app.os_variants.get(app.os_variant_index) {
+    if let Some(variant) = app.os_variants.get(app.os_variant_selected) {
         lines.push(format!("Variant: {}", variant.label));
     }
 
     // Disk selection
-    if let Some(disk) = app.disks.get(app.disk_index) {
+    if let Some(disk) = app.disks.get(app.disk_selected) {
         lines.push(format!("Disk: {}", disk.identity.display_string()));
     }
 
     // Partition scheme
-    if let Some(scheme) = app.partition_schemes.get(app.scheme_index) {
+    if let Some(scheme) = app.partition_schemes.get(app.scheme_selected) {
         let scheme_str = match scheme {
             mash_core::cli::PartitionScheme::Mbr => "MBR",
             mash_core::cli::PartitionScheme::Gpt => "GPT",
@@ -92,7 +92,12 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("  Enter or Tab — Continue".to_string());
             items.push("  Esc — Quit".to_string());
             items.push("  ? — Help".to_string());
-            push_options(&mut items, &app.welcome_options, app.welcome_index);
+            push_options(
+                &mut items,
+                &app.welcome_options,
+                app.welcome_index,
+                Some(app.welcome_selected),
+            );
         }
         InstallStepType::DiskSelection => {
             items.push("💽 Select a target disk:".to_string());
@@ -123,7 +128,12 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 items.push("No disks detected. Press r to refresh.".to_string());
             }
             let options = app.disks.iter().map(format_disk_entry).collect::<Vec<_>>();
-            push_options(&mut items, &options, app.disk_index);
+            push_options(
+                &mut items,
+                &options,
+                app.disk_index,
+                Some(app.disk_selected),
+            );
 
             // Show protection banner for source/boot media.
             if let Some(disk) = app.disks.get(app.disk_index) {
@@ -145,7 +155,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             }
         }
         InstallStepType::DiskConfirmation => {
-            let disk = app.disks.get(app.disk_index);
+            let disk = app.disks.get(app.disk_selected);
             if let Some(disk) = disk {
                 let is_boot_disk = disk.boot_confidence.is_boot() || disk.is_source_disk;
                 let disk_info = disk.identity.display_string();
@@ -211,6 +221,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                     "Yes, I have a backup".to_string(),
                 ],
                 app.backup_choice_index,
+                Some(if app.backup_confirmed { 1 } else { 0 }),
             );
         }
         InstallStepType::PartitionScheme => {
@@ -229,7 +240,12 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 .iter()
                 .map(format_partition_scheme)
                 .collect::<Vec<_>>();
-            push_options(&mut items, &options, app.scheme_index);
+            push_options(
+                &mut items,
+                &options,
+                app.scheme_index,
+                Some(app.scheme_selected),
+            );
         }
         InstallStepType::PartitionLayout => {
             items.push("📐 Partition Layout:".to_string());
@@ -251,7 +267,12 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
 
             let mut options = layout_options;
             options.push("Customize manually".to_string());
-            push_options(&mut items, &options, app.layout_index);
+            push_options(
+                &mut items,
+                &options,
+                app.layout_index,
+                Some(app.layout_selected),
+            );
 
             // Show detailed preview of selected layout
             if app.layout_index < app.partition_layouts.len() {
@@ -304,7 +325,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                     }
                 })
                 .collect::<Vec<_>>();
-            push_options(&mut items, &options, app.customize_index);
+            push_options(&mut items, &options, app.customize_index, None);
             if let Some(error) = &app.error_message {
                 items.push(format!("❌ {}", error));
             }
@@ -323,10 +344,15 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 .iter()
                 .map(|source| source.label.clone())
                 .collect::<Vec<_>>();
-            push_options(&mut items, &options, app.image_source_index);
+            push_options(
+                &mut items,
+                &options,
+                app.image_source_index,
+                Some(app.image_source_selected),
+            );
             if app
                 .image_sources
-                .get(app.image_source_index)
+                .get(app.image_source_selected)
                 .map(|source| source.value == flash_config::ImageSource::LocalFile)
                 .unwrap_or(false)
             {
@@ -351,7 +377,12 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 .iter()
                 .map(|distro| distro.display().to_string())
                 .collect::<Vec<_>>();
-            push_options(&mut items, &options, app.os_distro_index);
+            push_options(
+                &mut items,
+                &options,
+                app.os_distro_index,
+                Some(app.os_distro_selected),
+            );
             items.push("".to_string());
             items.push("Next: pick a variant (server/desktop/etc).".to_string());
         }
@@ -378,7 +409,12 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                     .iter()
                     .map(|v| v.label.clone())
                     .collect::<Vec<_>>();
-                push_options(&mut items, &options, app.os_variant_index);
+                push_options(
+                    &mut items,
+                    &options,
+                    app.os_variant_index,
+                    Some(app.os_variant_selected),
+                );
             }
         }
         InstallStepType::EfiImage => {
@@ -391,7 +427,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("  Esc — Go back".to_string());
             items.push("  ? — Help".to_string());
 
-            let uefi_source = app.uefi_sources.get(app.uefi_source_index);
+            let uefi_source = app.uefi_sources.get(app.uefi_source_selected);
             let is_local = matches!(uefi_source, Some(flash_config::EfiSource::LocalEfiImage));
 
             // Show EFI source options (intent-only)
@@ -400,7 +436,12 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 .iter()
                 .map(|source| source.display().to_string())
                 .collect::<Vec<_>>();
-            push_options(&mut items, &options, app.uefi_source_index);
+            push_options(
+                &mut items,
+                &options,
+                app.uefi_source_index,
+                Some(app.uefi_source_selected),
+            );
 
             // Only ask for a path if the user chose "Use local EFI image".
             if is_local {
@@ -419,7 +460,12 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("  Esc — Go back".to_string());
             items.push("  ? — Help".to_string());
             items.push("".to_string());
-            push_options(&mut items, &app.locales, app.locale_index);
+            push_options(
+                &mut items,
+                &app.locales,
+                app.locale_index,
+                Some(app.locale_selected),
+            );
         }
         InstallStepType::Options => {
             items.push("⚙️ Installation options:".to_string());
@@ -442,7 +488,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                     )
                 })
                 .collect::<Vec<_>>();
-            push_options(&mut items, &options, app.options_index);
+            push_options(&mut items, &options, app.options_index, None);
         }
         InstallStepType::FirstBootUser => {
             items.push("🧑‍💻 First-boot user setup:".to_string());
@@ -453,7 +499,12 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("  Enter or Tab — Continue".to_string());
             items.push("  Esc — Go back".to_string());
             items.push("  ? — Help".to_string());
-            push_options(&mut items, &app.first_boot_options, app.first_boot_index);
+            push_options(
+                &mut items,
+                &app.first_boot_options,
+                app.first_boot_index,
+                Some(app.first_boot_selected),
+            );
         }
         InstallStepType::PlanReview => {
             items.push("🧾 Execution plan:".to_string());
@@ -503,7 +554,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 })
                 .unwrap_or_else(|| PathBuf::from(app.image_source_path.clone()));
             let download_efi = matches!(
-                app.uefi_sources.get(app.uefi_source_index),
+                app.uefi_sources.get(app.uefi_source_selected),
                 Some(flash_config::EfiSource::DownloadEfiImage)
             );
             let effective_efi = if download_efi {
@@ -511,28 +562,32 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             } else {
                 PathBuf::from(app.uefi_source_path.clone())
             };
-            if let Some(disk) = app.disks.get(app.disk_index) {
+            if let Some(disk) = app.disks.get(app.disk_selected) {
                 items.push(format!(
                     "Disk: {} - {}",
                     disk.path,
                     disk.identity.display_string()
                 ));
             }
-            if let Some(distro) = app.os_distros.get(app.os_distro_index) {
+            if let Some(distro) = app.os_distros.get(app.os_distro_selected) {
                 items.push(format!("Distro: {}", distro.display()));
             }
-            if let Some(variant) = app.os_variants.get(app.os_variant_index) {
+            if let Some(variant) = app.os_variants.get(app.os_variant_selected) {
                 items.push(format!("Flavour: {}", variant.label));
             }
-            if let Some(scheme) = app.partition_schemes.get(app.scheme_index) {
+            if let Some(scheme) = app.partition_schemes.get(app.scheme_selected) {
                 items.push(format!("Scheme: {}", scheme));
             }
-            if let Some(source) = app.image_sources.get(app.image_source_index) {
+            if let Some(source) = app.image_sources.get(app.image_source_selected) {
                 items.push(format!("Image source: {}", source.label));
             }
             items.push(format!("Image path: {}", effective_image.display()));
-            if let Some(layout) = app.partition_layouts.get(app.layout_index) {
-                items.push(format!("Layout: {}", layout));
+            if app.layout_selected < app.partition_layouts.len() {
+                if let Some(layout) = app.partition_layouts.get(app.layout_selected) {
+                    items.push(format!("Layout: {}", layout));
+                }
+            } else {
+                items.push("Layout: Customize manually".to_string());
             }
             items.push(format!(
                 "Partitions: EFI {} | BOOT {} | ROOT {} | DATA remainder",
@@ -544,7 +599,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 items.push("EFI image: Local".to_string());
             }
             items.push(format!("EFI path: {}", effective_efi.display()));
-            if let Some(locale) = app.locales.get(app.locale_index) {
+            if let Some(locale) = app.locales.get(app.locale_selected) {
                 items.push(format!("Locale: {}", locale));
             }
             let download_fedora = app
@@ -576,11 +631,11 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push(format!(
                 "First boot: {}",
                 app.first_boot_options
-                    .get(app.first_boot_index)
+                    .get(app.first_boot_selected)
                     .cloned()
                     .unwrap_or_else(|| "Prompt to create user".to_string())
             ));
-            push_options(&mut items, &["Go back".to_string()], 0);
+            push_options(&mut items, &["Go back".to_string()], 0, None);
             if let Some(error) = &app.error_message {
                 items.push(format!("❌ {}", error));
             }
@@ -603,20 +658,20 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("".to_string());
 
             // Repeat the destructive intent summary.
-            if let Some(distro) = app.os_distros.get(app.os_distro_index) {
+            if let Some(distro) = app.os_distros.get(app.os_distro_selected) {
                 items.push(format!("Distro: {}", distro.display()));
             }
-            if let Some(variant) = app.os_variants.get(app.os_variant_index) {
+            if let Some(variant) = app.os_variants.get(app.os_variant_selected) {
                 items.push(format!("Flavour: {}", variant.label));
             }
-            if let Some(disk) = app.disks.get(app.disk_index) {
+            if let Some(disk) = app.disks.get(app.disk_selected) {
                 items.push(format!(
                     "Disk: {} - {}",
                     disk.path,
                     disk.identity.display_string()
                 ));
             }
-            if let Some(scheme) = app.partition_schemes.get(app.scheme_index) {
+            if let Some(scheme) = app.partition_schemes.get(app.scheme_selected) {
                 items.push(format!("Scheme: {}", scheme));
             }
             items.push(format!(
@@ -624,7 +679,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 app.efi_size, app.boot_size, app.root_end
             ));
             let download_efi = matches!(
-                app.uefi_sources.get(app.uefi_source_index),
+                app.uefi_sources.get(app.uefi_source_selected),
                 Some(flash_config::EfiSource::DownloadEfiImage)
             );
             if download_efi {
@@ -679,6 +734,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                     "Go back".to_string(),
                 ],
                 app.downloading_fedora_index,
+                None,
             );
         }
         InstallStepType::DownloadingUefi => {
@@ -702,6 +758,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                     "Go back".to_string(),
                 ],
                 app.downloading_uefi_index,
+                None,
             );
         }
         InstallStepType::Flashing => {
@@ -732,7 +789,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("  Esc — Request cancellation (safe)".to_string());
             items.push("  Enter or Tab — Continue when complete".to_string());
             items.push("  ? — Help".to_string());
-            push_options(&mut items, &["Viewing live telemetry".to_string()], 0);
+            push_options(&mut items, &["Viewing live telemetry".to_string()], 0, None);
         }
         InstallStepType::Complete => {
             if app.completion_lines.is_empty() {
@@ -742,7 +799,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             }
             items.push("".to_string());
             items.push("Press Enter or Tab to exit.".to_string());
-            push_options(&mut items, &["Exit installer".to_string()], 0);
+            push_options(&mut items, &["Exit installer".to_string()], 0, None);
         }
     }
 
@@ -763,34 +820,40 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
     items
 }
 
-fn push_options(items: &mut Vec<String>, options: &[String], selected: usize) {
+fn push_options(
+    items: &mut Vec<String>,
+    options: &[String],
+    cursor: usize,
+    selected: Option<usize>,
+) {
     if options.is_empty() {
         items.push("ℹ️ No options available.".to_string());
         return;
     }
     for (index, option) in options.iter().enumerate() {
-        let marker = if index == selected { "▶" } else { " " };
-        items.push(format!("{} {}", marker, option));
+        let cursor_marker = if index == cursor { "▶" } else { " " };
+        let selected_marker = if selected == Some(index) { "*" } else { " " };
+        items.push(format!("{}{} {}", cursor_marker, selected_marker, option));
     }
 }
 
 fn build_plan_lines(app: &App) -> Vec<String> {
     let mut lines = Vec::new();
 
-    let distro = app.os_distros.get(app.os_distro_index).copied();
+    let distro = app.os_distros.get(app.os_distro_selected).copied();
     if let Some(distro) = distro {
         lines.push(format!("OS: {}", distro.display()));
     } else {
         lines.push("OS: <not selected>".to_string());
     }
 
-    if let Some(variant) = app.os_variants.get(app.os_variant_index) {
+    if let Some(variant) = app.os_variants.get(app.os_variant_selected) {
         lines.push(format!("Variant: {}", variant.label));
     } else {
         lines.push("Variant: <not selected>".to_string());
     }
 
-    if let Some(disk) = app.disks.get(app.disk_index) {
+    if let Some(disk) = app.disks.get(app.disk_selected) {
         let disk_info = disk.identity.display_string();
         lines.push(format!("Disk: {} - {}", disk.path, disk_info));
     } else {
@@ -798,7 +861,7 @@ fn build_plan_lines(app: &App) -> Vec<String> {
     }
 
     if matches!(distro, Some(flash_config::OsDistro::Fedora)) {
-        if let Some(uefi_source) = app.uefi_sources.get(app.uefi_source_index) {
+        if let Some(uefi_source) = app.uefi_sources.get(app.uefi_source_selected) {
             match uefi_source {
                 flash_config::EfiSource::LocalEfiImage => {
                     lines.push(format!("EFI: Local ({})", app.uefi_source_path));

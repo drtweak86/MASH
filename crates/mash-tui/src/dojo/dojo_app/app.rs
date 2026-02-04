@@ -32,15 +32,19 @@ pub struct App {
     pub backup_choice_index: usize,
     pub welcome_options: Vec<String>,
     pub welcome_index: usize,
+    pub welcome_selected: usize,
     use_real_disks: bool,
     pub disks: Vec<DiskOption>,
     pub disk_index: usize,
+    pub disk_selected: usize,
     pub disk_confirm_index: usize,
     pub wipe_confirmation: String,
     pub partition_schemes: Vec<PartitionScheme>,
     pub scheme_index: usize,
+    pub scheme_selected: usize,
     pub partition_layouts: Vec<String>,
     pub layout_index: usize,
+    pub layout_selected: usize,
     pub partition_customizations: Vec<String>,
     pub customize_index: usize,
     pub efi_size: String,
@@ -48,20 +52,26 @@ pub struct App {
     pub root_end: String,
     pub os_distros: Vec<flash_config::OsDistro>,
     pub os_distro_index: usize,
+    pub os_distro_selected: usize,
     pub os_variants: Vec<OsVariantOption>,
     pub os_variant_index: usize,
+    pub os_variant_selected: usize,
     pub image_sources: Vec<SourceOption>,
     pub image_source_index: usize,
+    pub image_source_selected: usize,
     pub images: Vec<ImageOption>,
     pub image_index: usize,
     pub uefi_sources: Vec<flash_config::EfiSource>,
     pub uefi_source_index: usize,
+    pub uefi_source_selected: usize,
     pub locales: Vec<String>,
     pub locale_index: usize,
+    pub locale_selected: usize,
     pub options: Vec<OptionToggle>,
     pub options_index: usize,
     pub first_boot_options: Vec<String>,
     pub first_boot_index: usize,
+    pub first_boot_selected: usize,
     pub downloading_fedora_index: usize,
     pub downloading_uefi_index: usize,
     pub downloaded_fedora: bool,
@@ -266,18 +276,22 @@ impl App {
                 "Review Dojo steps".to_string(),
             ],
             welcome_index: 0,
+            welcome_selected: 0,
             use_real_disks,
             disks,
             disk_index: default_disk_index,
+            disk_selected: default_disk_index,
             disk_confirm_index: 0,
             wipe_confirmation: String::new(),
             partition_schemes,
             scheme_index,
+            scheme_selected: scheme_index,
             partition_layouts: vec![
                 "EFI 1024MiB | BOOT 2048MiB | ROOT 1800GiB | DATA rest".to_string(),
                 "EFI 512MiB | BOOT 1024MiB | ROOT 64GiB | DATA rest".to_string(),
             ],
             layout_index: 0,
+            layout_selected: 0,
             partition_customizations: Vec::new(),
             customize_index: 0,
             efi_size: "1024MiB".to_string(),
@@ -285,8 +299,10 @@ impl App {
             root_end: "1800GiB".to_string(),
             os_distros: super::super::flash_config::OsDistro::all().to_vec(),
             os_distro_index: 0, // Default to Fedora
+            os_distro_selected: 0,
             os_variants: Vec::new(),
             os_variant_index: 0,
+            os_variant_selected: 0,
             image_sources: vec![
                 SourceOption {
                     label: "Local Image File (.raw)".to_string(),
@@ -298,12 +314,15 @@ impl App {
                 },
             ],
             image_source_index: 0,
+            image_source_selected: 0,
             images,
             image_index: 0,
             uefi_sources: super::super::flash_config::EfiSource::all().to_vec(),
             uefi_source_index: 1, // Default to local EFI image
+            uefi_source_selected: 1,
             locales,
             locale_index: 0,
+            locale_selected: 0,
             options: vec![
                 OptionToggle {
                     label: "Auto-unmount target disk".to_string(),
@@ -324,6 +343,7 @@ impl App {
                 "Skip first-boot prompt".to_string(),
             ],
             first_boot_index: 0,
+            first_boot_selected: 0,
             downloading_fedora_index: 0,
             downloading_uefi_index: 0,
             downloaded_fedora: false,
@@ -391,41 +411,18 @@ impl App {
             InstallStepType::BackupConfirmation => self.handle_backup_confirmation_input(key),
             InstallStepType::DiskSelection => self.handle_disk_selection_input(key),
             InstallStepType::DiskConfirmation => self.handle_disk_confirmation_input(key),
-            InstallStepType::PartitionScheme => {
-                let len = self.partition_schemes.len();
-                let action = Self::list_action(key, len, &mut self.scheme_index);
-                self.apply_list_action(action)
-            }
+            InstallStepType::PartitionScheme => self.handle_partition_scheme_input(key),
             InstallStepType::PartitionLayout => self.handle_partition_layout_input(key),
             InstallStepType::PartitionCustomize => self.handle_partition_customize_input(key),
             InstallStepType::DownloadSourceSelection => {
-                let len = self.image_sources.len();
-                let is_local = self
-                    .image_sources
-                    .get(self.image_source_index)
-                    .map(|source| source.value == ImageSource::LocalFile)
-                    .unwrap_or(false);
-                if is_local {
-                    self.handle_image_source_path_input(key, len)
-                } else {
-                    let action = Self::list_action(key, len, &mut self.image_source_index);
-                    self.apply_list_action(action)
-                }
+                self.handle_download_source_selection_input(key)
             }
             InstallStepType::ImageSelection => self.handle_os_distro_selection_input(key),
             InstallStepType::VariantSelection => self.handle_variant_selection_input(key),
             InstallStepType::EfiImage => self.handle_uefi_source_selection_input(key),
-            InstallStepType::LocaleSelection => {
-                let len = self.locales.len();
-                let action = Self::list_action(key, len, &mut self.locale_index);
-                self.apply_list_action(action)
-            }
+            InstallStepType::LocaleSelection => self.handle_locale_selection_input(key),
             InstallStepType::Options => self.handle_options_input(key),
-            InstallStepType::FirstBootUser => {
-                let len = self.first_boot_options.len();
-                let action = Self::list_action(key, len, &mut self.first_boot_index);
-                self.apply_list_action(action)
-            }
+            InstallStepType::FirstBootUser => self.handle_first_boot_user_input(key),
             InstallStepType::PlanReview => self.handle_plan_review_input(key),
             InstallStepType::Confirmation => self.handle_confirmation_input(key),
             InstallStepType::ExecuteConfirmationGate => {
@@ -450,6 +447,10 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => {
                 let len = self.welcome_options.len();
                 Self::adjust_index(len, &mut self.welcome_index, 1);
+                InputResult::Continue
+            }
+            KeyCode::Char(' ') => {
+                self.welcome_selected = self.welcome_index;
                 InputResult::Continue
             }
             KeyCode::Enter | KeyCode::Tab => {
@@ -494,12 +495,10 @@ impl App {
                 InputResult::Continue
             }
             KeyCode::Enter | KeyCode::Tab => {
-                if self.backup_choice_index == 1 {
-                    self.backup_confirmed = true;
+                if self.backup_confirmed {
                     self.error_message = None;
                     self.go_next();
                 } else {
-                    self.backup_confirmed = false;
                     self.error_message =
                         Some("Backup confirmation required to proceed.".to_string());
                 }
@@ -514,7 +513,7 @@ impl App {
     }
 
     fn handle_disk_selection_input(&mut self, key: KeyEvent) -> InputResult {
-        let protected = self
+        let protected_cursor = self
             .disks
             .get(self.disk_index)
             .map(|disk| disk.boot_confidence.is_boot() || disk.is_source_disk)
@@ -535,13 +534,26 @@ impl App {
             }
             KeyCode::Char(' ') => {
                 // Single-select list: selection is the current highlight.
+                if protected_cursor && !self.developer_mode {
+                    self.error_message = Some(
+                        "🛑 This disk is the source/boot media and cannot be selected. Re-run with --developer-mode to override (dangerous)."
+                            .to_string(),
+                    );
+                    return InputResult::Continue;
+                }
+                self.disk_selected = self.disk_index;
                 self.error_message = None;
                 InputResult::Continue
             }
             KeyCode::Enter | KeyCode::Tab => {
-                if protected && !self.developer_mode {
+                let protected_selected = self
+                    .disks
+                    .get(self.disk_selected)
+                    .map(|disk| disk.boot_confidence.is_boot() || disk.is_source_disk)
+                    .unwrap_or(false);
+                if protected_selected && !self.developer_mode {
                     self.error_message = Some(
-                        "🛑 This disk is the source/boot media and cannot be selected. Re-run with --developer-mode to override (dangerous)."
+                        "🛑 Selected disk is the source/boot media and cannot be used as a target."
                             .to_string(),
                     );
                     return InputResult::Continue;
@@ -600,10 +612,140 @@ impl App {
         }
     }
 
+    fn handle_partition_scheme_input(&mut self, key: KeyEvent) -> InputResult {
+        let len = self.partition_schemes.len();
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                Self::adjust_index(len, &mut self.scheme_index, -1);
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                Self::adjust_index(len, &mut self.scheme_index, 1);
+                InputResult::Continue
+            }
+            KeyCode::Char(' ') => {
+                self.scheme_selected = self.scheme_index;
+                self.error_message = None;
+                InputResult::Continue
+            }
+            KeyCode::Enter | KeyCode::Tab => {
+                self.error_message = None;
+                self.go_next();
+                InputResult::Continue
+            }
+            KeyCode::Esc => {
+                self.go_prev();
+                InputResult::Continue
+            }
+            _ => InputResult::Continue,
+        }
+    }
+
+    fn handle_download_source_selection_input(&mut self, key: KeyEvent) -> InputResult {
+        let len = self.image_sources.len();
+        let selected_is_local = self
+            .image_sources
+            .get(self.image_source_selected)
+            .map(|source| source.value == ImageSource::LocalFile)
+            .unwrap_or(false);
+
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                Self::adjust_index(len, &mut self.image_source_index, -1);
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                Self::adjust_index(len, &mut self.image_source_index, 1);
+                InputResult::Continue
+            }
+            KeyCode::Char(' ') => {
+                self.image_source_selected = self.image_source_index;
+                self.error_message = None;
+                InputResult::Continue
+            }
+            KeyCode::Char(c) if selected_is_local && !c.is_control() => {
+                self.image_source_path.push(c);
+                InputResult::Continue
+            }
+            KeyCode::Backspace if selected_is_local => {
+                self.image_source_path.pop();
+                InputResult::Continue
+            }
+            KeyCode::Enter | KeyCode::Tab => {
+                self.error_message = None;
+                self.go_next();
+                InputResult::Continue
+            }
+            KeyCode::Esc => {
+                self.go_prev();
+                InputResult::Continue
+            }
+            _ => InputResult::Continue,
+        }
+    }
+
+    fn handle_locale_selection_input(&mut self, key: KeyEvent) -> InputResult {
+        let len = self.locales.len();
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                Self::adjust_index(len, &mut self.locale_index, -1);
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                Self::adjust_index(len, &mut self.locale_index, 1);
+                InputResult::Continue
+            }
+            KeyCode::Char(' ') => {
+                self.locale_selected = self.locale_index;
+                self.error_message = None;
+                InputResult::Continue
+            }
+            KeyCode::Enter | KeyCode::Tab => {
+                self.error_message = None;
+                self.go_next();
+                InputResult::Continue
+            }
+            KeyCode::Esc => {
+                self.go_prev();
+                InputResult::Continue
+            }
+            _ => InputResult::Continue,
+        }
+    }
+
+    fn handle_first_boot_user_input(&mut self, key: KeyEvent) -> InputResult {
+        let len = self.first_boot_options.len();
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                Self::adjust_index(len, &mut self.first_boot_index, -1);
+                InputResult::Continue
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                Self::adjust_index(len, &mut self.first_boot_index, 1);
+                InputResult::Continue
+            }
+            KeyCode::Char(' ') => {
+                self.first_boot_selected = self.first_boot_index;
+                self.error_message = None;
+                InputResult::Continue
+            }
+            KeyCode::Enter | KeyCode::Tab => {
+                self.error_message = None;
+                self.go_next();
+                InputResult::Continue
+            }
+            KeyCode::Esc => {
+                self.go_prev();
+                InputResult::Continue
+            }
+            _ => InputResult::Continue,
+        }
+    }
+
     fn handle_disk_confirmation_input(&mut self, key: KeyEvent) -> InputResult {
         let is_boot_or_source_disk = self
             .disks
-            .get(self.disk_index)
+            .get(self.disk_selected)
             .map(|disk| disk.boot_confidence.is_boot() || disk.is_source_disk)
             .unwrap_or(false);
 
@@ -850,19 +992,26 @@ impl App {
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
                 Self::adjust_index(self.os_distros.len(), &mut self.os_distro_index, -1);
-                self.refresh_os_variants();
                 InputResult::Continue
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 Self::adjust_index(self.os_distros.len(), &mut self.os_distro_index, 1);
+                InputResult::Continue
+            }
+            KeyCode::Char(' ') => {
+                self.os_distro_selected = self.os_distro_index;
                 self.refresh_os_variants();
+                // Selecting a new distro resets variant selection to the first available entry.
+                self.os_variant_index = 0;
+                self.os_variant_selected = 0;
+                self.error_message = None;
                 InputResult::Continue
             }
             KeyCode::Enter | KeyCode::Tab => {
                 self.error_message = None;
                 if self.os_variants.is_empty() {
                     self.error_message = Some(
-                        "Missing metadata: no variants found for this OS. Cannot continue."
+                        "Missing metadata: no variants found for this OS. Select a different OS."
                             .to_string(),
                     );
                     return InputResult::Continue;
@@ -884,6 +1033,11 @@ impl App {
                 Self::adjust_index(self.os_variants.len(), &mut self.os_variant_index, 1);
                 InputResult::Continue
             }
+            KeyCode::Char(' ') => {
+                self.os_variant_selected = self.os_variant_index;
+                self.error_message = None;
+                InputResult::Continue
+            }
             KeyCode::Enter | KeyCode::Tab => {
                 if self.os_variants.is_empty() {
                     self.error_message = Some(
@@ -901,49 +1055,36 @@ impl App {
     }
 
     fn handle_uefi_source_selection_input(&mut self, key: KeyEvent) -> InputResult {
-        let is_local = matches!(
-            self.uefi_sources.get(self.uefi_source_index),
+        let selected_is_local = matches!(
+            self.uefi_sources.get(self.uefi_source_selected),
             Some(super::super::flash_config::EfiSource::LocalEfiImage)
         );
 
-        // If local directory is selected, accept text input for path
-        if is_local {
-            match key.code {
-                KeyCode::Up | KeyCode::Char('k') => {
-                    Self::adjust_index(self.uefi_sources.len(), &mut self.uefi_source_index, -1);
-                    InputResult::Continue
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    Self::adjust_index(self.uefi_sources.len(), &mut self.uefi_source_index, 1);
-                    InputResult::Continue
-                }
-                KeyCode::Char(c) => {
-                    self.uefi_source_path.push(c);
-                    InputResult::Continue
-                }
-                KeyCode::Backspace => {
-                    self.uefi_source_path.pop();
-                    InputResult::Continue
-                }
-                KeyCode::Enter | KeyCode::Tab => self.apply_list_action(ListAction::Advance),
-                KeyCode::Esc => self.apply_list_action(ListAction::Back),
-                _ => InputResult::Continue,
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                Self::adjust_index(self.uefi_sources.len(), &mut self.uefi_source_index, -1);
+                InputResult::Continue
             }
-        } else {
-            // Download selected - simple navigation
-            match key.code {
-                KeyCode::Up | KeyCode::Char('k') => {
-                    Self::adjust_index(self.uefi_sources.len(), &mut self.uefi_source_index, -1);
-                    InputResult::Continue
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    Self::adjust_index(self.uefi_sources.len(), &mut self.uefi_source_index, 1);
-                    InputResult::Continue
-                }
-                KeyCode::Enter | KeyCode::Tab => self.apply_list_action(ListAction::Advance),
-                KeyCode::Esc => self.apply_list_action(ListAction::Back),
-                _ => InputResult::Continue,
+            KeyCode::Down | KeyCode::Char('j') => {
+                Self::adjust_index(self.uefi_sources.len(), &mut self.uefi_source_index, 1);
+                InputResult::Continue
             }
+            KeyCode::Char(' ') => {
+                self.uefi_source_selected = self.uefi_source_index;
+                self.error_message = None;
+                InputResult::Continue
+            }
+            KeyCode::Char(c) if selected_is_local && !c.is_control() => {
+                self.uefi_source_path.push(c);
+                InputResult::Continue
+            }
+            KeyCode::Backspace if selected_is_local => {
+                self.uefi_source_path.pop();
+                InputResult::Continue
+            }
+            KeyCode::Enter | KeyCode::Tab => self.apply_list_action(ListAction::Advance),
+            KeyCode::Esc => self.apply_list_action(ListAction::Back),
+            _ => InputResult::Continue,
         }
     }
 
@@ -1043,22 +1184,6 @@ impl App {
         }
     }
 
-    fn list_action(key: KeyEvent, len: usize, index: &mut usize) -> ListAction {
-        match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                Self::adjust_index(len, index, -1);
-                ListAction::None
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                Self::adjust_index(len, index, 1);
-                ListAction::None
-            }
-            KeyCode::Enter | KeyCode::Tab => ListAction::Advance,
-            KeyCode::Esc => ListAction::Back,
-            _ => ListAction::None,
-        }
-    }
-
     fn adjust_index(len: usize, index: &mut usize, delta: isize) {
         if len == 0 {
             *index = 0;
@@ -1111,6 +1236,10 @@ impl App {
 
         let selected = self
             .disks
+            .get(self.disk_selected)
+            .map(|disk| disk.stable_id.clone());
+        let cursor = self
+            .disks
             .get(self.disk_index)
             .map(|disk| disk.stable_id.clone());
 
@@ -1132,43 +1261,48 @@ impl App {
         if disks.is_empty() {
             self.disks.clear();
             self.disk_index = 0;
+            self.disk_selected = 0;
             self.error_message =
                 Some("No disks detected. Insert a target disk and press r.".to_string());
             return;
         }
 
         // Preserve selection if possible.
-        let mut next_index = selected
+        let mut next_selected_index = selected
             .as_ref()
             .and_then(|id| disks.iter().position(|d| &d.stable_id == id))
             .unwrap_or(0);
 
         // If the preserved selection is protected, prefer a safe target unless developer-mode.
         if !self.developer_mode {
-            if let Some(disk) = disks.get(next_index) {
+            if let Some(disk) = disks.get(next_selected_index) {
                 let protected = disk.boot_confidence.is_boot() || disk.is_source_disk;
                 if protected {
                     if let Some(idx) = disks.iter().position(|d| {
                         !(d.boot_confidence.is_boot() || d.is_source_disk) && d.removable
                     }) {
-                        next_index = idx;
+                        next_selected_index = idx;
                     } else if let Some(idx) = disks
                         .iter()
                         .position(|d| !(d.boot_confidence.is_boot() || d.is_source_disk))
                     {
-                        next_index = idx;
+                        next_selected_index = idx;
                     }
                 }
             }
         }
 
-        self.disks = disks;
-        self.disk_index = next_index.min(self.disks.len().saturating_sub(1));
-        self.error_message = None;
-    }
+        // Preserve cursor separately if possible; otherwise follow the selected item.
+        let mut next_cursor_index = cursor
+            .as_ref()
+            .and_then(|id| disks.iter().position(|d| &d.stable_id == id))
+            .unwrap_or(next_selected_index);
 
-    fn toggle_backup_choice(&mut self) {
-        self.backup_choice_index = if self.backup_choice_index == 0 { 1 } else { 0 };
+        self.disks = disks;
+        self.disk_selected = next_selected_index.min(self.disks.len().saturating_sub(1));
+        next_cursor_index = next_cursor_index.min(self.disks.len().saturating_sub(1));
+        self.disk_index = next_cursor_index;
+        self.error_message = None;
     }
 
     fn handle_flashing_input(&mut self, key: KeyEvent) -> InputResult {
@@ -1217,13 +1351,13 @@ impl App {
             KeyCode::Char(' ') => {
                 // Single-select: highlight is the selection.
                 self.error_message = None;
+                self.layout_selected = self.layout_index;
                 InputResult::Continue
             }
             KeyCode::Enter | KeyCode::Tab => {
                 self.error_message = None;
-                // If the user selected a default layout, accept and proceed. If they selected the
-                // final option ("Customize manually"), enter the customization screen.
-                if self.layout_index < self.partition_layouts.len() {
+                // Enter/Tab advances based on the selected option (radio behavior).
+                if self.layout_selected < self.partition_layouts.len() {
                     self.current_step_type = InstallStepType::EfiImage;
                 } else {
                     self.current_step_type = InstallStepType::PartitionCustomize;
@@ -1297,37 +1431,6 @@ impl App {
         }
     }
 
-    fn handle_image_source_path_input(&mut self, key: KeyEvent, len: usize) -> InputResult {
-        match key.code {
-            KeyCode::Char(c) if !c.is_control() => {
-                self.image_source_path.push(c);
-                InputResult::Continue
-            }
-            KeyCode::Backspace => {
-                self.image_source_path.pop();
-                InputResult::Continue
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                Self::adjust_index(len, &mut self.image_source_index, -1);
-                InputResult::Continue
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                Self::adjust_index(len, &mut self.image_source_index, 1);
-                InputResult::Continue
-            }
-            KeyCode::Enter | KeyCode::Tab => {
-                self.error_message = None;
-                self.go_next();
-                InputResult::Continue
-            }
-            KeyCode::Esc => {
-                self.go_prev();
-                InputResult::Continue
-            }
-            _ => InputResult::Continue,
-        }
-    }
-
     fn apply_customize_edit(&mut self, input: Option<char>) -> bool {
         let target = match self.customize_index {
             0 => Some(&mut self.efi_size),
@@ -1360,7 +1463,7 @@ impl App {
         PartitionPlan {
             scheme: *self
                 .partition_schemes
-                .get(self.scheme_index)
+                .get(self.scheme_selected)
                 .unwrap_or(&PartitionScheme::Mbr),
             partitions: vec![
                 Partition {
@@ -1400,7 +1503,7 @@ impl App {
     fn requires_image_download(&self) -> bool {
         let source_is_download = self
             .image_sources
-            .get(self.image_source_index)
+            .get(self.image_source_selected)
             .map(|source| source.value == ImageSource::DownloadCatalogue)
             .unwrap_or(false);
         source_is_download
@@ -1408,14 +1511,14 @@ impl App {
 
     fn requires_uefi_download(&self) -> bool {
         matches!(
-            self.uefi_sources.get(self.uefi_source_index),
+            self.uefi_sources.get(self.uefi_source_selected),
             Some(super::super::flash_config::EfiSource::DownloadEfiImage)
         )
     }
 
     fn selected_distro(&self) -> super::super::flash_config::OsDistro {
         self.os_distros
-            .get(self.os_distro_index)
+            .get(self.os_distro_selected)
             .copied()
             .unwrap_or(super::super::flash_config::OsDistro::Fedora)
     }
@@ -1445,11 +1548,12 @@ impl App {
 
         self.os_variants = variants;
         self.os_variant_index = 0;
+        self.os_variant_selected = 0;
     }
 
     fn selected_variant_id(&self) -> Option<String> {
         self.os_variants
-            .get(self.os_variant_index)
+            .get(self.os_variant_selected)
             .map(|v| v.id.clone())
     }
 
@@ -1471,7 +1575,7 @@ impl App {
     /// Build flash configuration from current app state
     pub fn build_flash_config(&self) -> Option<TuiFlashConfig> {
         let download_uefi_firmware = matches!(
-            self.uefi_sources.get(self.uefi_source_index),
+            self.uefi_sources.get(self.uefi_source_selected),
             Some(super::super::flash_config::EfiSource::DownloadEfiImage)
         );
 
@@ -1485,7 +1589,7 @@ impl App {
 
         let image_source = self
             .image_sources
-            .get(self.image_source_index)
+            .get(self.image_source_selected)
             .map(|source| source.value)
             .unwrap_or(ImageSource::LocalFile);
 
@@ -1510,7 +1614,7 @@ impl App {
             }
         };
 
-        let disk_identity = self.disks.get(self.disk_index).map(|disk| {
+        let disk_identity = self.disks.get(self.disk_selected).map(|disk| {
             mash_core::install_report::DiskIdentityReport {
                 vendor: disk.identity.vendor.clone(),
                 model: disk.identity.model.clone(),
@@ -1527,12 +1631,12 @@ impl App {
             image: image_path,
             disk: self
                 .disks
-                .get(self.disk_index)
+                .get(self.disk_selected)
                 .map(|disk| disk.path.clone())
                 .unwrap_or_else(|| "/dev/sda".to_string()),
             scheme: *self
                 .partition_schemes
-                .get(self.scheme_index)
+                .get(self.scheme_selected)
                 .unwrap_or(&PartitionScheme::Mbr),
             uefi_dir: self.downloaded_uefi_dir.clone().unwrap_or_else(|| {
                 if download_uefi_firmware {
@@ -1550,7 +1654,7 @@ impl App {
             watch: false,
             locale: self
                 .locales
-                .get(self.locale_index)
+                .get(self.locale_selected)
                 .and_then(|locale| LocaleConfig::parse_from_str(locale).ok()),
             early_ssh: self
                 .options
@@ -1571,12 +1675,12 @@ impl App {
             disk_identity,
             os_distro_label: self
                 .os_distros
-                .get(self.os_distro_index)
+                .get(self.os_distro_selected)
                 .map(|d| d.display().to_string())
                 .unwrap_or_else(|| "Unknown".to_string()),
             os_flavour_label: self
                 .os_variants
-                .get(self.os_variant_index)
+                .get(self.os_variant_selected)
                 .map(|v| v.label.clone())
                 .unwrap_or_else(|| "Unknown".to_string()),
             typed_execute_confirmation: self.execute_confirmation_confirmed,
@@ -1770,12 +1874,14 @@ mod tests {
     }
 
     #[test]
-    fn down_moves_partition_scheme_selection() {
+    fn down_moves_partition_scheme_cursor_without_selecting() {
         let mut app = App::new();
         app.current_step_type = InstallStepType::PartitionScheme;
-        let initial = app.scheme_index;
+        let initial_cursor = app.scheme_index;
+        let initial_selected = app.scheme_selected;
         app.handle_input(key(KeyCode::Down));
-        assert_ne!(app.scheme_index, initial);
+        assert_ne!(app.scheme_index, initial_cursor);
+        assert_eq!(app.scheme_selected, initial_selected);
     }
 
     #[test]
@@ -1783,11 +1889,13 @@ mod tests {
         let mut app = App::new();
         app.current_step_type = InstallStepType::PartitionLayout;
         app.layout_index = 0;
+        app.handle_input(key(KeyCode::Char(' '))); // select recommended
         app.handle_input(key(KeyCode::Enter));
         assert_eq!(app.current_step_type, InstallStepType::EfiImage);
 
         app.current_step_type = InstallStepType::PartitionLayout;
         app.layout_index = app.partition_layouts.len();
+        app.handle_input(key(KeyCode::Char(' '))); // select manual
         app.handle_input(key(KeyCode::Enter));
         assert_eq!(app.current_step_type, InstallStepType::PartitionCustomize);
     }
@@ -1847,6 +1955,7 @@ mod tests {
             is_source_disk: false,
         })];
         app.disk_index = 0;
+        app.disk_selected = 0;
 
         for ch in "DESTROY".chars() {
             app.handle_input(key(KeyCode::Char(ch)));
@@ -2003,10 +2112,12 @@ mod tests {
     fn download_flags_follow_source_selection() {
         let mut app = App::new();
         app.image_source_index = 0;
+        app.image_source_selected = 0;
         let config = app.build_flash_config().expect("config");
         assert_eq!(config.image_source_selection, ImageSource::LocalFile);
 
         app.image_source_index = 1;
+        app.image_source_selected = 1;
         let config = app.build_flash_config().expect("config");
         assert_eq!(
             config.image_source_selection,
@@ -2019,6 +2130,7 @@ mod tests {
         let mut app = App::new();
         // Set EFI source to Download (index 0)
         app.uefi_source_index = 0;
+        app.uefi_source_selected = 0;
         let config = app.build_flash_config().expect("config");
         assert!(config.download_uefi_firmware);
     }
@@ -2026,8 +2138,8 @@ mod tests {
     #[test]
     fn os_distro_defaults_to_fedora() {
         let app = App::new();
-        assert_eq!(app.os_distro_index, 0);
-        if let Some(distro) = app.os_distros.get(app.os_distro_index) {
+        assert_eq!(app.os_distro_selected, 0);
+        if let Some(distro) = app.os_distros.get(app.os_distro_selected) {
             assert!(matches!(
                 distro,
                 crate::dojo::flash_config::OsDistro::Fedora
@@ -2052,8 +2164,8 @@ mod tests {
     #[test]
     fn uefi_source_defaults_to_local() {
         let app = App::new();
-        assert_eq!(app.uefi_source_index, 1);
-        if let Some(source) = app.uefi_sources.get(app.uefi_source_index) {
+        assert_eq!(app.uefi_source_selected, 1);
+        if let Some(source) = app.uefi_sources.get(app.uefi_source_selected) {
             assert!(matches!(
                 source,
                 crate::dojo::flash_config::EfiSource::LocalEfiImage
@@ -2087,7 +2199,7 @@ mod tests {
         // Stub data has USB as index 0 (non-boot) and NVMe as index 1 (boot)
         // Should default to index 0 which is non-boot
         if !app.disks.is_empty() {
-            if let Some(_disk) = app.disks.get(app.disk_index) {
+            if let Some(_disk) = app.disks.get(app.disk_selected) {
                 assert!(
                     !_disk.boot_confidence.is_boot(),
                     "Default disk should not be boot disk"
@@ -2215,6 +2327,7 @@ mod tests {
         })];
 
         app.disk_index = 0;
+        app.disk_selected = 0;
 
         // Try to advance with protected disk selected without developer mode
         app.handle_input(key(KeyCode::Enter));
@@ -2241,6 +2354,7 @@ mod tests {
             is_source_disk: true,
         })];
         app.disk_index = 0;
+        app.disk_selected = 0;
 
         app.handle_input(key(KeyCode::Enter));
         assert_eq!(app.current_step_type, InstallStepType::DiskConfirmation);
@@ -2264,6 +2378,7 @@ mod tests {
         })];
 
         app.disk_index = 0;
+        app.disk_selected = 0;
 
         // Advance with non-boot disk selected
         app.handle_input(key(KeyCode::Enter));
