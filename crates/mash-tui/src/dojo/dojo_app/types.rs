@@ -20,6 +20,8 @@ pub struct DiskOption {
     pub identity: data_sources::DiskIdentity,
     pub stable_id: String,
     pub path: String,
+    /// Canonical label (HAL/sysfs) used for UI display.
+    pub label: String,
     pub removable: bool,
     pub boot_confidence: data_sources::BootConfidence,
     pub is_source_disk: bool,
