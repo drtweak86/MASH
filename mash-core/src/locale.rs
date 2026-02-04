@@ -5,8 +5,7 @@
 //! - /etc/vconsole.conf (console keymap)
 //! - /etc/default/keyboard (X11 keyboard layout)
 
-use crate::errors::Result;
-use anyhow::bail; // Add anyhow for bail! macro
+use crate::errors::{MashError, Result};
 use std::fs;
 use std::path::Path;
 
@@ -25,7 +24,10 @@ impl LocaleConfig {
     pub fn parse_from_str(s: &str) -> Result<Self> {
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() != 2 {
-            bail!("Invalid locale format: expected 'lang:keymap', got '{}'", s);
+            return Err(MashError::ValidationFailed(format!(
+                "Invalid locale format: expected 'lang:keymap', got '{}'",
+                s
+            )));
         }
         let lang = parts[0];
         let keymap = parts[1];
@@ -36,14 +38,14 @@ impl LocaleConfig {
             .find(|lc| lc.lang == lang && lc.keymap == keymap)
             .cloned() // Clone to get an owned LocaleConfig
             .ok_or_else(|| {
-                anyhow::anyhow!(
+                MashError::ValidationFailed(format!(
                     "Unsupported locale: '{}'. Available: {:?}",
                     s,
                     LOCALES
                         .iter()
                         .map(|lc| format!("{}:{}", lc.lang, lc.keymap))
                         .collect::<Vec<_>>()
-                )
+                ))
             })
     }
 }

@@ -10,7 +10,6 @@ anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 log = "0.4"
 env_logger = "0.11"
-thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 nix = { version = "0.27", features = ["mount", "fs"] }
@@ -29,6 +28,7 @@ tempfile = "3"
 wait-timeout = "0.2"
 libdnf-sys = { path = "../libdnf-sys", optional = true }
 mash-hal = { path = "../crates/mash-hal" }
+mash-error = { path = "../mash-error" }
 
 [features]
 default = []

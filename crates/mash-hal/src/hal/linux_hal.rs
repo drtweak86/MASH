@@ -130,6 +130,15 @@ impl MountOps for LinuxHal {
             return Ok(());
         }
 
+        if self.is_mounted(target)? {
+            log::info!(
+                "mount skipped: {} already mounted at {}",
+                device.display(),
+                target.display()
+            );
+            return Ok(());
+        }
+
         // Use nix::mount for the actual mounting
         let flags = nix::mount::MsFlags::empty();
         let data = options.options.as_deref();
@@ -145,7 +154,15 @@ impl MountOps for LinuxHal {
             return Ok(());
         }
 
-        nix::mount::umount2(target, nix::mount::MntFlags::empty()).map_err(map_nix_err)?;
+        if !self.is_mounted(target)? {
+            return Ok(());
+        }
+
+        match nix::mount::umount2(target, nix::mount::MntFlags::empty()) {
+            Ok(_) => Ok(()),
+            Err(nix::errno::Errno::EINVAL) => Ok(()),
+            Err(err) => Err(map_nix_err(err)),
+        }?;
 
         Ok(())
     }
@@ -153,6 +170,10 @@ impl MountOps for LinuxHal {
     fn unmount_recursive(&self, target: &Path, dry_run: bool) -> HalResult<()> {
         if dry_run {
             log::info!("DRY RUN: unmount -R {}", target.display());
+            return Ok(());
+        }
+
+        if !self.is_mounted(target)? {
             return Ok(());
         }
 
@@ -171,7 +192,11 @@ impl MountOps for LinuxHal {
 
         for mp in under {
             // Ignore errors for already-unmounted paths; bubble up anything else.
-            let _ = nix::mount::umount2(&mp, nix::mount::MntFlags::empty());
+            if let Err(err) = nix::mount::umount2(&mp, nix::mount::MntFlags::empty()) {
+                if err != nix::errno::Errno::EINVAL {
+                    return Err(map_nix_err(err));
+                }
+            }
         }
 
         Ok(())
@@ -317,9 +342,11 @@ impl FlashOps for LinuxHal {
 
 impl SystemOps for LinuxHal {
     fn sync(&self) -> HalResult<()> {
-        // Avoid linking libc directly; keep behavior aligned with existing shell usage.
-        let mut cmd = Command::new("sync");
-        status_with_timeout("sync", &mut cmd, SYNC_TIMEOUT)
+        // Direct syscall to avoid external command dependency.
+        unsafe {
+            libc::sync();
+        }
+        Ok(())
     }
 
     fn udev_settle(&self) -> HalResult<()> {
