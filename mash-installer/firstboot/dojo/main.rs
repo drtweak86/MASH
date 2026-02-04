@@ -1,8 +1,10 @@
+use anyhow::Context;
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use mash_hal::ProcessOps;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -10,7 +12,6 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::fs;
 use std::io::{self, Stdout};
-use std::process::Command;
 use std::time::{Duration, SystemTime};
 
 use mash_core::dojo_catalogue::{
@@ -461,12 +462,14 @@ fn finalize_dojo() -> anyhow::Result<()> {
     let marker_dir = std::path::Path::new("/var/lib/mash");
     fs::create_dir_all(marker_dir)?;
 
-    let status = Command::new("systemctl")
-        .args(["disable", SERVICE_NAME])
-        .status()?;
-    if !status.success() {
-        anyhow::bail!("failed to disable {}", SERVICE_NAME);
-    }
+    let hal = mash_hal::LinuxHal::new();
+    hal.command_status(
+        "systemctl",
+        &["disable", SERVICE_NAME],
+        std::time::Duration::from_secs(60),
+    )
+    .map_err(anyhow::Error::new)
+    .with_context(|| format!("failed to disable {}", SERVICE_NAME))?;
 
     let timestamp = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)

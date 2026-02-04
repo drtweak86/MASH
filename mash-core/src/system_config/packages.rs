@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
+use mash_hal::ProcessOps;
 use std::env;
-use std::process::Command;
 use std::time::Duration;
 
 pub trait PackageManager {
@@ -83,14 +83,9 @@ pub fn update_command_spec() -> CommandSpec {
 }
 
 fn run_command(spec: &CommandSpec) -> Result<()> {
-    let mut cmd = Command::new(&spec.program);
-    cmd.args(&spec.args);
-    let status = crate::process_timeout::status_with_timeout(
-        &spec.program,
-        &mut cmd,
-        Duration::from_secs(60 * 60),
-    )?;
-    if !status.success() {
+    let hal = mash_hal::LinuxHal::new();
+    let args: Vec<&str> = spec.args.iter().map(String::as_str).collect();
+    if let Err(_err) = hal.command_status(&spec.program, &args, Duration::from_secs(60 * 60)) {
         return Err(anyhow!("Command failed: {}", spec.program));
     }
     Ok(())

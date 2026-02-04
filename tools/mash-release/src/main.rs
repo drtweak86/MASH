@@ -1,8 +1,8 @@
 use clap::{Parser, ValueEnum};
+use mash_hal::ProcessOps;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use toml_edit::{DocumentMut, Item};
 
 mod version;
@@ -222,36 +222,34 @@ fn replace_version_in_title(line: &str, tag: &str) -> Option<String> {
 }
 
 fn run_checks(repo_root: &Path) -> Result<(), String> {
+    let hal = mash_hal::LinuxHal::new();
     let mash_dir = repo_root.join("mash-installer");
-    let mut fmt_cmd = Command::new("cargo");
-    fmt_cmd
-        .arg("fmt")
-        .arg("--all")
-        .arg("--")
-        .arg("--check")
-        .current_dir(&mash_dir);
-    run_command(fmt_cmd, "cargo fmt --all -- --check")?;
-    let mut test_cmd = Command::new("cargo");
-    test_cmd.arg("test").current_dir(&mash_dir);
-    run_command(test_cmd, "cargo test")?;
-    Ok(())
-}
-
-fn run_command(mut cmd: Command, label: &str) -> Result<(), String> {
-    let status = cmd
-        .status()
-        .map_err(|err| format!("failed to run {}: {}", label, err))?;
-    if !status.success() {
-        return Err(format!("{} failed", label));
-    }
+    hal.command_status_with_cwd(
+        "cargo",
+        &["fmt", "--all", "--", "--check"],
+        Some(&mash_dir),
+        std::time::Duration::from_secs(6 * 60 * 60),
+    )
+    .map_err(|err| format!("cargo fmt --all -- --check failed: {}", err))?;
+    hal.command_status_with_cwd(
+        "cargo",
+        &["test"],
+        Some(&mash_dir),
+        std::time::Duration::from_secs(6 * 60 * 60),
+    )
+    .map_err(|err| format!("cargo test failed: {}", err))?;
     Ok(())
 }
 
 fn ensure_clean_worktree(repo_root: &Path, allow_dirty: bool) -> Result<(), String> {
-    let output = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(repo_root)
-        .output()
+    let hal = mash_hal::LinuxHal::new();
+    let output = hal
+        .command_output_with_cwd(
+            "git",
+            &["status", "--porcelain"],
+            Some(repo_root),
+            std::time::Duration::from_secs(60),
+        )
         .map_err(|err| format!("failed to run git status: {}", err))?;
     if !output.status.success() {
         return Err("failed to read git status".to_string());
@@ -316,36 +314,57 @@ fn path_from_root(root: &Path, path: &Path) -> PathBuf {
 }
 
 fn git_add(repo_root: &Path, files: &[PathBuf]) -> Result<(), String> {
-    let mut cmd = Command::new("git");
-    cmd.arg("add");
+    let hal = mash_hal::LinuxHal::new();
+    let mut args: Vec<String> = vec!["add".to_string()];
     for file in files {
-        cmd.arg(file);
+        args.push(file.display().to_string());
     }
-    cmd.current_dir(repo_root);
-    run_command(cmd, "git add")
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    hal.command_status_with_cwd(
+        "git",
+        &arg_refs,
+        Some(repo_root),
+        std::time::Duration::from_secs(60),
+    )
+    .map_err(|err| format!("git add failed: {}", err))
 }
 
 fn git_commit(repo_root: &Path, message: &str) -> Result<(), String> {
-    let mut cmd = Command::new("git");
-    cmd.args(["commit", "-m", message]).current_dir(repo_root);
-    run_command(cmd, "git commit")
+    let hal = mash_hal::LinuxHal::new();
+    hal.command_status_with_cwd(
+        "git",
+        &["commit", "-m", message],
+        Some(repo_root),
+        std::time::Duration::from_secs(60),
+    )
+    .map_err(|err| format!("git commit failed: {}", err))
 }
 
 fn git_tag(repo_root: &Path, tag: &str) -> Result<(), String> {
-    let mut cmd = Command::new("git");
-    cmd.args(["tag", "-a", tag, "-m", &format!("Release {}", tag)])
-        .current_dir(repo_root);
-    run_command(cmd, "git tag")
+    let hal = mash_hal::LinuxHal::new();
+    let msg = format!("Release {}", tag);
+    hal.command_status_with_cwd(
+        "git",
+        &["tag", "-a", tag, "-m", &msg],
+        Some(repo_root),
+        std::time::Duration::from_secs(60),
+    )
+    .map_err(|err| format!("git tag failed: {}", err))
 }
 
 fn git_push(repo_root: &Path, with_tags: bool) -> Result<(), String> {
-    let mut cmd = Command::new("git");
-    cmd.arg("push").arg("origin").arg("main");
+    let hal = mash_hal::LinuxHal::new();
+    let mut args: Vec<&str> = vec!["push", "origin", "main"];
     if with_tags {
-        cmd.arg("--tags");
+        args.push("--tags");
     }
-    cmd.current_dir(repo_root);
-    run_command(cmd, "git push")
+    hal.command_status_with_cwd(
+        "git",
+        &args,
+        Some(repo_root),
+        std::time::Duration::from_secs(5 * 60),
+    )
+    .map_err(|err| format!("git push failed: {}", err))
 }
 
 fn print_plan(

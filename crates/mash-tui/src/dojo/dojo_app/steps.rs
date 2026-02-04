@@ -1,4 +1,3 @@
-
 /// Defines the sequence of steps in the Dojo UI
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallStepType {

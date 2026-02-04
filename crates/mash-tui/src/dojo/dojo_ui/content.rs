@@ -342,10 +342,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 .push("Use ↑/↓ or Tab to choose • Enter to continue • Esc to go back.".to_string());
 
             let uefi_source = app.uefi_sources.get(app.uefi_source_index);
-            let is_local = matches!(
-                uefi_source,
-                Some(flash_config::EfiSource::LocalEfiImage)
-            );
+            let is_local = matches!(uefi_source, Some(flash_config::EfiSource::LocalEfiImage));
 
             // Show EFI source options (intent-only)
             let options = app

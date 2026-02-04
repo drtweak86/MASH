@@ -1,46 +1,38 @@
 use anyhow::{Context, Result};
 use mash_hal::procfs::mountinfo as proc_mountinfo;
-use nix::mount::{mount as nix_mount, umount2, MntFlags, MsFlags};
-use std::fs;
+use mash_hal::MountOps;
+use nix::mount::MsFlags;
 use std::path::Path;
 
 pub use proc_mountinfo::MountInfo;
 
 pub fn is_mounted(path: &Path) -> Result<bool> {
-    let content = fs::read_to_string("/proc/self/mountinfo")
-        .context("Failed to read /proc/self/mountinfo")?;
-    let entries = parse_mountinfo(&content);
-    Ok(is_mounted_from_info(path, &entries))
+    let hal = mash_hal::LinuxHal::new();
+    Ok(hal.is_mounted(path)?)
 }
 
 pub fn mount_device(
     device: &Path,
     target: &Path,
     fstype: Option<&str>,
-    flags: MsFlags,
+    _flags: MsFlags,
     dry_run: bool,
 ) -> Result<()> {
-    if dry_run {
-        log::info!(
-            "DRY RUN: mount {} -> {}",
-            device.display(),
-            target.display()
-        );
-        return Ok(());
-    }
-
-    nix_mount(Some(device), target, fstype, flags, None::<&str>)
-        .context("Failed to mount device")?;
+    let hal = mash_hal::LinuxHal::new();
+    hal.mount_device(
+        device,
+        target,
+        fstype,
+        mash_hal::MountOptions::new(),
+        dry_run,
+    )
+    .context("Failed to mount device")?;
     Ok(())
 }
 
 pub fn unmount(target: &Path, dry_run: bool) -> Result<()> {
-    if dry_run {
-        log::info!("DRY RUN: unmount {}", target.display());
-        return Ok(());
-    }
-
-    umount2(target, MntFlags::empty()).context("Failed to unmount")?;
+    let hal = mash_hal::LinuxHal::new();
+    hal.unmount(target, dry_run).context("Failed to unmount")?;
     Ok(())
 }
 

@@ -1,6 +1,6 @@
+use super::super::dojo_app::App;
 use super::content::{build_dojo_lines, build_info_panel, expected_actions, status_message};
 use super::sidebar::build_step_sidebar;
-use super::super::dojo_app::App;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},

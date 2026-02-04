@@ -1,7 +1,7 @@
+use super::super::dojo_app::App;
 use super::content::{
     build_dojo_lines, expected_actions, phase_line, progress_detail, status_message,
 };
-use super::super::dojo_app::App;
 
 pub fn dump_step(app: &App) -> String {
     let progress_state = app.progress_state_snapshot();
@@ -37,4 +37,3 @@ pub fn dump_step(app: &App) -> String {
         actions
     )
 }
-

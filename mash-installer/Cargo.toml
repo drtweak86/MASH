@@ -15,6 +15,7 @@ path = "firstboot/dojo/main.rs"
 
 [dependencies]
 mash-core = { path = "../mash-core", default-features = false }
+mash-hal = { path = "../crates/mash-hal" }
 mash-tui = { path = "../crates/mash-tui" }
 mash-workflow = { path = "../crates/mash-workflow" }
 anyhow = "1.0"

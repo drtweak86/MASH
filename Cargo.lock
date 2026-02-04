@@ -1666,6 +1666,7 @@ dependencies = [
  "libc",
  "log",
  "mash-core",
+ "mash-hal",
  "mash-tui",
  "mash-workflow",
  "nix 0.27.1",
@@ -1684,6 +1685,7 @@ name = "mash-release"
 version = "1.2.14"
 dependencies = [
  "clap",
+ "mash-hal",
  "semver",
  "toml_edit 0.22.27",
 ]
@@ -1694,6 +1696,7 @@ version = "1.2.14"
 dependencies = [
  "anyhow",
  "clap",
+ "mash-hal",
  "reqwest",
  "serde",
  "toml",

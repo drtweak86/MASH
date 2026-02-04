@@ -1,7 +1,7 @@
+use super::super::{data_sources, flash_config};
 use super::input::InputResult;
 use super::steps::InstallStepType;
 use super::types::*;
-use super::super::{data_sources, flash_config};
 use crate::progress::ProgressState;
 use clap::ValueEnum;
 use crossterm::event::{KeyCode, KeyEvent};

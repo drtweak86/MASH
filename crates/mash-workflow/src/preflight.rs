@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use libc::statvfs;
 use log::info;
-use mash_hal::{os_release, procfs, sysfs};
+use mash_hal::{os_release, procfs, sysfs, HostInfoOps, LinuxHal};
 use std::env;
 use std::ffi::CString;
 use std::fs;
@@ -71,12 +71,14 @@ impl PreflightConfig {
 pub fn run(cfg: &PreflightConfig) -> Result<()> {
     info!("🧪 Preflight checks");
 
-    check_ram(cfg.min_ram_mb)?;
+    let hal = LinuxHal::new();
+
+    check_ram(&hal, cfg.min_ram_mb)?;
     check_disk_space(&cfg.disk_space_path, cfg.min_disk_gb)?;
     if let Some(target_disk) = &cfg.target_disk {
-        check_target_disk(target_disk, cfg.min_target_disk_gb)?;
+        check_target_disk(&hal, target_disk, cfg.min_target_disk_gb)?;
     }
-    check_os_release()?;
+    check_os_release(&hal)?;
     if let Some((_, _)) = &cfg.network_endpoint {
         if std::env::var_os("MASH_TEST_SKIP_NETWORK_CHECK").is_some() {
             info!("Skipping network check (MASH_TEST_SKIP_NETWORK_CHECK)");
@@ -90,8 +92,9 @@ pub fn run(cfg: &PreflightConfig) -> Result<()> {
     Ok(())
 }
 
-fn check_ram(min_mb: u64) -> Result<()> {
-    let content = fs::read_to_string("/proc/meminfo")
+fn check_ram(hal: &dyn HostInfoOps, min_mb: u64) -> Result<()> {
+    let content = hal
+        .proc_meminfo()
         .context("failed to read /proc/meminfo for RAM check")?;
     let available_kb = procfs::meminfo::parse_mem_available_kb(&content)
         .ok_or_else(|| anyhow!("failed to determine available RAM"))?;
@@ -120,7 +123,7 @@ fn check_disk_space(path: &Path, min_gb: u64) -> Result<()> {
     Ok(())
 }
 
-fn check_target_disk(path: &Path, min_target_disk_gb: u64) -> Result<()> {
+fn check_target_disk(hal: &dyn HostInfoOps, path: &Path, min_target_disk_gb: u64) -> Result<()> {
     let metadata = fs::metadata(path)
         .with_context(|| format!("target disk {} not accessible", path.display()))?;
     if !metadata.file_type().is_block_device() {
@@ -148,7 +151,8 @@ fn check_target_disk(path: &Path, min_target_disk_gb: u64) -> Result<()> {
     }
 
     // Fail fast if anything from this disk is currently mounted.
-    let mountinfo = fs::read_to_string("/proc/self/mountinfo")
+    let mountinfo = hal
+        .proc_mountinfo()
         .context("failed to read /proc/self/mountinfo")?;
     let mounted = procfs::mountinfo::mounted_under_device(&mountinfo, path);
     if !mounted.is_empty() {
@@ -221,19 +225,29 @@ fn base_block_device(device: &str) -> Option<String> {
     Some(format!("/dev/{}", base))
 }
 
-fn check_os_release() -> Result<()> {
+fn check_os_release(hal: &dyn HostInfoOps) -> Result<()> {
     // CI/test runs often happen on non-Fedora hosts; allow tests to point preflight at a fixture.
     // In production this defaults to `/etc/os-release`.
     let os_release_path = env::var_os("MASH_OS_RELEASE_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/etc/os-release"));
-    let content = fs::read_to_string(&os_release_path).with_context(|| {
-        format!(
-            "failed to read {} for Fedora verification",
-            os_release_path.display()
+
+    let (id, version) = if os_release_path == Path::new("/etc/os-release") {
+        let info = hal.os_release()?;
+        (
+            info.id.unwrap_or_default(),
+            info.version_id.and_then(|v| v.parse::<u32>().ok()),
         )
-    })?;
-    let (id, version) = os_release::parse_os_release(&content)?;
+    } else {
+        let content = fs::read_to_string(&os_release_path).with_context(|| {
+            format!(
+                "failed to read {} for Fedora verification",
+                os_release_path.display()
+            )
+        })?;
+        os_release::parse_os_release(&content)?
+    };
+
     if id != "fedora" {
         anyhow::bail!("Preflight requires Fedora, found {}", id);
     }
@@ -402,7 +416,8 @@ mod tests {
         let tmp = tempdir().unwrap();
         let p = tmp.path().join("not-a-block");
         fs::write(&p, "x").unwrap();
-        let err = check_target_disk(&p, 1).unwrap_err();
+        let hal = mash_hal::FakeHal::new();
+        let err = check_target_disk(&hal, &p, 1).unwrap_err();
         assert!(err.to_string().contains("not a block device"));
     }
 }

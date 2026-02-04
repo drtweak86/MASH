@@ -5,6 +5,7 @@
 
 use crate::progress::{Phase, ProgressUpdate};
 use anyhow::Context;
+use mash_hal::HostInfoOps;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -22,25 +23,13 @@ fn now_unix_ms() -> u64 {
 }
 
 fn hostname() -> Option<String> {
-    std::fs::read_to_string("/etc/hostname")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    let hal = mash_hal::LinuxHal::new();
+    hal.hostname().ok().flatten()
 }
 
 fn kernel_release() -> Option<String> {
-    // Best effort: avoid adding dependencies; `uname -r` is stable on Linux.
-    let mut cmd = std::process::Command::new("uname");
-    cmd.arg("-r");
-    crate::process_timeout::output_with_timeout(
-        "uname",
-        &mut cmd,
-        std::time::Duration::from_secs(2),
-    )
-    .ok()
-    .and_then(|out| String::from_utf8(out.stdout).ok())
-    .map(|s| s.trim().to_string())
-    .filter(|s| !s.is_empty())
+    let hal = mash_hal::LinuxHal::new();
+    hal.kernel_release().ok().flatten()
 }
 
 fn parse_cpu_model(cpuinfo: &str) -> Option<String> {
@@ -72,18 +61,11 @@ fn parse_mem_total_kb(meminfo: &str) -> Option<u64> {
 }
 
 fn os_release_id_version() -> (Option<String>, Option<String>) {
-    let content = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
-    let mut id = None;
-    let mut version = None;
-    for line in content.lines() {
-        if let Some(v) = line.strip_prefix("ID=") {
-            id = Some(v.trim().trim_matches('"').to_string());
-        }
-        if let Some(v) = line.strip_prefix("VERSION_ID=") {
-            version = Some(v.trim().trim_matches('"').to_string());
-        }
+    let hal = mash_hal::LinuxHal::new();
+    match hal.os_release() {
+        Ok(info) => (info.id, info.version_id),
+        Err(_) => (None, None),
     }
-    (id, version)
 }
 
 pub fn report_path() -> PathBuf {
@@ -106,8 +88,9 @@ pub struct HardwareInfo {
 
 impl HardwareInfo {
     pub fn collect() -> Self {
-        let cpuinfo = std::fs::read_to_string("/proc/cpuinfo").unwrap_or_default();
-        let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+        let hal = mash_hal::LinuxHal::new();
+        let cpuinfo = hal.proc_cpuinfo().unwrap_or_default();
+        let meminfo = hal.proc_meminfo().unwrap_or_default();
         let (os_id, os_ver) = os_release_id_version();
         Self {
             collected_at_unix_ms: now_unix_ms(),

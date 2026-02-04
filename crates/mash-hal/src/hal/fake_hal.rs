@@ -4,13 +4,18 @@
 //! allowing for CI-safe testing without root privileges or real hardware.
 
 use super::{
-    BtrfsOps, FlashOps, FormatOps, FormatOptions, LoopOps, MountOps, MountOptions, PartedOp,
-    PartedOptions, PartitionOps, ProbeOps, RsyncOps, RsyncOptions, SystemOps, WipeFsOptions,
+    BtrfsOps, FlashOps, FormatOps, FormatOptions, HostInfoOps, LoopOps, MountOps, MountOptions,
+    OsReleaseInfo, PartedOp, PartedOptions, PartitionOps, ProbeOps, ProcessOps, RsyncOps,
+    RsyncOptions, SystemOps, WipeFsOptions,
 };
 use crate::{HalError, HalResult};
 use std::collections::HashSet;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
+use std::process::Output;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// Operation records for testing and verification.
 #[derive(Debug, Clone)]
@@ -73,6 +78,11 @@ pub enum Operation {
     BlkidUuid {
         device: PathBuf,
     },
+    Command {
+        program: String,
+        args: Vec<String>,
+        timeout_secs: u64,
+    },
 }
 
 /// Shared state for FakeHal operations.
@@ -134,6 +144,80 @@ impl FakeHal {
 
     fn record_operation(&self, op: Operation) {
         self.state.lock().unwrap().operations.push(op);
+    }
+}
+
+impl HostInfoOps for FakeHal {
+    fn hostname(&self) -> HalResult<Option<String>> {
+        Ok(None)
+    }
+
+    fn kernel_release(&self) -> HalResult<Option<String>> {
+        Ok(None)
+    }
+
+    fn os_release(&self) -> HalResult<OsReleaseInfo> {
+        Ok(OsReleaseInfo {
+            id: None,
+            version_id: None,
+        })
+    }
+
+    fn proc_cmdline(&self) -> HalResult<String> {
+        Ok(String::new())
+    }
+
+    fn proc_cpuinfo(&self) -> HalResult<String> {
+        Ok(String::new())
+    }
+
+    fn proc_meminfo(&self) -> HalResult<String> {
+        Ok(String::new())
+    }
+
+    fn proc_mounts(&self) -> HalResult<String> {
+        Ok(String::new())
+    }
+
+    fn proc_mountinfo(&self) -> HalResult<String> {
+        Ok(String::new())
+    }
+}
+
+impl ProcessOps for FakeHal {
+    fn command_output_with_cwd(
+        &self,
+        program: &str,
+        args: &[&str],
+        _cwd: Option<&Path>,
+        timeout: Duration,
+    ) -> HalResult<Output> {
+        self.record_operation(Operation::Command {
+            program: program.to_string(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            timeout_secs: timeout.as_secs(),
+        });
+        #[cfg(unix)]
+        let status = std::process::ExitStatus::from_raw(0);
+        #[cfg(not(unix))]
+        let status = std::process::Command::new("true").status().unwrap();
+
+        Ok(Output {
+            status,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        })
+    }
+
+    fn command_status_with_cwd(
+        &self,
+        program: &str,
+        args: &[&str],
+        cwd: Option<&Path>,
+        timeout: Duration,
+    ) -> HalResult<()> {
+        let _ = self.command_output_with_cwd(program, args, cwd, timeout)?;
+        Ok(())
     }
 }
 

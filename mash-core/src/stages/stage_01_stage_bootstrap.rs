@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
+use mash_hal::{ProcessOps, SystemOps};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Command;
 use std::time::Duration;
 
 pub fn run(args: &[String]) -> Result<()> {
@@ -15,22 +15,15 @@ pub fn run(args: &[String]) -> Result<()> {
     println!("[*] Staging bootstrap into {}", dst.display());
     fs::create_dir_all(&dst)?;
 
-    let mut cmd = Command::new("rsync");
-    cmd.args([
-        "-a",
-        "--delete",
-        &format!("{}/", src_root),
-        &format!("{}/", dst.display()),
-    ]);
-    let status = crate::process_timeout::status_with_timeout(
+    let hal = mash_hal::LinuxHal::new();
+    let src_arg = format!("{}/", src_root);
+    let dst_arg = format!("{}/", dst.display());
+    hal.command_status(
         "rsync",
-        &mut cmd,
+        &["-a", "--delete", src_arg.as_str(), dst_arg.as_str()],
         Duration::from_secs(60 * 60),
     )
     .context("rsync failed")?;
-    if !status.success() {
-        anyhow::bail!("rsync failed with status {}", status);
-    }
 
     let mash_forge = dst.join("mash_forge.py");
     if mash_forge.exists() {
@@ -48,8 +41,7 @@ pub fn run(args: &[String]) -> Result<()> {
         }
     }
 
-    let mut cmd = Command::new("sync");
-    let _ = crate::process_timeout::status_with_timeout("sync", &mut cmd, Duration::from_secs(60));
+    let _ = hal.sync();
     println!(
         "[+] Staged. On Fedora first boot run: sudo /data/bootstrap/mash_forge.py firstboot ..."
     );
