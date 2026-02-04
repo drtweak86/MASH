@@ -74,11 +74,7 @@ impl FlashContext {
 
     /// Get partition device path (handles nvme/mmcblk naming).
     pub(super) fn partition_path(&self, num: u32) -> String {
-        if self.disk.contains("nvme") || self.disk.contains("mmcblk") {
-            format!("{}p{}", self.disk, num)
-        } else {
-            format!("{}{}", self.disk, num)
-        }
+        mash_hal::path::partition_path(&self.disk, num)
     }
 }
 
