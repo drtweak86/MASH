@@ -6,6 +6,7 @@ use super::{
     RsyncOps, RsyncOptions, SystemOps, WipeFsOptions,
 };
 use crate::{HalError, HalResult};
+use fatfs::{format_volume, FatType, FormatVolumeOptions};
 use gpt::{disk::LogicalBlockSize, partition_types, GptConfig};
 use mbrman::{MBRPartitionEntry, CHS};
 use std::fs;
@@ -405,19 +406,21 @@ impl FormatOps for LinuxHal {
             return Err(HalError::SafetyLock);
         }
 
-        let mut args: Vec<String> = vec!["-F".to_string(), "32".to_string()];
-        args.push("-n".to_string());
-        args.push(label.to_string());
-        args.extend(opts.extra_args.iter().cloned());
-        args.push(device.display().to_string());
-
-        let mut cmd = Command::new("mkfs.vfat");
-        cmd.args(&args);
-        let output = output_with_timeout("mkfs.vfat", &mut cmd, FORMAT_TIMEOUT)?;
-
-        if !output.status.success() {
-            return Err(output_failed("mkfs.vfat", &output));
+        if !opts.extra_args.is_empty() {
+            log::warn!("format_vfat ignoring extra_args; native formatter handles defaults");
         }
+
+        let mut file = fs::OpenOptions::new().read(true).write(true).open(device)?;
+
+        let vol_label = normalize_vfat_label(label);
+        let opts = FormatVolumeOptions::new()
+            .fat_type(FatType::Fat32)
+            .volume_label(vol_label);
+        format_volume(&mut file, opts)
+            .map_err(|e| HalError::Other(format!("fatfs format failed: {}", e)))?;
+
+        // Best-effort flush for block devices or files.
+        let _ = file.sync_all();
 
         Ok(())
     }
@@ -792,6 +795,21 @@ fn align_1m(bytes: u64) -> u64 {
     bytes.div_ceil(ONE_MIB) * ONE_MIB
 }
 
+fn normalize_vfat_label(label: &str) -> [u8; 11] {
+    let mut out = [b' '; 11];
+    for (i, c) in label
+        .trim()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == ' ')
+        .map(|c| c.to_ascii_uppercase())
+        .take(11)
+        .enumerate()
+    {
+        out[i] = c as u8;
+    }
+    out
+}
+
 impl LoopOps for LinuxHal {
     fn losetup_attach(&self, image: &Path, scan_partitions: bool) -> HalResult<String> {
         // Get a free loop device.
@@ -1096,6 +1114,37 @@ mod tests {
         let opts = FormatOptions::new(false, false);
         let err = hal.format_btrfs(Path::new("/dev/null"), &opts).unwrap_err();
         assert!(matches!(err, crate::HalError::SafetyLock));
+    }
+
+    #[test]
+    fn format_vfat_requires_confirmation() {
+        let hal = LinuxHal::new();
+        let opts = FormatOptions::new(false, false);
+        let err = hal
+            .format_vfat(Path::new("/dev/null"), "EFI", &opts)
+            .unwrap_err();
+        assert!(matches!(err, crate::HalError::SafetyLock));
+    }
+
+    #[test]
+    fn format_vfat_creates_mountable_fs() {
+        let dir = tempdir().unwrap();
+        let img = dir.path().join("fat.img");
+        let f = std::fs::File::create(&img).unwrap();
+        f.set_len(64 * 1024 * 1024).unwrap(); // 64 MiB for FAT32
+
+        let hal = LinuxHal::new();
+        let opts = FormatOptions::new(false, true);
+        hal.format_vfat(&img, "EFI", &opts).unwrap();
+
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&img)
+            .unwrap();
+        let fs = fatfs::FileSystem::new(file, fatfs::FsOptions::new()).unwrap();
+        let label = String::from_utf8(fs.volume_label_as_bytes().to_vec()).unwrap();
+        assert_eq!(label.trim(), "EFI");
     }
 
     #[test]
