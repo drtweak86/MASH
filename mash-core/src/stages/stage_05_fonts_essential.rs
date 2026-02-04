@@ -10,9 +10,9 @@ const NERD_FONT_VERSION: &str = "v3.3.0";
 pub fn run(_args: &[String]) -> Result<()> {
     let hal = mash_hal::LinuxHal::new();
 
-    println!("========================================");
-    println!("  MASH Font Installation");
-    println!("========================================\n");
+    log::info!("========================================");
+    log::info!("  MASH Font Installation");
+    log::info!("========================================\n");
 
     let ping_out = hal
         .command_output(
@@ -25,16 +25,16 @@ pub fn run(_args: &[String]) -> Result<()> {
         return Err(anyhow!("No internet connection detected."));
     }
 
-    println!("Installing essential fonts for terminal and desktop...\n");
+    log::info!("Installing essential fonts for terminal and desktop...\n");
 
-    println!("[1/4] Installing Terminus fonts (clean monospace)...");
+    log::info!("[1/4] Installing Terminus fonts (clean monospace)...");
     let _ = hal.command_status(
         "dnf",
         &["install", "-y", "terminus-fonts", "terminus-fonts-console"],
         Duration::from_secs(60 * 60),
     );
 
-    println!("\n[2/4] Installing Noto Emoji fonts...");
+    log::info!("\n[2/4] Installing Noto Emoji fonts...");
     let _ = hal.command_status(
         "dnf",
         &[
@@ -46,7 +46,7 @@ pub fn run(_args: &[String]) -> Result<()> {
         Duration::from_secs(60 * 60),
     );
 
-    println!("\n[3/4] Installing additional monospace fonts...");
+    log::info!("\n[3/4] Installing additional monospace fonts...");
     let _ = hal.command_status(
         "dnf",
         &[
@@ -59,7 +59,7 @@ pub fn run(_args: &[String]) -> Result<()> {
         Duration::from_secs(60 * 60),
     );
 
-    println!("\n[4/4] Installing JetBrainsMono Nerd Font (for Starship prompt)...");
+    log::info!("\n[4/4] Installing JetBrainsMono Nerd Font (for Starship prompt)...");
     let home = env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     let font_dir = PathBuf::from(home).join(".local/share/fonts");
     fs::create_dir_all(&font_dir)?;
@@ -87,35 +87,35 @@ pub fn run(_args: &[String]) -> Result<()> {
                 Duration::from_secs(2 * 60),
             );
             let _ = fs::remove_file(&zip_path);
-            println!(
+            log::info!(
                 "  JetBrainsMono Nerd Font installed to {}",
                 font_dir.display()
             );
         } else {
-            println!("  WARNING: Could not download Nerd Font. Skipping.");
+            log::warn!("Could not download Nerd Font. Skipping.");
         }
     } else {
-        println!("  WARNING: Could not download Nerd Font. Skipping.");
+        log::warn!("Could not download Nerd Font. Skipping.");
     }
 
-    println!("\nRefreshing font cache...");
+    log::info!("\nRefreshing font cache...");
     let _ = hal.command_status("fc-cache", &["-fv"], Duration::from_secs(5 * 60));
 
-    println!("\n========================================");
-    println!("  Font Installation Complete!");
-    println!("========================================\n");
-    println!("Installed fonts:");
-    println!("  - Terminus (terminal monospace)");
-    println!("  - Noto Emoji (emoji support)");
-    println!("  - DejaVu Sans Mono");
-    println!("  - Liberation Mono");
-    println!("  - Fira Code");
-    println!("  - JetBrainsMono Nerd Font (Starship icons)");
-    println!("\nTo use in terminal:");
-    println!("  1. Open Konsole Preferences");
-    println!("  2. Edit your Profile -> Appearance");
-    println!("  3. Select 'JetBrainsMono Nerd Font' or 'Terminus'");
-    println!("\nNerd Font is required for Starship prompt icons!");
+    log::info!("\n========================================");
+    log::info!("  Font Installation Complete!");
+    log::info!("========================================\n");
+    log::info!("Installed fonts:");
+    log::info!("  - Terminus (terminal monospace)");
+    log::info!("  - Noto Emoji (emoji support)");
+    log::info!("  - DejaVu Sans Mono");
+    log::info!("  - Liberation Mono");
+    log::info!("  - Fira Code");
+    log::info!("  - JetBrainsMono Nerd Font (Starship icons)");
+    log::info!("\nTo use in terminal:");
+    log::info!("  1. Open Konsole Preferences");
+    log::info!("  2. Edit your Profile -> Appearance");
+    log::info!("  3. Select 'JetBrainsMono Nerd Font' or 'Terminus'");
+    log::info!("\nNerd Font is required for Starship prompt icons!");
 
     Ok(())
 }

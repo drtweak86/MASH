@@ -68,8 +68,6 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     symlink("../mash-early-ssh.service", &link)?;
 
-    println!(
-        "✅ Installed mash-early-ssh.service (offline) — logs -> /data/mash-logs/early-ssh.log"
-    );
+    log::info!("✅ Installed mash-early-ssh.service (offline) — logs -> /data/mash-logs/early-ssh.log");
     Ok(())
 }
