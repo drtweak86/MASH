@@ -151,10 +151,11 @@ impl App {
                         None,
                         None,
                         32 * 1024 * 1024 * 1024,
-                        data_sources::TransportType::Usb,
+                        mash_hal::sysfs::block::TransportType::Usb,
                     ),
                     stable_id: "mock:sandisk-ultra-usb".to_string(),
                     path: "/dev/sda".to_string(),
+                    label: "SanDisk Ultra (USB) 32.0 GiB [REMOVABLE] [BOOT: NO]".to_string(),
                     removable: true,
                     boot_confidence: data_sources::BootConfidence::NotBoot,
                     is_source_disk: false,
@@ -166,10 +167,11 @@ impl App {
                         None,
                         None,
                         512 * 1024 * 1024 * 1024,
-                        data_sources::TransportType::Nvme,
+                        mash_hal::sysfs::block::TransportType::Nvme,
                     ),
                     stable_id: "mock:samsung-980-nvme".to_string(),
                     path: "/dev/nvme0n1".to_string(),
+                    label: "Samsung 980 (NVMe) 512.0 GiB [INTERNAL] [BOOT MEDIA]".to_string(),
                     removable: false,
                     boot_confidence: data_sources::BootConfidence::Confident,
                     is_source_disk: true,
@@ -182,6 +184,7 @@ impl App {
                     identity: disk.identity,
                     stable_id: disk.stable_id,
                     path: disk.path,
+                    label: disk.label,
                     removable: disk.removable,
                     boot_confidence: disk.boot_confidence,
                     is_source_disk: disk.is_source_disk,
@@ -329,12 +332,8 @@ impl App {
                     enabled: true,
                 },
                 OptionToggle {
-                    label: "Download Fedora image".to_string(),
-                    enabled: false,
-                },
-                OptionToggle {
-                    label: "Enable early SSH".to_string(),
-                    enabled: false,
+                    label: "Early SSH (enabled by default; toggle to opt-out)".to_string(),
+                    enabled: true,
                 },
             ],
             options_index: 0,
@@ -454,7 +453,7 @@ impl App {
                 InputResult::Continue
             }
             KeyCode::Enter | KeyCode::Tab => {
-                self.current_step_type = InstallStepType::DiskSelection;
+                self.current_step_type = InstallStepType::ImageSelection;
                 self.error_message = None;
                 InputResult::Continue
             }
@@ -1105,23 +1104,22 @@ impl App {
 
     fn next_step_for(&self, from: InstallStepType) -> Option<InstallStepType> {
         use InstallStepType as S;
-        let distro = self.selected_distro();
+        let manual_layout = self.layout_selected >= self.partition_layouts.len();
         match from {
-            S::Welcome => Some(S::DiskSelection),
-            S::DiskSelection => Some(S::DiskConfirmation),
-            S::DiskConfirmation => Some(S::ImageSelection),
-            S::BackupConfirmation => Some(S::ImageSelection),
+            // Required pipeline:
+            // Welcome → OS → Flavor → Image Source → Disk → Partition → EFI → Locale/Keymap → Options → Review → Confirm → Execute Gate → Install
+            S::Welcome => Some(S::ImageSelection),
             S::ImageSelection => Some(S::VariantSelection),
             S::VariantSelection => Some(S::DownloadSourceSelection),
-            S::DownloadSourceSelection => {
-                if matches!(distro, super::super::flash_config::OsDistro::Fedora) {
-                    Some(S::PartitionScheme)
-                } else {
-                    Some(S::LocaleSelection)
-                }
-            }
+            S::DownloadSourceSelection => Some(S::DiskSelection),
+            S::DiskSelection => Some(S::DiskConfirmation),
+            S::DiskConfirmation => Some(S::BackupConfirmation),
+            S::BackupConfirmation => Some(S::PartitionScheme),
             S::PartitionScheme => Some(S::PartitionLayout),
-            S::PartitionLayout => Some(S::PartitionCustomize),
+            S::PartitionLayout => match manual_layout {
+                true => Some(S::PartitionCustomize),
+                false => Some(S::EfiImage),
+            },
             S::PartitionCustomize => Some(S::EfiImage),
             S::EfiImage => Some(S::LocaleSelection),
             S::LocaleSelection => Some(S::Options),
@@ -1135,25 +1133,22 @@ impl App {
 
     fn prev_step_for(&self, from: InstallStepType) -> Option<InstallStepType> {
         use InstallStepType as S;
-        let distro = self.selected_distro();
+        let manual_layout = self.layout_selected >= self.partition_layouts.len();
         match from {
-            S::DiskSelection => Some(S::Welcome),
-            S::DiskConfirmation => Some(S::DiskSelection),
-            S::BackupConfirmation => Some(S::DiskConfirmation),
-            S::ImageSelection => Some(S::DiskConfirmation),
+            S::ImageSelection => Some(S::Welcome),
             S::VariantSelection => Some(S::ImageSelection),
             S::DownloadSourceSelection => Some(S::VariantSelection),
-            S::PartitionScheme => Some(S::DownloadSourceSelection),
+            S::DiskSelection => Some(S::DownloadSourceSelection),
+            S::DiskConfirmation => Some(S::DiskSelection),
+            S::BackupConfirmation => Some(S::DiskConfirmation),
+            S::PartitionScheme => Some(S::BackupConfirmation),
             S::PartitionLayout => Some(S::PartitionScheme),
             S::PartitionCustomize => Some(S::PartitionLayout),
-            S::EfiImage => Some(S::PartitionCustomize),
-            S::LocaleSelection => {
-                if matches!(distro, super::super::flash_config::OsDistro::Fedora) {
-                    Some(S::EfiImage)
-                } else {
-                    Some(S::DownloadSourceSelection)
-                }
-            }
+            S::EfiImage => match manual_layout {
+                true => Some(S::PartitionCustomize),
+                false => Some(S::PartitionLayout),
+            },
+            S::LocaleSelection => Some(S::EfiImage),
             S::Options => Some(S::LocaleSelection),
             S::FirstBootUser => Some(S::Options),
             S::PlanReview => Some(S::Options),
@@ -1249,6 +1244,7 @@ impl App {
                 identity: disk.identity,
                 stable_id: disk.stable_id,
                 path: disk.path,
+                label: disk.label,
                 removable: disk.removable,
                 boot_confidence: disk.boot_confidence,
                 is_source_disk: disk.is_source_disk,
@@ -1336,7 +1332,7 @@ impl App {
     }
 
     fn handle_partition_layout_input(&mut self, key: KeyEvent) -> InputResult {
-        // Include a final option for "Customize manually" without mixing it into the layout
+        // Include a final option for "Manual layout" without mixing it into the layout
         // strings (which are parsed for previews).
         let len = self.partition_layouts.len() + 1;
         match key.code {
@@ -1659,9 +1655,9 @@ impl App {
             early_ssh: self
                 .options
                 .iter()
-                .find(|option| option.label == "Enable early SSH")
+                .find(|option| option.label == "Early SSH (enabled by default; toggle to opt-out)")
                 .map(|option| option.enabled)
-                .unwrap_or(false),
+                .unwrap_or(true),
             progress_tx: self.flash_progress_sender.clone(), // This is the critical change!
             efi_size: self.efi_size.clone(),
             boot_size: self.boot_size.clone(),
@@ -1838,7 +1834,7 @@ mod tests {
         vendor: &'a str,
         model: &'a str,
         size_bytes: u64,
-        transport: data_sources::TransportType,
+        transport: mash_hal::sysfs::block::TransportType,
         removable: bool,
         boot_confidence: data_sources::BootConfidence,
         is_source_disk: bool,
@@ -1854,6 +1850,7 @@ mod tests {
     }
 
     fn disk_option(args: DiskOptionArgs<'_>) -> DiskOption {
+        let name = args.path.trim_start_matches("/dev/").to_string();
         let identity = data_sources::DiskIdentity::new(
             Some(args.vendor.to_string()),
             Some(args.model.to_string()),
@@ -1863,10 +1860,29 @@ mod tests {
             args.transport,
         );
         let stable_id = identity.stable_id(args.path);
+        let boot_tag = match args.boot_confidence {
+            data_sources::BootConfidence::Confident => mash_hal::sysfs::block::BootTag::BootMedia,
+            data_sources::BootConfidence::Unverified => mash_hal::sysfs::block::BootTag::BootMaybe,
+            data_sources::BootConfidence::NotBoot => mash_hal::sysfs::block::BootTag::NotBoot,
+            data_sources::BootConfidence::Unknown => mash_hal::sysfs::block::BootTag::Unknown,
+        };
+        let dev = mash_hal::sysfs::block::BlockDeviceInfo {
+            name,
+            dev_path: PathBuf::from(args.path),
+            sysfs_path: PathBuf::from("/sys/block/test"),
+            size_bytes: args.size_bytes,
+            vendor: Some(args.vendor.to_string()),
+            model: Some(args.model.to_string()),
+            serial: None,
+            wwn: None,
+            removable: args.removable,
+        };
+        let label = mash_hal::sysfs::block::canonical_disk_label(&dev, boot_tag);
         DiskOption {
             identity,
             stable_id,
             path: args.path.to_string(),
+            label,
             removable: args.removable,
             boot_confidence: args.boot_confidence,
             is_source_disk: args.is_source_disk,
@@ -1949,7 +1965,7 @@ mod tests {
             vendor: "Generic",
             model: "Data Drive",
             size_bytes: 512 * 1024 * 1024 * 1024,
-            transport: data_sources::TransportType::Sata,
+            transport: mash_hal::sysfs::block::TransportType::Sata,
             removable: false,
             boot_confidence: data_sources::BootConfidence::NotBoot,
             is_source_disk: false,
@@ -1962,7 +1978,7 @@ mod tests {
         }
         assert_eq!(app.wipe_confirmation, "DESTROY");
         app.handle_input(key(KeyCode::Enter));
-        assert_eq!(app.current_step_type, InstallStepType::ImageSelection);
+        assert_eq!(app.current_step_type, InstallStepType::BackupConfirmation);
     }
 
     #[test]
@@ -1975,7 +1991,7 @@ mod tests {
             vendor: "Generic",
             model: "Boot Drive",
             size_bytes: 256 * 1024 * 1024 * 1024,
-            transport: data_sources::TransportType::Sata,
+            transport: mash_hal::sysfs::block::TransportType::Sata,
             removable: false,
             boot_confidence: data_sources::BootConfidence::Confident,
             is_source_disk: false,
@@ -1997,7 +2013,7 @@ mod tests {
         }
         assert_eq!(app.wipe_confirmation, "DESTROY BOOT DISK");
         app.handle_input(key(KeyCode::Enter));
-        assert_eq!(app.current_step_type, InstallStepType::ImageSelection);
+        assert_eq!(app.current_step_type, InstallStepType::BackupConfirmation);
         assert!(app.error_message.is_none());
     }
 
@@ -2217,7 +2233,7 @@ mod tests {
                 vendor: "Samsung",
                 model: "980",
                 size_bytes: 512 * 1024 * 1024 * 1024,
-                transport: data_sources::TransportType::Nvme,
+                transport: mash_hal::sysfs::block::TransportType::Nvme,
                 removable: false,
                 boot_confidence: data_sources::BootConfidence::Confident,
                 is_source_disk: false,
@@ -2227,7 +2243,7 @@ mod tests {
                 vendor: "Seagate",
                 model: "BarraCuda",
                 size_bytes: 2 * 1024 * 1024 * 1024 * 1024,
-                transport: data_sources::TransportType::Sata,
+                transport: mash_hal::sysfs::block::TransportType::Sata,
                 removable: false,
                 boot_confidence: data_sources::BootConfidence::NotBoot,
                 is_source_disk: false,
@@ -2237,7 +2253,7 @@ mod tests {
                 vendor: "SanDisk",
                 model: "Ultra",
                 size_bytes: 32 * 1024 * 1024 * 1024,
-                transport: data_sources::TransportType::Usb,
+                transport: mash_hal::sysfs::block::TransportType::Usb,
                 removable: true,
                 boot_confidence: data_sources::BootConfidence::NotBoot,
                 is_source_disk: false,
@@ -2273,7 +2289,7 @@ mod tests {
                 vendor: "Generic",
                 model: "Boot Drive",
                 size_bytes: 256 * 1024 * 1024 * 1024,
-                transport: data_sources::TransportType::Sata,
+                transport: mash_hal::sysfs::block::TransportType::Sata,
                 removable: false,
                 boot_confidence: data_sources::BootConfidence::Confident,
                 is_source_disk: false,
@@ -2283,7 +2299,7 @@ mod tests {
                 vendor: "Generic",
                 model: "Data Drive",
                 size_bytes: 512 * 1024 * 1024 * 1024,
-                transport: data_sources::TransportType::Sata,
+                transport: mash_hal::sysfs::block::TransportType::Sata,
                 removable: false,
                 boot_confidence: data_sources::BootConfidence::NotBoot,
                 is_source_disk: false,
@@ -2320,7 +2336,7 @@ mod tests {
             vendor: "Generic",
             model: "Boot Drive",
             size_bytes: 256 * 1024 * 1024 * 1024,
-            transport: data_sources::TransportType::Sata,
+            transport: mash_hal::sysfs::block::TransportType::Sata,
             removable: false,
             boot_confidence: data_sources::BootConfidence::Confident,
             is_source_disk: true,
@@ -2348,7 +2364,7 @@ mod tests {
             vendor: "Generic",
             model: "Boot Drive",
             size_bytes: 256 * 1024 * 1024 * 1024,
-            transport: data_sources::TransportType::Sata,
+            transport: mash_hal::sysfs::block::TransportType::Sata,
             removable: false,
             boot_confidence: data_sources::BootConfidence::Confident,
             is_source_disk: true,
@@ -2371,7 +2387,7 @@ mod tests {
             vendor: "Generic",
             model: "Data Drive",
             size_bytes: 512 * 1024 * 1024 * 1024,
-            transport: data_sources::TransportType::Sata,
+            transport: mash_hal::sysfs::block::TransportType::Sata,
             removable: false,
             boot_confidence: data_sources::BootConfidence::NotBoot,
             is_source_disk: false,
@@ -2399,7 +2415,7 @@ mod tests {
                 vendor: "Generic",
                 model: "Disk 1",
                 size_bytes: 256 * 1024 * 1024 * 1024,
-                transport: data_sources::TransportType::Sata,
+                transport: mash_hal::sysfs::block::TransportType::Sata,
                 removable: false,
                 boot_confidence: data_sources::BootConfidence::Confident,
                 is_source_disk: false,
@@ -2409,7 +2425,7 @@ mod tests {
                 vendor: "Generic",
                 model: "Safe Disk 1",
                 size_bytes: 512 * 1024 * 1024 * 1024,
-                transport: data_sources::TransportType::Sata,
+                transport: mash_hal::sysfs::block::TransportType::Sata,
                 removable: false,
                 boot_confidence: data_sources::BootConfidence::NotBoot,
                 is_source_disk: false,
@@ -2419,7 +2435,7 @@ mod tests {
                 vendor: "Generic",
                 model: "Disk 2",
                 size_bytes: 128 * 1024 * 1024 * 1024,
-                transport: data_sources::TransportType::Sata,
+                transport: mash_hal::sysfs::block::TransportType::Sata,
                 removable: false,
                 boot_confidence: data_sources::BootConfidence::Confident,
                 is_source_disk: false,
@@ -2429,7 +2445,7 @@ mod tests {
                 vendor: "Generic",
                 model: "Safe Disk 2",
                 size_bytes: 1024 * 1024 * 1024 * 1024,
-                transport: data_sources::TransportType::Sata,
+                transport: mash_hal::sysfs::block::TransportType::Sata,
                 removable: false,
                 boot_confidence: data_sources::BootConfidence::NotBoot,
                 is_source_disk: false,

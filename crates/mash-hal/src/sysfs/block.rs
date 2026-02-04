@@ -4,6 +4,50 @@ use anyhow::{anyhow, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Best-effort transport type hint for a block device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportType {
+    Usb,
+    Nvme,
+    Sata,
+    Mmc,
+    Scsi,
+    Unknown,
+}
+
+impl TransportType {
+    pub fn hint(&self) -> &'static str {
+        match self {
+            TransportType::Usb => "USB",
+            TransportType::Nvme => "NVMe",
+            TransportType::Sata => "SATA",
+            TransportType::Mmc => "MMC",
+            TransportType::Scsi => "SCSI",
+            TransportType::Unknown => "Unknown",
+        }
+    }
+}
+
+/// How the UI should tag the boot relationship for a disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootTag {
+    BootMedia,
+    BootMaybe,
+    NotBoot,
+    Unknown,
+}
+
+impl BootTag {
+    fn label(&self) -> &'static str {
+        match self {
+            BootTag::BootMedia => "BOOT MEDIA",
+            BootTag::BootMaybe => "BOOT?",
+            BootTag::NotBoot => "BOOT: NO",
+            BootTag::Unknown => "BOOT: UNKNOWN",
+        }
+    }
+}
+
 pub fn device_basename(path: &Path) -> Result<String> {
     let name = path
         .file_name()
@@ -91,6 +135,73 @@ pub fn transport_path_hint(sys_block_dev_dir: &Path) -> Option<String> {
         .map(|p| p.to_string_lossy().to_lowercase())
 }
 
+/// Best-effort transport detection from device name and sysfs path.
+pub fn detect_transport_type(dev_name: &str, sysfs_base: &Path) -> TransportType {
+    // Device name patterns first.
+    if dev_name.starts_with("nvme") {
+        return TransportType::Nvme;
+    }
+    if dev_name.starts_with("mmcblk") {
+        return TransportType::Mmc;
+    }
+
+    // For sd* devices, consult sysfs for USB/ATA hints.
+    if dev_name.starts_with("sd") {
+        if let Some(path_str) = transport_path_hint(sysfs_base) {
+            if path_str.contains("usb") {
+                return TransportType::Usb;
+            }
+            if path_str.contains("ata") {
+                return TransportType::Sata;
+            }
+        }
+        // sd* is often SCSI (including SATA behind a SCSI layer).
+        return TransportType::Scsi;
+    }
+
+    TransportType::Unknown
+}
+
+/// Canonical, non-device-first disk label for UI display.
+///
+/// Requirements:
+/// - Never "device-first" (do not start with `/dev/sdX`).
+/// - Always include: vendor+model (or explicit missing-sysfs warning), size, transport,
+///   removable/internal, and a boot tag.
+pub fn canonical_disk_label(dev: &BlockDeviceInfo, boot: BootTag) -> String {
+    let size = human_size(dev.size_bytes);
+    let transport = detect_transport_type(&dev.name, &dev.sysfs_path).hint();
+    let location = if dev.removable {
+        "REMOVABLE"
+    } else {
+        "INTERNAL"
+    };
+
+    let vendor = dev
+        .vendor
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let model = dev
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let identity = match (vendor, model) {
+        (Some(v), Some(m)) => format!("{} {}", v, m),
+        _ => format!("Unknown disk ({}) - missing sysfs data", size),
+    };
+
+    format!(
+        "{} ({}) {} [{}] [{}]",
+        identity,
+        transport,
+        size,
+        location,
+        boot.label()
+    )
+}
+
 fn read_trimmed(path: PathBuf) -> Option<String> {
     fs::read_to_string(path)
         .ok()
@@ -113,6 +224,23 @@ fn should_skip_block_device(name: &str) -> bool {
         || name.starts_with("dm-")
         || name.starts_with("md")
         || name.starts_with("sr")
+}
+
+fn human_size(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let value = bytes as f64;
+
+    if value >= GIB {
+        format!("{:.1} GiB", value / GIB)
+    } else if value >= MIB {
+        format!("{:.1} MiB", value / MIB)
+    } else if value >= KIB {
+        format!("{:.1} KiB", value / KIB)
+    } else {
+        format!("{} B", bytes)
+    }
 }
 
 #[cfg(test)]
@@ -147,5 +275,47 @@ mod tests {
         assert_eq!(disks.len(), 1);
         assert_eq!(disks[0].name, "sda");
         assert_eq!(disks[0].size_bytes, 4096);
+    }
+
+    #[test]
+    fn canonical_label_includes_required_parts_and_is_not_device_first() {
+        let dev = BlockDeviceInfo {
+            name: "nvme0n1".to_string(),
+            dev_path: PathBuf::from("/dev/nvme0n1"),
+            sysfs_path: PathBuf::from("/sys/block/nvme0n1"),
+            size_bytes: 1024 * 1024 * 1024,
+            vendor: Some("ACME".to_string()),
+            model: Some("FastDisk".to_string()),
+            serial: None,
+            wwn: None,
+            removable: false,
+        };
+        let label = canonical_disk_label(&dev, BootTag::NotBoot);
+        assert!(!label.starts_with("/dev/"));
+        assert!(label.contains("ACME FastDisk"));
+        assert!(label.contains("GiB"));
+        assert!(label.contains("NVMe"));
+        assert!(label.contains("INTERNAL"));
+        assert!(label.contains("BOOT: NO"));
+    }
+
+    #[test]
+    fn canonical_label_warns_when_sysfs_identity_missing() {
+        let dev = BlockDeviceInfo {
+            name: "sda".to_string(),
+            dev_path: PathBuf::from("/dev/sda"),
+            sysfs_path: PathBuf::from("/sys/block/sda"),
+            size_bytes: 1024,
+            vendor: None,
+            model: None,
+            serial: None,
+            wwn: None,
+            removable: true,
+        };
+        let label = canonical_disk_label(&dev, BootTag::Unknown);
+        assert!(label.contains("Unknown disk"));
+        assert!(label.contains("missing sysfs data"));
+        assert!(label.contains("REMOVABLE"));
+        assert!(label.contains("BOOT: UNKNOWN"));
     }
 }

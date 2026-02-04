@@ -3,8 +3,9 @@
 use std::collections::HashSet;
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
+use mash_hal::sysfs::block::{BootTag, TransportType};
 use mash_hal::HostInfoOps;
 
 use super::flash_config::{ImageEditionOption, ImageVersionOption};
@@ -14,30 +15,6 @@ pub struct DataFlags {
     pub disks: bool,
     pub images: bool,
     pub locales: bool,
-}
-
-/// Transport type hint for disk
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransportType {
-    Usb,
-    Nvme,
-    Sata,
-    Mmc,
-    Scsi,
-    Unknown,
-}
-
-impl TransportType {
-    pub fn hint(&self) -> &'static str {
-        match self {
-            TransportType::Usb => "USB",
-            TransportType::Nvme => "NVMe",
-            TransportType::Sata => "SATA",
-            TransportType::Mmc => "MMC",
-            TransportType::Scsi => "SCSI",
-            TransportType::Unknown => "",
-        }
-    }
 }
 
 /// Boot detection confidence level
@@ -116,24 +93,6 @@ impl DiskIdentity {
         }
     }
 
-    /// Display string for UI rendering - the ONLY way to render disk identity
-    pub fn display_string(&self) -> String {
-        let size = human_size(self.size_bytes);
-        let transport_hint = self.transport.hint();
-        let label = match (&self.vendor, &self.model) {
-            (Some(v), Some(m)) => format!("{} {}", v, m),
-            (Some(v), None) => v.clone(),
-            (None, Some(m)) => m.clone(),
-            (None, None) => "Disk".to_string(),
-        };
-
-        if transport_hint.is_empty() {
-            format!("{} - {}", label, size)
-        } else {
-            format!("{} ({}) - {}", label, transport_hint, size)
-        }
-    }
-
     /// Stable key for preserving selection across rescans.
     pub fn stable_id(&self, dev_path: &str) -> String {
         if let Some(ref wwn) = self.wwn {
@@ -155,6 +114,8 @@ pub struct DiskInfo {
     pub identity: DiskIdentity,
     pub stable_id: String,
     pub path: String, // /dev/sda
+    /// Canonical, non-device-first label generated from sysfs (HAL).
+    pub label: String,
     pub removable: bool,
     pub boot_confidence: BootConfidence,
     pub is_source_disk: bool,
@@ -188,8 +149,8 @@ pub fn scan_disks() -> Vec<DiskInfo> {
         Err(_) => return disks,
     };
     for dev in sysfs_disks {
-        // Detect transport type
-        let transport = detect_transport_type(&dev.name, &dev.sysfs_path);
+        // Detect transport type via sysfs/HAL.
+        let transport = mash_hal::sysfs::block::detect_transport_type(&dev.name, &dev.sysfs_path);
 
         // Determine boot confidence
         let disk_path = dev.dev_path.to_string_lossy().to_string();
@@ -200,6 +161,14 @@ pub fn scan_disks() -> Vec<DiskInfo> {
         } else {
             BootConfidence::NotBoot
         };
+
+        let boot_tag = match boot_confidence {
+            BootConfidence::Confident => BootTag::BootMedia,
+            BootConfidence::Unverified => BootTag::BootMaybe,
+            BootConfidence::NotBoot => BootTag::NotBoot,
+            BootConfidence::Unknown => BootTag::Unknown,
+        };
+        let label = mash_hal::sysfs::block::canonical_disk_label(&dev, boot_tag);
 
         let identity = DiskIdentity::new(
             dev.vendor,
@@ -215,6 +184,7 @@ pub fn scan_disks() -> Vec<DiskInfo> {
             identity,
             stable_id,
             path: disk_path.clone(),
+            label,
             removable: dev.removable,
             boot_confidence,
             is_source_disk: source_disk.as_deref() == Some(disk_path.as_str()),
@@ -222,34 +192,6 @@ pub fn scan_disks() -> Vec<DiskInfo> {
     }
 
     disks
-}
-
-/// Detect transport type from device name and sysfs path
-fn detect_transport_type(dev_name: &str, sysfs_base: &Path) -> TransportType {
-    // Check device name patterns first
-    if dev_name.starts_with("nvme") {
-        return TransportType::Nvme;
-    }
-    if dev_name.starts_with("mmcblk") {
-        return TransportType::Mmc;
-    }
-
-    // For sd* devices, check sysfs path for transport hints
-    if dev_name.starts_with("sd") {
-        // Try to read the device path to check for USB
-        if let Some(path_str) = mash_hal::sysfs::block::transport_path_hint(sysfs_base) {
-            if path_str.contains("usb") {
-                return TransportType::Usb;
-            }
-            if path_str.contains("ata") {
-                return TransportType::Sata;
-            }
-        }
-        // Default sd* to SCSI/SATA
-        return TransportType::Scsi;
-    }
-
-    TransportType::Unknown
 }
 
 fn resolve_uuid_to_device_path(uuid: &str) -> Option<String> {
@@ -385,22 +327,6 @@ fn base_block_device(device: &str) -> Option<String> {
         }
     };
     Some(format!("/dev/{}", base))
-}
-
-pub fn human_size(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = KB * 1024.0;
-    const GB: f64 = MB * 1024.0;
-    let value = bytes as f64;
-    if value >= GB {
-        format!("{:.1} GiB", value / GB)
-    } else if value >= MB {
-        format!("{:.1} MiB", value / MB)
-    } else if value >= KB {
-        format!("{:.1} KiB", value / KB)
-    } else {
-        format!("{} B", bytes)
-    }
 }
 
 pub fn collect_local_images(search_paths: &[PathBuf]) -> Vec<ImageMeta> {
@@ -669,29 +595,5 @@ mod tests {
         assert_eq!(base_block_device("/sys/block/sda"), None);
         assert_eq!(base_block_device("sda1"), None);
         assert_eq!(base_block_device(""), None);
-    }
-
-    #[test]
-    fn human_size_formats_bytes() {
-        assert_eq!(human_size(512), "512 B");
-        assert_eq!(human_size(1023), "1023 B");
-    }
-
-    #[test]
-    fn human_size_formats_kb() {
-        assert_eq!(human_size(1024), "1.0 KiB");
-        assert_eq!(human_size(2048), "2.0 KiB");
-    }
-
-    #[test]
-    fn human_size_formats_mb() {
-        assert_eq!(human_size(1024 * 1024), "1.0 MiB");
-        assert_eq!(human_size(512 * 1024 * 1024), "512.0 MiB");
-    }
-
-    #[test]
-    fn human_size_formats_gb() {
-        assert_eq!(human_size(1024 * 1024 * 1024), "1.0 GiB");
-        assert_eq!(human_size(32 * 1024 * 1024 * 1024), "32.0 GiB");
     }
 }

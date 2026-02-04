@@ -38,7 +38,7 @@ pub(super) fn build_info_panel(app: &App, progress_state: &ProgressState) -> Str
 
     // Disk selection
     if let Some(disk) = app.disks.get(app.disk_selected) {
-        lines.push(format!("Disk: {}", disk.identity.display_string()));
+        lines.push(format!("Disk: {} ({})", disk.label, disk.path));
     }
 
     // Partition scheme
@@ -158,7 +158,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             let disk = app.disks.get(app.disk_selected);
             if let Some(disk) = disk {
                 let is_boot_disk = disk.boot_confidence.is_boot() || disk.is_source_disk;
-                let disk_info = disk.identity.display_string();
+                let disk_info = disk.label.clone();
 
                 if is_boot_disk {
                     items.push("⚠️⚠️⚠️ CRITICAL WARNING: BOOT DISK SELECTED ⚠️⚠️⚠️".to_string());
@@ -266,7 +266,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 .collect::<Vec<_>>();
 
             let mut options = layout_options;
-            options.push("Customize manually".to_string());
+            options.push("Manual layout".to_string());
             push_options(
                 &mut items,
                 &options,
@@ -563,11 +563,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 PathBuf::from(app.uefi_source_path.clone())
             };
             if let Some(disk) = app.disks.get(app.disk_selected) {
-                items.push(format!(
-                    "Disk: {} - {}",
-                    disk.path,
-                    disk.identity.display_string()
-                ));
+                items.push(format!("Disk: {} ({})", disk.label, disk.path));
             }
             if let Some(distro) = app.os_distros.get(app.os_distro_selected) {
                 items.push(format!("Distro: {}", distro.display()));
@@ -587,7 +583,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                     items.push(format!("Layout: {}", layout));
                 }
             } else {
-                items.push("Layout: Customize manually".to_string());
+                items.push("Layout: Manual layout".to_string());
             }
             items.push(format!(
                 "Partitions: EFI {} | BOOT {} | ROOT {} | DATA remainder",
@@ -602,15 +598,14 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             if let Some(locale) = app.locales.get(app.locale_selected) {
                 items.push(format!("Locale: {}", locale));
             }
-            let download_fedora = app
-                .options
-                .iter()
-                .find(|option| option.label == "Download Fedora image")
-                .map(|option| option.enabled)
+            let download_image = app
+                .image_sources
+                .get(app.image_source_selected)
+                .map(|source| source.value == flash_config::ImageSource::DownloadCatalogue)
                 .unwrap_or(false);
             items.push(format!(
-                "Downloads: Fedora={} | EFI={}",
-                if download_fedora { "Yes" } else { "No" },
+                "Downloads: Image={} | EFI={}",
+                if download_image { "Yes" } else { "No" },
                 if download_efi { "Yes" } else { "No" }
             ));
             if app.dry_run {
@@ -665,11 +660,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 items.push(format!("Flavour: {}", variant.label));
             }
             if let Some(disk) = app.disks.get(app.disk_selected) {
-                items.push(format!(
-                    "Disk: {} - {}",
-                    disk.path,
-                    disk.identity.display_string()
-                ));
+                items.push(format!("Disk: {} ({})", disk.label, disk.path));
             }
             if let Some(scheme) = app.partition_schemes.get(app.scheme_selected) {
                 items.push(format!("Scheme: {}", scheme));
@@ -854,41 +845,66 @@ fn build_plan_lines(app: &App) -> Vec<String> {
     }
 
     if let Some(disk) = app.disks.get(app.disk_selected) {
-        let disk_info = disk.identity.display_string();
-        lines.push(format!("Disk: {} - {}", disk.path, disk_info));
+        lines.push(format!("Disk: {} ({})", disk.label, disk.path));
     } else {
         lines.push("Disk: <not selected>".to_string());
     }
 
-    if matches!(distro, Some(flash_config::OsDistro::Fedora)) {
-        if let Some(uefi_source) = app.uefi_sources.get(app.uefi_source_selected) {
-            match uefi_source {
-                flash_config::EfiSource::LocalEfiImage => {
-                    lines.push(format!("EFI: Local ({})", app.uefi_source_path));
-                }
-                flash_config::EfiSource::DownloadEfiImage => {
-                    lines.push("EFI: Download image".to_string());
-                }
+    if let Some(source) = app.image_sources.get(app.image_source_selected) {
+        match source.value {
+            flash_config::ImageSource::DownloadCatalogue => {
+                lines.push("Image: Download OS image".to_string());
             }
-        } else {
-            lines.push("EFI: <not selected>".to_string());
+            flash_config::ImageSource::LocalFile => {
+                lines.push(format!("Image: Local ({})", app.image_source_path));
+            }
         }
-        lines.push("Action: install Fedora with custom partition layout".to_string());
-        lines.push("Reboots: 1".to_string());
     } else {
-        lines.push("Action: flash upstream full-disk image (no repartition)".to_string());
-        if matches!(distro, Some(flash_config::OsDistro::Manjaro)) {
-            lines.push("Note: post-boot partition expansion required".to_string());
-        }
-        lines.push("Reboots: 0".to_string());
+        lines.push("Image: <not selected>".to_string());
     }
+
+    if let Some(scheme) = app.partition_schemes.get(app.scheme_selected) {
+        lines.push(format!("Scheme: {}", scheme));
+    } else {
+        lines.push("Scheme: <not selected>".to_string());
+    }
+
+    if app.layout_selected < app.partition_layouts.len() {
+        if let Some(layout) = app.partition_layouts.get(app.layout_selected) {
+            lines.push(format!("Layout: {}", layout));
+        }
+    } else {
+        lines.push("Layout: Manual".to_string());
+    }
+    lines.push(format!(
+        "Partitions: EFI {} | BOOT {} | ROOT {} | DATA remainder",
+        app.efi_size, app.boot_size, app.root_end
+    ));
+
+    if let Some(uefi_source) = app.uefi_sources.get(app.uefi_source_selected) {
+        match uefi_source {
+            flash_config::EfiSource::LocalEfiImage => {
+                lines.push(format!("EFI: Local ({})", app.uefi_source_path));
+            }
+            flash_config::EfiSource::DownloadEfiImage => {
+                lines.push("EFI: Download image".to_string());
+            }
+        }
+    } else {
+        lines.push("EFI: <not selected>".to_string());
+    }
+
+    if matches!(distro, Some(flash_config::OsDistro::Manjaro)) {
+        lines.push("Note: post-boot partition expansion required".to_string());
+    }
+
+    lines.push("Reboots: 1".to_string());
 
     lines
 }
 
 pub(super) fn expected_actions(step: InstallStepType) -> String {
-    let base =
-        "↑/↓ or j/k: move  Space: select/toggle  Enter/Tab: continue  Esc: back/quit  ?: help";
+    let base = "↑/↓ or j/k: move  Space: select/toggle  Enter/Tab: continue  Esc: back  ?: help";
     match step {
         InstallStepType::DiskConfirmation => format!("{base}  |  Type: DESTROY"),
         InstallStepType::ExecuteConfirmationGate => {
@@ -939,39 +955,13 @@ pub(super) fn help_overlay_text(step: InstallStepType) -> String {
 }
 
 fn format_disk_entry(disk: &DiskOption) -> String {
-    use data_sources::BootConfidence;
-
-    // CRITICAL: Use DiskIdentity::display_string() exclusively - no UI-side reconstruction
-    let identity_str = disk.identity.display_string();
-
-    // Build tags
-    let mut tags = Vec::new();
-
+    // Canonical label comes from HAL/sysfs (do not reconstruct identity in UI).
+    let mut label = disk.label.clone();
     if disk.is_source_disk {
-        tags.push("⚠ SOURCE MEDIA");
+        label.push_str(" [SOURCE MEDIA]");
     }
-
-    // Boot confidence tags
-    match disk.boot_confidence {
-        BootConfidence::Confident => tags.push("⚠ BOOT MEDIA"),
-        BootConfidence::Unverified => tags.push("⚠ BOOT?"),
-        BootConfidence::NotBoot | BootConfidence::Unknown => {
-            // Show removable/internal for non-boot disks
-            if disk.removable {
-                tags.push("REMOVABLE");
-            } else {
-                tags.push("INTERNAL");
-            }
-        }
-    }
-
-    let tag_str = if tags.is_empty() {
-        String::new()
-    } else {
-        format!(" - {}", tags.join(", "))
-    };
-
-    format!("{} - {}{}", disk.path, identity_str, tag_str)
+    // Device path is useful for debugging, but should never be "device-first".
+    format!("{} ({})", label, disk.path)
 }
 
 #[cfg(test)]
