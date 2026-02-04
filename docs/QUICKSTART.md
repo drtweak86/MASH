@@ -4,6 +4,25 @@ Get Fedora running on your Raspberry Pi 4 in minutes.
 
 ---
 
+## ⬇️ Download MASH
+
+MASH is distributed as a single prebuilt binary for Linux aarch64 (for Raspberry Pi 4B).
+
+1.  **Download the latest binary:**
+    Go to the [GitHub Releases page](https://github.com/drtweak86/MASH/releases/latest) and download the file named `mash-linux-aarch64`.
+
+    *(For Raspberry Pi 4B users, this is the binary you need.)*
+
+2.  **Make it executable and run:**
+    Open a terminal, navigate to your download directory, and run:
+    ```bash
+    chmod +x mash-linux-aarch64
+    sudo ./mash-linux-aarch64
+    ```
+    *(Remember, MASH needs `sudo` for disk operations.)*
+
+---
+
 ## ⚠️ Before You Begin
 
 **This installer will ERASE your target disk completely.**
@@ -16,9 +35,9 @@ Get Fedora running on your Raspberry Pi 4 in minutes.
 
 ## 📋 Prerequisites
 
-### On Your Host Machine (Linux)
+### For Building from Source or If Binaries Require System Dependencies
 
-You need these packages installed:
+If you are building MASH from source, or if you encounter issues running the prebuilt binary (e.g., missing shared libraries), you may need these packages installed on your Linux host:
 
 ```bash
 # Debian/Ubuntu

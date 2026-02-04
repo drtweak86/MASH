@@ -6,6 +6,31 @@ MASH is an opinionated installer that automates Fedora KDE installation on Raspb
 
 ---
 
+## ⬇️ Download MASH
+
+MASH is distributed as a single prebuilt binary for Linux aarch64 (for Raspberry Pi 4B).
+
+### 🚀 User Path: Get Started in Seconds
+
+1.  **Download the latest binary:**
+    Go to the [GitHub Releases page](https://github.com/drtweak86/MASH/releases/latest) and download the file named `mash-linux-aarch64`.
+
+    *(For Raspberry Pi 4B users, this is the binary you need.)*
+
+2.  **Make it executable and run:**
+    Open a terminal, navigate to your download directory, and run:
+    ```bash
+    chmod +x mash-linux-aarch64
+    sudo ./mash-linux-aarch64
+    ```
+    *(Remember, MASH needs `sudo` for disk operations.)*
+
+### 💻 Developer Path: Build from Source
+
+If you prefer to build MASH yourself, or are developing for it, see the "Building from Source" section below. This requires the Rust toolchain.
+
+---
+
 ## ✨ What MASH Does
 
 - 📥 **Downloads OS Images** — Automatically fetches images for Fedora (KDE, Xfce, LXQt, Minimal, Server), Ubuntu (Server/Desktop), Raspberry Pi OS (Lite/Desktop), and Manjaro (ARM).
@@ -87,24 +112,9 @@ MASH uses strict SemVer (`X.Y.Z`) and tags releases as `vX.Y.Z`.
 
 ---
 
-## 🔧 Building from Source
+## 💻 Developer Path: Building from Source
 
-### Prerequisites
-
-- Rust toolchain (1.70+)
-- System packages: `parted`, `rsync`, `xz`, `mkfs.vfat`, `mkfs.ext4`, `mkfs.btrfs`
-
-### Build Commands
-
-```bash
-make build-cli      # Build release binary
-make dev-cli        # Build debug binary (faster)
-make test           # Run tests
-make lint           # Run clippy linter
-make format         # Format code
-```
-
-The binary is output to `mash-installer/target/release/mash`.
+Refer to `CONTRIBUTING.md` for detailed instructions on setting up your development environment and building MASH from source.
 
 ---
 
