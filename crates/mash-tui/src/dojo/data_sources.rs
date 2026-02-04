@@ -5,6 +5,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use mash_hal::HostInfoOps;
+
 use super::flash_config::{ImageEditionOption, ImageVersionOption};
 
 #[derive(Debug, Clone, Copy)]
@@ -177,7 +179,8 @@ pub fn data_flags() -> DataFlags {
 
 pub fn scan_disks() -> Vec<DiskInfo> {
     let mut disks = Vec::new();
-    let (boot_device, boot_detection_succeeded) = boot_device_path_with_confidence();
+    let hal = mash_hal::LinuxHal::new();
+    let (boot_device, boot_detection_succeeded) = boot_device_path_with_confidence(&hal);
     let source_disk = source_disk_path();
 
     let sysfs_disks = match mash_hal::sysfs::block::scan_block_devices() {
@@ -234,8 +237,7 @@ fn detect_transport_type(dev_name: &str, sysfs_base: &Path) -> TransportType {
     // For sd* devices, check sysfs path for transport hints
     if dev_name.starts_with("sd") {
         // Try to read the device path to check for USB
-        if let Ok(device_path) = fs::read_link(sysfs_base.join("device")) {
-            let path_str = device_path.to_string_lossy().to_lowercase();
+        if let Some(path_str) = mash_hal::sysfs::block::transport_path_hint(sysfs_base) {
             if path_str.contains("usb") {
                 return TransportType::Usb;
             }
@@ -262,8 +264,8 @@ fn resolve_uuid_to_device_path(uuid: &str) -> Option<String> {
     })
 }
 
-fn get_boot_device_from_cmdline() -> Option<String> {
-    let cmdline = fs::read_to_string("/proc/cmdline").ok()?;
+fn get_boot_device_from_cmdline(hal: &dyn HostInfoOps) -> Option<String> {
+    let cmdline = hal.proc_cmdline().ok()?;
     for part in cmdline.split_whitespace() {
         if part.starts_with("root=") {
             let root_val = part.trim_start_matches("root=");
@@ -279,14 +281,20 @@ fn get_boot_device_from_cmdline() -> Option<String> {
 }
 
 pub fn boot_device_path() -> Option<String> {
-    boot_device_path_with_confidence().0
+    let hal = mash_hal::LinuxHal::new();
+    boot_device_path_with_confidence(&hal).0
 }
 
 /// Attempts to determine the "source disk" backing the running system (rootfs or executable).
 ///
 /// This is used to protect the installer boot media from being selected as a target.
 pub fn source_disk_path() -> Option<String> {
-    let mi = fs::read_to_string("/proc/self/mountinfo").ok()?;
+    let hal = mash_hal::LinuxHal::new();
+    source_disk_path_with_hal(&hal)
+}
+
+fn source_disk_path_with_hal(hal: &dyn HostInfoOps) -> Option<String> {
+    let mi = hal.proc_mountinfo().ok()?;
     let exe = std::env::current_exe().ok();
 
     // Prefer rootfs source.
@@ -325,16 +333,16 @@ pub fn source_disk_path() -> Option<String> {
 
 /// Returns (boot_device_path, detection_succeeded)
 /// detection_succeeded is false if we couldn't confidently identify the boot device
-fn boot_device_path_with_confidence() -> (Option<String>, bool) {
+fn boot_device_path_with_confidence(hal: &dyn HostInfoOps) -> (Option<String>, bool) {
     // Prioritize /proc/cmdline
-    if let Some(cmdline_device) = get_boot_device_from_cmdline() {
+    if let Some(cmdline_device) = get_boot_device_from_cmdline(hal) {
         if let Some(device) = base_block_device(&cmdline_device) {
             return (Some(device), true);
         }
     }
 
     // Fallback to /proc/self/mounts
-    if let Ok(mounts) = fs::read_to_string("/proc/self/mounts") {
+    if let Ok(mounts) = hal.proc_mounts() {
         for line in mounts.lines() {
             let mut parts = line.split_whitespace();
             if let (Some(device), Some(mountpoint)) = (parts.next(), parts.next()) {

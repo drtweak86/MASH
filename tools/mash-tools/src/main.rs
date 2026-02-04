@@ -1,11 +1,11 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
+use mash_hal::ProcessOps;
 use reqwest::blocking::Client;
 use reqwest::header::RANGE;
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 use toml_edit::{DocumentMut, Item};
 
@@ -88,11 +88,14 @@ fn ensure_clean_worktree(repo_root: &Path, allow_dirty: bool) -> Result<()> {
     if allow_dirty {
         return Ok(());
     }
-    let output = Command::new("git")
-        .arg("status")
-        .arg("--porcelain")
-        .current_dir(repo_root)
-        .output()
+    let hal = mash_hal::LinuxHal::new();
+    let output = hal
+        .command_output_with_cwd(
+            "git",
+            &["status", "--porcelain"],
+            Some(repo_root),
+            Duration::from_secs(60),
+        )
         .context("failed to run git status")?;
     if !output.status.success() {
         return Err(anyhow!("git status failed"));
@@ -131,8 +134,8 @@ fn bump_version(repo_root: &Path, version: &str) -> Result<()> {
 fn tag_release(repo_root: &Path, version: &str) -> Result<()> {
     let version = normalize_version(version)?;
     let tag = format!("v{version}");
-    run_git(repo_root, ["tag", &tag])?;
-    run_git(repo_root, ["push", "origin", &tag])?;
+    run_git(repo_root, &["tag", &tag])?;
+    run_git(repo_root, &["push", "origin", &tag])?;
     Ok(())
 }
 
@@ -157,39 +160,33 @@ fn normalize_version(raw: &str) -> Result<String> {
 }
 
 fn run_checks(repo_root: &Path) -> Result<()> {
-    run_cargo(repo_root, ["fmt"])?;
-    run_cargo(repo_root, ["clippy", "--workspace", "--", "-D", "warnings"])?;
-    run_cargo(repo_root, ["test", "--workspace"])?;
+    run_cargo(repo_root, &["fmt"])?;
+    run_cargo(
+        repo_root,
+        &["clippy", "--workspace", "--", "-D", "warnings"],
+    )?;
+    run_cargo(repo_root, &["test", "--workspace"])?;
     Ok(())
 }
 
-fn run_cargo<I, S>(repo_root: &Path, args: I) -> Result<()>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<std::ffi::OsStr>,
-{
-    let status = Command::new("cargo")
-        .args(args)
-        .current_dir(repo_root)
-        .status()
-        .context("failed to run cargo command")?;
-    if !status.success() {
+fn run_cargo(repo_root: &Path, args: &[&str]) -> Result<()> {
+    let hal = mash_hal::LinuxHal::new();
+    if let Err(_err) = hal.command_status_with_cwd(
+        "cargo",
+        args,
+        Some(repo_root),
+        Duration::from_secs(6 * 60 * 60),
+    ) {
         return Err(anyhow!("cargo command failed"));
     }
     Ok(())
 }
 
-fn run_git<I, S>(repo_root: &Path, args: I) -> Result<()>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<std::ffi::OsStr>,
-{
-    let status = Command::new("git")
-        .args(args)
-        .current_dir(repo_root)
-        .status()
-        .context("failed to run git command")?;
-    if !status.success() {
+fn run_git(repo_root: &Path, args: &[&str]) -> Result<()> {
+    let hal = mash_hal::LinuxHal::new();
+    if let Err(_err) =
+        hal.command_status_with_cwd("git", args, Some(repo_root), Duration::from_secs(60))
+    {
         return Err(anyhow!("git command failed"));
     }
     Ok(())

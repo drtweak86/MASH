@@ -1,9 +1,9 @@
 //! Linux HAL implementation using real system calls.
 
 use super::{
-    BtrfsOps, FlashOps, FlashOptions, FormatOps, FormatOptions, LoopOps, MountOps, MountOptions,
-    PartedOp, PartedOptions, PartitionOps, ProbeOps, RsyncOps, RsyncOptions, SystemOps,
-    WipeFsOptions,
+    BtrfsOps, FlashOps, FlashOptions, FormatOps, FormatOptions, HostInfoOps, LoopOps, MountOps,
+    MountOptions, OsReleaseInfo, PartedOp, PartedOptions, PartitionOps, ProbeOps, ProcessOps,
+    RsyncOps, RsyncOptions, SystemOps, WipeFsOptions,
 };
 use crate::{HalError, HalResult};
 use std::fs;
@@ -21,6 +21,87 @@ pub struct LinuxHal;
 impl LinuxHal {
     pub fn new() -> Self {
         Self
+    }
+}
+
+impl HostInfoOps for LinuxHal {
+    fn hostname(&self) -> HalResult<Option<String>> {
+        let s = fs::read_to_string("/etc/hostname")?;
+        let trimmed = s.trim().to_string();
+        Ok((!trimmed.is_empty()).then_some(trimmed))
+    }
+
+    fn kernel_release(&self) -> HalResult<Option<String>> {
+        let out = self.command_output("uname", &["-r"], Duration::from_secs(2))?;
+        let s = String::from_utf8(out.stdout)?.trim().to_string();
+        Ok((!s.is_empty()).then_some(s))
+    }
+
+    fn os_release(&self) -> HalResult<OsReleaseInfo> {
+        let content = fs::read_to_string("/etc/os-release").unwrap_or_default();
+        let mut id = None;
+        let mut version_id = None;
+        for line in content.lines() {
+            if let Some(v) = line.strip_prefix("ID=") {
+                id = Some(v.trim().trim_matches('"').to_string());
+            }
+            if let Some(v) = line.strip_prefix("VERSION_ID=") {
+                version_id = Some(v.trim().trim_matches('"').to_string());
+            }
+        }
+        Ok(OsReleaseInfo { id, version_id })
+    }
+
+    fn proc_cmdline(&self) -> HalResult<String> {
+        Ok(fs::read_to_string("/proc/cmdline").unwrap_or_default())
+    }
+
+    fn proc_cpuinfo(&self) -> HalResult<String> {
+        Ok(fs::read_to_string("/proc/cpuinfo").unwrap_or_default())
+    }
+
+    fn proc_meminfo(&self) -> HalResult<String> {
+        Ok(fs::read_to_string("/proc/meminfo").unwrap_or_default())
+    }
+
+    fn proc_mounts(&self) -> HalResult<String> {
+        Ok(fs::read_to_string("/proc/self/mounts").unwrap_or_default())
+    }
+
+    fn proc_mountinfo(&self) -> HalResult<String> {
+        Ok(fs::read_to_string("/proc/self/mountinfo").unwrap_or_default())
+    }
+}
+
+impl ProcessOps for LinuxHal {
+    fn command_output_with_cwd(
+        &self,
+        program: &str,
+        args: &[&str],
+        cwd: Option<&Path>,
+        timeout: Duration,
+    ) -> HalResult<Output> {
+        let mut cmd = Command::new(program);
+        cmd.args(args);
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+        output_with_timeout(program, &mut cmd, timeout)
+    }
+
+    fn command_status_with_cwd(
+        &self,
+        program: &str,
+        args: &[&str],
+        cwd: Option<&Path>,
+        timeout: Duration,
+    ) -> HalResult<()> {
+        let mut cmd = Command::new(program);
+        cmd.args(args);
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+        status_with_timeout(program, &mut cmd, timeout)
     }
 }
 

@@ -82,6 +82,15 @@ pub fn scan_block_devices_in(sys_block_root: &Path) -> Result<Vec<BlockDeviceInf
     Ok(out)
 }
 
+/// Best-effort transport hints from sysfs.
+///
+/// This reads the `device` symlink under a sysfs block device directory (e.g. `/sys/block/sda`).
+pub fn transport_path_hint(sys_block_dev_dir: &Path) -> Option<String> {
+    fs::read_link(sys_block_dev_dir.join("device"))
+        .ok()
+        .map(|p| p.to_string_lossy().to_lowercase())
+}
+
 fn read_trimmed(path: PathBuf) -> Option<String> {
     fs::read_to_string(path)
         .ok()

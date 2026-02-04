@@ -1,5 +1,5 @@
-use super::config::{BtrfsSubvols, FlashConfig, FlashContext};
 use super::cancel::cancel_requested;
+use super::config::{BtrfsSubvols, FlashConfig, FlashContext};
 use super::mounts::MountPoints;
 use anyhow::{bail, Context, Result};
 use log::info;
@@ -10,9 +10,7 @@ use std::sync::Arc;
 use tempfile::Builder as TempDirBuilder;
 
 use crate::cli::PartitionScheme;
-use crate::config_states::{
-    ArmedConfig, ExecuteArmToken, UnvalidatedConfig, ValidatedConfig,
-};
+use crate::config_states::{ArmedConfig, ExecuteArmToken, UnvalidatedConfig, ValidatedConfig};
 use crate::install_report::{InstallReportWriter, RunMode, SelectionReport};
 use crate::locale::LocaleConfig;
 use crate::progress::{Phase, ProgressUpdate};
