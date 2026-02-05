@@ -140,6 +140,18 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                 Some(app.disk_selected),
             );
 
+            if let Some(disk) = app.disks.get(app.disk_selected) {
+                items.push("".to_string());
+                items.push("Selected disk details:".to_string());
+                items.push(format!("  Friendly: {}", disk.label));
+                items.push(format!("  Device: {}", disk.path));
+                items.push(format!(
+                    "  Size/Bus: {} ({})",
+                    ProgressState::format_bytes(disk.identity.size_bytes),
+                    disk.identity.transport.hint()
+                ));
+            }
+
             // Show protection banner for source/boot media.
             if let Some(disk) = app.disks.get(app.disk_index) {
                 if disk.boot_confidence.is_boot() || disk.is_source_disk {
