@@ -1696,7 +1696,7 @@ dependencies = [
 
 [[package]]
 name = "mash-core"
-version = "1.2.14"
+version = "1.2.15"
 dependencies = [
  "anyhow",
  "clap",
@@ -1752,7 +1752,7 @@ dependencies = [
 
 [[package]]
 name = "mash-installer"
-version = "1.2.14"
+version = "1.2.15"
 dependencies = [
  "anyhow",
  "clap",
@@ -1777,7 +1777,7 @@ dependencies = [
 
 [[package]]
 name = "mash-release"
-version = "1.2.14"
+version = "1.2.15"
 dependencies = [
  "clap",
  "mash-hal",
@@ -1787,7 +1787,7 @@ dependencies = [
 
 [[package]]
 name = "mash-tools"
-version = "1.2.14"
+version = "1.2.15"
 dependencies = [
  "anyhow",
  "clap",

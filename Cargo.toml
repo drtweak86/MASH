@@ -25,7 +25,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "1.2.14"
+version = "1.2.15"
 
 [profile.release]
 opt-level = 3

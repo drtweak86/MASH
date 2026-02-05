@@ -1,6 +1,6 @@
 [package]
 name = "mash-core"
-version = "1.2.14"
+version = "1.2.15"
 edition = "2021"
 authors = ["MASH Team"]
 description = "🍠 MASH core installer library"
