@@ -16,6 +16,21 @@ const MIN_DISK_GB: u64 = 16;
 const NETWORK_TIMEOUT_SECS: u64 = 3;
 const SYS_BLOCK: &str = "/sys/class/block";
 
+#[cfg(test)]
+const TEST_MIN_DISK_ENV: &str = "MASH_TEST_MIN_DISK_GB";
+
+fn min_disk_requirement() -> u64 {
+    #[cfg(test)]
+    {
+        if let Ok(value) = std::env::var(TEST_MIN_DISK_ENV) {
+            if let Ok(parsed) = value.parse::<u64>() {
+                return parsed;
+            }
+        }
+    }
+    MIN_DISK_GB
+}
+
 #[derive(Clone, Debug)]
 pub struct PreflightConfig {
     pub min_ram_mb: u64,
@@ -31,7 +46,7 @@ impl Default for PreflightConfig {
     fn default() -> Self {
         Self {
             min_ram_mb: MIN_RAM_MB,
-            min_disk_gb: MIN_DISK_GB,
+            min_disk_gb: min_disk_requirement(),
             min_target_disk_gb: MIN_DISK_GB,
             disk_space_path: PathBuf::from("/"),
             target_disk: None,
