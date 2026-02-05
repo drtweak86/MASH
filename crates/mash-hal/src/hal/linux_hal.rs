@@ -517,8 +517,12 @@ impl CopyOps for LinuxHal {
         for entry in WalkDir::new(src) {
             let entry = entry.map_err(|e| HalError::Other(e.to_string()))?;
             if entry.path().is_file() {
-                bytes_total = bytes_total
-                    .saturating_add(entry.metadata().map_err(|e| HalError::Other(e.to_string()))?.len());
+                bytes_total = bytes_total.saturating_add(
+                    entry
+                        .metadata()
+                        .map_err(|e| HalError::Other(e.to_string()))?
+                        .len(),
+                );
                 files_total += 1;
             } else if entry.path().is_symlink() {
                 files_total += 1;
