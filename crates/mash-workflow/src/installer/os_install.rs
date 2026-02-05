@@ -8,6 +8,16 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::SyncSender;
 
+fn record_stage_error(
+    report: &Option<mash_core::install_report::InstallReportWriter>,
+    stage: &str,
+    error: &str,
+) {
+    if let Some(ref report) = report {
+        report.stage_error(stage, error);
+    }
+}
+
 /// Where the OS image comes from.
 #[derive(Debug, Clone)]
 pub enum ImageSource {
@@ -188,9 +198,7 @@ where
             }
             if let Some(flag) = cancel_dl {
                 if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                    if let Some(ref report) = report_dl {
-                        report.stage_error("Download OS image", "cancelled");
-                    }
+                    record_stage_error(&report_dl, "Download OS image", "cancelled");
                     anyhow::bail!("cancelled");
                 }
             }
@@ -202,9 +210,7 @@ where
             let artifact = match downloader::download(&opts) {
                 Ok(artifact) => artifact,
                 Err(err) => {
-                    if let Some(ref report) = report_dl {
-                        report.stage_error("Download OS image", &err.to_string());
-                    }
+                    record_stage_error(&report_dl, "Download OS image", &err.to_string());
                     return Err(err);
                 }
             };
@@ -254,9 +260,7 @@ where
             }
             if let Some(flag) = cancel_flash {
                 if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                    if let Some(ref report) = report_flash {
-                        report.stage_error("Flash OS image", "cancelled");
-                    }
+                    record_stage_error(&report_flash, "Flash OS image", "cancelled");
                     anyhow::bail!("cancelled");
                 }
             }
@@ -265,9 +269,7 @@ where
             let opts = mash_hal::FlashOptions::new(dry_run, destructive_confirmed);
             if let Err(err) = hal_flash.flash_raw_image(&image_path, &cfg_flash.target_disk, &opts)
             {
-                if let Some(ref report) = report_flash {
-                    report.stage_error("Flash OS image", &err.to_string());
-                }
+                record_stage_error(&report_flash, "Flash OS image", &err.to_string());
                 return Err(err.into());
             }
 
