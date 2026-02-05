@@ -68,7 +68,6 @@ jobs:
             mash-installer -> target
 
       - name: Build (release)
-        working-directory: mash-installer
         env:
           # aarch64 cross-linking
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
@@ -76,7 +75,20 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
           set -euo pipefail
-          cargo build --release --target "${{ matrix.target }}"
+          cargo build --release --locked --target "${{ matrix.target }}" -p mash-installer --bin mash
+
+      - name: Debug build outputs
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          echo "PWD=$(pwd)"
+          echo "Listing target/${TARGET}/release:"
+          ls -lah "target/${TARGET}/release" || true
+          echo "Top-level release dirs:"
+          find target -maxdepth 3 -type d -name release -print || true
+          echo "Executable candidates:"
+          find "target/${TARGET}/release" -maxdepth 1 -type f -perm -111 -print || true
 
       - name: Stage artifact folder layout
         run: |
