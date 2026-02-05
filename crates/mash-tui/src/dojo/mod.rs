@@ -225,6 +225,8 @@ fn run_execution_pipeline(
     yes_i_know: bool,
     cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<DownloadOutcome> {
+    let staging_root = mash_core::flash::staging_root()?;
+    let download_root = staging_root.join("downloads");
     flash::set_cancel_flag(cancel_flag.clone());
     let tx = config.progress_tx.clone();
     let send = |update: ProgressUpdate| {
@@ -250,7 +252,7 @@ fn run_execution_pipeline(
     if matches!(config.os_distro, flash_config::OsDistro::Fedora) {
         let mut downloaded_image = None;
         let mut downloaded_uefi = None;
-        let download_root = config.mash_root.join("downloads");
+        std::fs::create_dir_all(&download_root)?;
 
         if config.image_source_selection == ImageSource::DownloadCatalogue {
             send(ProgressUpdate::PhaseStarted(Phase::DownloadImage));
@@ -422,6 +424,8 @@ fn run_execution_pipeline(
             ImageSource::DownloadCatalogue => installer::os_install::ImageSource::Download,
         };
 
+        std::fs::create_dir_all(&download_root)?;
+        let image_download_dir = download_root.join("images");
         let install_cfg = installer::os_install::OsInstallConfig {
             mash_root: config.mash_root.clone(),
             state_path: config.state_path.clone(),
@@ -429,7 +433,7 @@ fn run_execution_pipeline(
             variant: config.os_variant.clone(),
             arch: "aarch64".to_string(),
             target_disk: PathBuf::from(config.disk.clone()),
-            download_dir: config.mash_root.join("downloads").join("images"),
+            download_dir: image_download_dir,
             image_source,
             dry_run: config.dry_run,
             progress_tx: config.progress_tx.clone(),

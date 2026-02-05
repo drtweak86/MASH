@@ -1,6 +1,7 @@
 use super::cancel::cancel_requested;
 use super::config::{BtrfsSubvols, FlashConfig, FlashContext};
 use super::mounts::MountPoints;
+use super::staging::staging_root;
 use anyhow::{bail, Context, Result};
 use libc;
 use log::info;
@@ -209,10 +210,11 @@ fn run_full_loop_from_config(
 
     // Create a secure, unique work directory for this run.
     // Avoids TOCTOU/link attacks against a fixed path in privileged contexts.
+    let staging = staging_root()?;
     let _work_dir_guard = TempDirBuilder::new()
         .prefix("mash-install-")
-        .tempdir_in("/tmp")
-        .context("failed to create secure temporary work directory")?;
+        .tempdir_in(&staging)
+        .context("failed to create secure temporary staging directory")?;
     let work_dir = _work_dir_guard.path().to_path_buf();
 
     // Normalize UEFI input into a directory suitable for VFAT-safe rsync.
