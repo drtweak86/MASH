@@ -20,7 +20,6 @@ pub mod install_report;
 pub mod locale;
 pub mod logging;
 pub mod partitioning;
-pub mod process_timeout;
 pub mod progress;
 pub mod stages;
 pub mod state_manager;
