@@ -9,6 +9,7 @@ use mash_hal::sysfs::block::{BootTag, TransportType};
 use mash_hal::HostInfoOps;
 
 use super::flash_config::{ImageEditionOption, ImageVersionOption};
+use mash_core::flash;
 
 #[derive(Debug, Clone, Copy)]
 pub struct DataFlags {
@@ -94,25 +95,15 @@ impl DiskIdentity {
     }
 
     /// Stable key for preserving selection across rescans.
-    pub fn stable_id(&self, dev_path: &str) -> String {
-        if let Some(ref wwn) = self.wwn {
-            return format!("wwn:{}", wwn);
-        }
-        if let Some(ref serial) = self.serial {
-            return format!("serial:{}", serial);
-        }
-        // Fall back to a synthetic key that still incorporates physical characteristics.
-        format!(
-            "fallback:{}:{}:{:?}",
-            dev_path, self.size_bytes, self.transport
-        )
+    pub fn stable_id(&self, _dev_path: &str) -> Option<String> {
+        flash::stable_disk_id(self.wwn.as_deref(), self.serial.as_deref())
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct DiskInfo {
     pub identity: DiskIdentity,
-    pub stable_id: String,
+    pub stable_id: Option<String>,
     pub path: String, // /dev/sda
     /// Canonical, non-device-first label generated from sysfs (HAL).
     pub label: String,

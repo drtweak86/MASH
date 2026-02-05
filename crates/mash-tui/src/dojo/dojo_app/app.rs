@@ -147,37 +147,43 @@ impl App {
         };
         let disks = if real_disks.is_empty() {
             vec![
-                DiskOption {
-                    identity: data_sources::DiskIdentity::new(
+                {
+                    let identity = data_sources::DiskIdentity::new(
                         Some("SanDisk".to_string()),
                         Some("Ultra".to_string()),
                         None,
-                        None,
+                        Some("MOCKWWN-SANDISK-ULTRA".to_string()),
                         32 * 1024 * 1024 * 1024,
                         mash_hal::sysfs::block::TransportType::Usb,
-                    ),
-                    stable_id: "mock:sandisk-ultra-usb".to_string(),
-                    path: "/dev/sda".to_string(),
-                    label: "SanDisk Ultra (USB) 32.0 GiB [REMOVABLE] [BOOT: NO]".to_string(),
-                    removable: true,
-                    boot_confidence: data_sources::BootConfidence::NotBoot,
-                    is_source_disk: false,
+                    );
+                    DiskOption {
+                        stable_id: identity.stable_id("/dev/sda"),
+                        identity,
+                        path: "/dev/sda".to_string(),
+                        label: "SanDisk Ultra (USB) 32.0 GiB [REMOVABLE] [BOOT: NO]".to_string(),
+                        removable: true,
+                        boot_confidence: data_sources::BootConfidence::NotBoot,
+                        is_source_disk: false,
+                    }
                 },
-                DiskOption {
-                    identity: data_sources::DiskIdentity::new(
+                {
+                    let identity = data_sources::DiskIdentity::new(
                         Some("Samsung".to_string()),
                         Some("980".to_string()),
                         None,
-                        None,
+                        Some("MOCKWWN-SAMSUNG-980".to_string()),
                         512 * 1024 * 1024 * 1024,
                         mash_hal::sysfs::block::TransportType::Nvme,
-                    ),
-                    stable_id: "mock:samsung-980-nvme".to_string(),
-                    path: "/dev/nvme0n1".to_string(),
-                    label: "Samsung 980 (NVMe) 512.0 GiB [INTERNAL] [BOOT MEDIA]".to_string(),
-                    removable: false,
-                    boot_confidence: data_sources::BootConfidence::Confident,
-                    is_source_disk: true,
+                    );
+                    DiskOption {
+                        stable_id: identity.stable_id("/dev/nvme0n1"),
+                        identity,
+                        path: "/dev/nvme0n1".to_string(),
+                        label: "Samsung 980 (NVMe) 512.0 GiB [INTERNAL] [BOOT MEDIA]".to_string(),
+                        removable: false,
+                        boot_confidence: data_sources::BootConfidence::Confident,
+                        is_source_disk: true,
+                    }
                 },
             ]
         } else {
@@ -1208,11 +1214,11 @@ impl App {
         let selected = self
             .disks
             .get(self.disk_selected)
-            .map(|disk| disk.stable_id.clone());
+            .and_then(|disk| disk.stable_id.clone());
         let cursor = self
             .disks
             .get(self.disk_index)
-            .map(|disk| disk.stable_id.clone());
+            .and_then(|disk| disk.stable_id.clone());
 
         let mut disks = data_sources::scan_disks()
             .into_iter()
@@ -1242,7 +1248,7 @@ impl App {
         // Preserve selection if possible.
         let mut next_selected_index = selected
             .as_ref()
-            .and_then(|id| disks.iter().position(|d| &d.stable_id == id))
+            .and_then(|id| disks.iter().position(|d| d.stable_id.as_ref() == Some(id)))
             .unwrap_or(0);
 
         // If the preserved selection is protected, prefer a safe target unless developer-mode.
@@ -1267,7 +1273,7 @@ impl App {
         // Preserve cursor separately if possible; otherwise follow the selected item.
         let mut next_cursor_index = cursor
             .as_ref()
-            .and_then(|id| disks.iter().position(|d| &d.stable_id == id))
+            .and_then(|id| disks.iter().position(|d| d.stable_id.as_ref() == Some(id)))
             .unwrap_or(next_selected_index);
 
         self.disks = disks;
@@ -1545,7 +1551,7 @@ impl App {
     }
 
     /// Build flash configuration from current app state
-    pub fn build_flash_config(&self) -> Option<TuiFlashConfig> {
+    pub fn build_flash_config(&mut self) -> Option<TuiFlashConfig> {
         let download_uefi_firmware = matches!(
             self.uefi_sources.get(self.uefi_source_selected),
             Some(super::super::flash_config::EfiSource::DownloadEfiImage)
@@ -1595,6 +1601,18 @@ impl App {
             }
         });
 
+        let stable_id = self
+            .disks
+            .get(self.disk_selected)
+            .and_then(|disk| disk.stable_id.clone());
+
+        if stable_id.is_none() {
+            self.error_message = Some(
+                "Disk identity unavailable (no WWN/serial). Cannot guarantee safety. Select a disk with a stable hardware ID.".to_string(),
+            );
+            return None;
+        }
+
         Some(TuiFlashConfig {
             mash_root: self.mash_root.clone(),
             state_path: self.state_path.clone(),
@@ -1606,10 +1624,7 @@ impl App {
                 .get(self.disk_selected)
                 .map(|disk| disk.path.clone())
                 .unwrap_or_else(|| "/dev/sda".to_string()),
-            disk_stable_id: self
-                .disks
-                .get(self.disk_selected)
-                .map(|disk| disk.stable_id.clone()),
+            disk_stable_id: stable_id,
             scheme: *self
                 .partition_schemes
                 .get(self.scheme_selected)
@@ -2103,6 +2118,33 @@ mod tests {
     fn validate_partition_plan_accepts_defaults() {
         let result = validate_partition_plan(&plan("1024MiB", "2048MiB", "1800GiB"));
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn build_flash_config_persists_stable_hardware_id() {
+        let mut app = App::new();
+        let cfg = app.build_flash_config().expect("config should build");
+        assert_eq!(
+            cfg.disk_stable_id.as_deref(),
+            Some("wwn:MOCKWWN-SANDISK-ULTRA")
+        );
+    }
+
+    #[test]
+    fn build_flash_config_blocks_when_no_stable_id() {
+        let mut app = App::new();
+        if let Some(disk) = app.disks.get_mut(app.disk_selected) {
+            disk.stable_id = None;
+            disk.identity.serial = None;
+            disk.identity.wwn = None;
+        }
+        let cfg = app.build_flash_config();
+        assert!(cfg.is_none(), "should refuse to build without stable id");
+        assert!(app
+            .error_message
+            .as_deref()
+            .map(|msg| msg.contains("Disk identity unavailable"))
+            .unwrap_or(false));
     }
 
     #[test]

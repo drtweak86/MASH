@@ -18,7 +18,7 @@ pub enum StepState {
 #[derive(Debug, Clone)]
 pub struct DiskOption {
     pub identity: data_sources::DiskIdentity,
-    pub stable_id: String,
+    pub stable_id: Option<String>,
     pub path: String,
     /// Canonical label (HAL/sysfs) used for UI display.
     pub label: String,
