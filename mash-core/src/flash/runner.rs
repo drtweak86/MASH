@@ -69,6 +69,7 @@ pub fn run(
         efi_size: efi_size.to_string(),
         boot_size: boot_size.to_string(),
         root_end: root_end.to_string(),
+        disk_stable_id: None,
         partition_approval_mode: crate::flash::approvals::PartitionApprovalMode::Global,
     };
 
@@ -245,6 +246,7 @@ fn run_full_loop_from_config(
         boot_size: config.boot_size.clone(),
         root_end: config.root_end.clone(),
         report,
+        disk_stable_id: config.disk_stable_id.clone(),
     };
 
     // If the image is an .xz file, decompress it
@@ -275,6 +277,7 @@ fn run_installation_dry_run(ctx: &mut FlashContext) -> Result<()> {
 fn run_installation_execute(ctx: &mut FlashContext, token: ExecuteArmToken) -> Result<()> {
     let mounts = MountPoints::new(&ctx.work_dir);
 
+    verify_target_disk(ctx)?;
     prepare_mount_points(ctx, &mounts)?;
 
     execute_partition_phase(ctx, &token)?;
@@ -1531,6 +1534,53 @@ fn show_lsblk(hal: &dyn InstallerHal, disk: &str) -> Result<()> {
     Ok(())
 }
 
+fn verify_target_disk(ctx: &FlashContext) -> Result<()> {
+    let Some(expected) = ctx.disk_stable_id.as_ref() else {
+        return Ok(()); // No stored identity; retain existing behavior.
+    };
+    let current = current_disk_stable_id(&ctx.disk)?;
+    if let Some(current_id) = current {
+        if &current_id != expected {
+            anyhow::bail!(
+                "Target disk identity mismatch. Expected {}, found {}. Aborting to avoid flashing the wrong disk.",
+                expected,
+                current_id
+            );
+        }
+    } else {
+        anyhow::bail!("Unable to verify target disk identity for {}.", ctx.disk);
+    }
+    Ok(())
+}
+
+fn current_disk_stable_id(disk: &str) -> Result<Option<String>> {
+    let normalized = normalize_disk(disk);
+    let normalized_path = PathBuf::from(&normalized);
+    let devices = mash_hal::sysfs::block::scan_block_devices()?;
+    for dev in devices {
+        if dev.dev_path == normalized_path {
+            return Ok(Some(stable_id_for(&dev)));
+        }
+    }
+    Ok(None)
+}
+
+fn stable_id_for(dev: &mash_hal::sysfs::block::BlockDeviceInfo) -> String {
+    if let Some(wwn) = &dev.wwn {
+        return format!("wwn:{}", wwn);
+    }
+    if let Some(serial) = &dev.serial {
+        return format!("serial:{}", serial);
+    }
+    let transport = mash_hal::sysfs::block::detect_transport_type(&dev.name, &dev.sysfs_path);
+    format!(
+        "fallback:{}:{}:{:?}",
+        dev.dev_path.display(),
+        dev.size_bytes,
+        transport
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1561,8 +1611,50 @@ mod tests {
             boot_size: "1G".to_string(),
             root_end: "100%".to_string(),
             report: None,
+            disk_stable_id: None,
         };
         assert_eq!(ctx.partition_path(1), "/dev/sda1");
         assert_eq!(ctx.partition_path(4), "/dev/sda4");
+    }
+
+    #[test]
+    fn stable_id_prefers_wwn_then_serial_then_fallback() {
+        use mash_hal::sysfs::block::{BlockDeviceInfo, TransportType};
+        let mut info = BlockDeviceInfo {
+            name: "sda".to_string(),
+            dev_path: PathBuf::from("/dev/sda"),
+            sysfs_path: PathBuf::from("/sys/block/sda"),
+            size_bytes: 1_000_000,
+            vendor: None,
+            model: None,
+            serial: None,
+            wwn: Some("5000cca123".to_string()),
+            removable: false,
+        };
+        assert_eq!(
+            stable_id_for(&info),
+            "wwn:5000cca123".to_string(),
+            "wwn wins"
+        );
+
+        info.wwn = None;
+        info.serial = Some("ABC123".to_string());
+        assert_eq!(
+            stable_id_for(&info),
+            "serial:ABC123".to_string(),
+            "serial falls back when no wwn"
+        );
+
+        info.serial = None;
+        let fallback = stable_id_for(&info);
+        assert!(
+            fallback.starts_with("fallback:/dev/sda:1000000"),
+            "fallback includes path and size"
+        );
+        // Ensure transport hint is stable.
+        assert!(
+            fallback.contains(&format!("{:?}", TransportType::Scsi)),
+            "transport hint included"
+        );
     }
 }

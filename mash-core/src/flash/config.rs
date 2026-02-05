@@ -38,6 +38,7 @@ pub struct FlashContext {
     pub boot_size: String,
     pub root_end: String,
     pub report: Option<InstallReportWriter>,
+    pub disk_stable_id: Option<String>,
 }
 
 impl FlashContext {
@@ -105,6 +106,8 @@ pub struct FlashConfig {
     pub efi_size: String,
     pub boot_size: String,
     pub root_end: String,
+    /// Stable identifier for the selected disk (wwn/serial fallback).
+    pub disk_stable_id: Option<String>,
     pub partition_approval_mode: PartitionApprovalMode,
 }
 

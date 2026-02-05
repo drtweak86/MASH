@@ -1606,6 +1606,10 @@ impl App {
                 .get(self.disk_selected)
                 .map(|disk| disk.path.clone())
                 .unwrap_or_else(|| "/dev/sda".to_string()),
+            disk_stable_id: self
+                .disks
+                .get(self.disk_selected)
+                .map(|disk| disk.stable_id.clone()),
             scheme: *self
                 .partition_schemes
                 .get(self.scheme_selected)
