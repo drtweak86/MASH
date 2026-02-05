@@ -93,7 +93,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("".to_string());
             items.push("⌨️ Keys:".to_string());
             items.push("  ↑/↓ or j/k — Move selection up/down".to_string());
-            items.push("  Space — Select/toggle current item".to_string());
+            items.push("  Space — Select current item".to_string());
             items.push("  Enter or Tab — Continue".to_string());
             items.push("  Esc — Quit".to_string());
             items.push("  ? — Help".to_string());
@@ -109,7 +109,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("".to_string());
             items.push("⌨️ Keys:".to_string());
             items.push("  ↑/↓ or j/k — Move selection up/down".to_string());
-            items.push("  Space — Select current disk".to_string());
+            items.push("  Space — Select current item".to_string());
             items.push("  Enter or Tab — Continue".to_string());
             items.push("  Esc — Go back".to_string());
             items.push("  ? — Help".to_string());
@@ -205,7 +205,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                     items.push("⌨️ Keys:".to_string());
                     items.push("  Type DESTROY (exactly)".to_string());
                     items.push("  Enter or Tab — Continue".to_string());
-                    items.push("  Esc — Cancel and go back".to_string());
+                    items.push("  Esc — Go back".to_string());
                     items.push("  ? — Help".to_string());
                     items.push("".to_string());
                 }
@@ -257,7 +257,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("GPT: Modern standard, supports larger disks, UEFI-oriented".to_string());
             items.push("".to_string());
             items.push("⌨️ Keys:".to_string());
-            items.push("  ↑/↓ or j/k — Switch between MBR and GPT".to_string());
+            items.push("  ↑/↓ or j/k — Move selection up/down".to_string());
             items.push("  Enter or Tab — Continue".to_string());
             items.push("  Esc — Go back".to_string());
             items.push("  ? — Help".to_string());
@@ -498,7 +498,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("".to_string());
             items.push("⌨️ Keys:".to_string());
             items.push("  ↑/↓ or j/k — Move selection up/down".to_string());
-            items.push("  Space — Toggle option on/off".to_string());
+            items.push("  Space — Toggle option".to_string());
             items.push("  Enter or Tab — Continue".to_string());
             items.push("  Esc — Go back".to_string());
             items.push("  ? — Help".to_string());
@@ -674,7 +674,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("⌨️ Keys:".to_string());
             items.push("  Type phrase — Input must match exactly".to_string());
             items.push("  Enter or Tab — Submit".to_string());
-            items.push("  Esc — Cancel and go back".to_string());
+            items.push("  Esc — Go back".to_string());
             items.push("  ? — Help".to_string());
             items.push("".to_string());
 
@@ -721,7 +721,7 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("⌨️ Keys:".to_string());
             items.push("  Type DESTROY (exactly) — Disarm safe mode and ARM installer".to_string());
             items.push("  Enter or Tab — Submit".to_string());
-            items.push("  Esc — Cancel and go back".to_string());
+            items.push("  Esc — Go back".to_string());
             items.push("  ? — Help".to_string());
             items.push("".to_string());
             let (display, progress, total) =
@@ -732,7 +732,6 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             if let Some(error) = &app.error_message {
                 items.push(format!("❌ {}", error));
             }
-            items.push("Esc cancels and returns to the summary.".to_string());
         }
         InstallStepType::DownloadingFedora => {
             let status = if app.downloaded_fedora {

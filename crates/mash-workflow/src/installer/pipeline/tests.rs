@@ -487,7 +487,7 @@ fn pipeline_execute_plan_records_download_artifact() {
     });
 
     let tmp = tempdir().unwrap();
-    let _guards = prepare_preflight_env(&tmp);
+    let guards = prepare_preflight_env(&tmp);
     let state_path = tmp.path().join("state.json");
     let downloads = tmp.path().join("downloads").join("images");
     let cfg = make_download_config_internal(
@@ -509,6 +509,7 @@ fn pipeline_execute_plan_records_download_artifact() {
     let artifact_path = downloads.join("override.img.xz");
     let metadata = artifact_path.metadata().unwrap();
     assert_eq!(metadata.len(), body.len() as u64);
+    drop(guards);
 }
 
 #[test]

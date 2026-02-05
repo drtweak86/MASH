@@ -2,8 +2,10 @@ use super::cancel::cancel_requested;
 use super::config::{BtrfsSubvols, FlashConfig, FlashContext};
 use super::mounts::MountPoints;
 use anyhow::{bail, Context, Result};
+use libc;
 use log::info;
 use std::fs;
+use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,6 +16,7 @@ use crate::config_states::{ArmedConfig, ExecuteArmToken, UnvalidatedConfig, Vali
 use crate::install_report::{InstallReportWriter, RunMode, SelectionReport};
 use crate::locale::LocaleConfig;
 use crate::progress::{Phase, ProgressUpdate};
+use mash_hal::procfs::meminfo::parse_mem_available_kb;
 use mash_hal::{
     FlashOptions, FormatOptions, InstallerHal, LinuxHal, MountOptions, PartedOp, PartedOptions,
     RsyncOptions, WipeFsOptions,
@@ -251,7 +254,11 @@ fn run_full_loop_from_config(
 
     // If the image is an .xz file, decompress it
     if ctx.image.extension().is_some_and(|ext| ext == "xz") {
-        let decompressed_image = decompress_xz_image(&ctx, &ctx.image)?;
+        let decompressed_image = decompress_xz_image(&ctx, &ctx.image).map_err(|err| {
+            let msg = format_decompress_failure(&err, &ctx.image);
+            ctx.send_progress(ProgressUpdate::Error(msg.clone()));
+            anyhow::anyhow!(msg)
+        })?;
         ctx.image = decompressed_image;
     }
 
@@ -1419,8 +1426,9 @@ fn resolve_mash_dojo_binary() -> Result<PathBuf> {
 }
 
 fn decompress_xz_image(ctx: &FlashContext, xz_image_path: &Path) -> Result<PathBuf> {
+    ctx.start_phase(Phase::ExtractImage);
     ctx.status(&format!(
-        "Decompressing XZ image: {}...",
+        "📦 Decompressing image: {}...",
         xz_image_path.display()
     ));
 
@@ -1432,11 +1440,22 @@ fn decompress_xz_image(ctx: &FlashContext, xz_image_path: &Path) -> Result<PathB
             "Raw image already exists: {}",
             raw_image_path.display()
         ));
+        ctx.complete_phase(Phase::ExtractImage);
         return Ok(raw_image_path);
+    }
+
+    if let Ok(meminfo) = std::fs::read_to_string("/proc/meminfo") {
+        if let Some(avail_kb) = parse_mem_available_kb(&meminfo) {
+            // Warn if available RAM is below ~1 GiB.
+            if avail_kb < 1_000_000 {
+                ctx.status("⚠️ Low available RAM detected (<1 GiB). Decompression may fail; consider closing other apps or rebooting.");
+            }
+        }
     }
 
     let input = std::fs::File::open(xz_image_path)
         .with_context(|| format!("Failed to open xz image: {}", xz_image_path.display()))?;
+    let total_bytes = input.metadata().ok().map(|m| m.len()).unwrap_or(0);
     let mut decoder = xz2::read::XzDecoder::new(input);
     let mut output_file = std::fs::File::create(&raw_image_path).with_context(|| {
         format!(
@@ -1445,14 +1464,113 @@ fn decompress_xz_image(ctx: &FlashContext, xz_image_path: &Path) -> Result<PathB
         )
     })?;
 
-    std::io::copy(&mut decoder, &mut output_file).context("Failed to decompress xz image")?;
+    let mut buffer = [0u8; 128 * 1024];
+    let mut processed: u64 = 0;
+    loop {
+        ctx.check_cancel()?;
+        let read = decoder
+            .read(&mut buffer)
+            .map_err(|e| map_decompress_error(&e))?;
+        if read == 0 {
+            break;
+        }
+        output_file
+            .write_all(&buffer[..read])
+            .map_err(|e| map_decompress_error(&e))?;
+        processed = processed.saturating_add(read as u64);
+        if total_bytes > 0 {
+            ctx.send_progress(ProgressUpdate::DecompressProgress {
+                bytes_done: processed,
+                bytes_total: total_bytes,
+            });
+        }
+    }
 
     ctx.status(&format!(
         "Decompression complete: {} -> {}",
         xz_image_path.display(),
         raw_image_path.display()
     ));
+    ctx.complete_phase(Phase::ExtractImage);
     Ok(raw_image_path)
+}
+
+fn map_decompress_error(err: &std::io::Error) -> std::io::Error {
+    let kind = err.kind();
+    if let Some(code) = err.raw_os_error() {
+        match code {
+            libc::ENOMEM => return std::io::Error::new(kind, "Out of memory during decompression"),
+            libc::ENOSPC => return std::io::Error::new(kind, "Disk full during decompression"),
+            _ => {}
+        }
+    }
+    match kind {
+        std::io::ErrorKind::WriteZero => {
+            std::io::Error::new(kind, "Disk full during decompression")
+        }
+        std::io::ErrorKind::PermissionDenied => {
+            std::io::Error::new(kind, "Permission denied during decompression")
+        }
+        _ => std::io::Error::new(kind, format!("Decompression failed: {}", err)),
+    }
+}
+
+fn format_decompress_failure(err: &anyhow::Error, image: &Path) -> String {
+    let lower = err.to_string().to_lowercase();
+    let io_kind = err.downcast_ref::<std::io::Error>().map(|e| e.kind());
+    let cause = if matches!(io_kind, Some(std::io::ErrorKind::OutOfMemory))
+        || lower.contains("memory")
+        || lower.contains("enomem")
+    {
+        "Probable cause: insufficient RAM during decompression."
+    } else if matches!(io_kind, Some(std::io::ErrorKind::PermissionDenied))
+        || lower.contains("permission")
+    {
+        "Probable cause: permission denied while writing the extracted image."
+    } else if lower.contains("disk full") || lower.contains("enospc") || lower.contains("writezero")
+    {
+        "Probable cause: insufficient disk space in the working directory."
+    } else {
+        "Probable cause: corrupted or incomplete download (xz stream error)."
+    };
+
+    format!(
+        "Decompression failed for {}.\n{}\nNext steps: free memory/disk space, re-download the image, or retry after reboot. Logs: /mash/install-report.json",
+        image.display(),
+        cause
+    )
+}
+
+#[cfg(test)]
+mod decompress_tests {
+    use super::*;
+    use std::io;
+
+    fn io_err(kind: io::ErrorKind) -> anyhow::Error {
+        anyhow::Error::new(io::Error::new(kind, "boom"))
+    }
+
+    #[test]
+    fn classify_disk_full() {
+        let msg =
+            format_decompress_failure(&io_err(io::ErrorKind::WriteZero), Path::new("/tmp/a.xz"));
+        assert!(msg.to_lowercase().contains("disk space"));
+    }
+
+    #[test]
+    fn classify_permission() {
+        let msg = format_decompress_failure(
+            &io_err(io::ErrorKind::PermissionDenied),
+            Path::new("/tmp/a.xz"),
+        );
+        assert!(msg.to_lowercase().contains("permission"));
+    }
+
+    #[test]
+    fn classify_corrupt() {
+        let msg = format_decompress_failure(&io_err(io::ErrorKind::Other), Path::new("/tmp/a.xz"));
+        assert!(msg.to_lowercase().contains("corrupted"));
+    }
 }
 
 // ============================================================================

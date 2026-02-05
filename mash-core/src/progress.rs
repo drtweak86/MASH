@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     DownloadImage,
+    ExtractImage,
     DownloadUefi,
     Partition,
     Format,
@@ -24,6 +25,7 @@ impl Phase {
     pub fn name(&self) -> &'static str {
         match self {
             Phase::DownloadImage => "⬇️ Downloading Fedora image",
+            Phase::ExtractImage => "📦 Extracting image",
             Phase::DownloadUefi => "⬇️ Downloading UEFI bundle",
             Phase::Partition => "🔪 Slicing up the disk",
             Phase::Format => "✨ Making it sparkly clean",
@@ -41,27 +43,29 @@ impl Phase {
     pub fn number(&self) -> usize {
         match self {
             Phase::DownloadImage => 1,
-            Phase::DownloadUefi => 2,
-            Phase::Partition => 3,
-            Phase::Format => 4,
-            Phase::CopyRoot => 5,
-            Phase::CopyBoot => 6,
-            Phase::CopyEfi => 7,
-            Phase::UefiConfig => 8,
-            Phase::LocaleConfig => 9,
-            Phase::Fstab => 10,
-            Phase::StageDojo => 11,
-            Phase::Cleanup => 12,
+            Phase::ExtractImage => 2,
+            Phase::DownloadUefi => 3,
+            Phase::Partition => 4,
+            Phase::Format => 5,
+            Phase::CopyRoot => 6,
+            Phase::CopyBoot => 7,
+            Phase::CopyEfi => 8,
+            Phase::UefiConfig => 9,
+            Phase::LocaleConfig => 10,
+            Phase::Fstab => 11,
+            Phase::StageDojo => 12,
+            Phase::Cleanup => 13,
         }
     }
 
     pub fn total() -> usize {
-        12
+        13
     }
 
     pub fn all() -> &'static [Phase] {
         &[
             Phase::DownloadImage,
+            Phase::ExtractImage,
             Phase::DownloadUefi,
             Phase::Partition,
             Phase::Format,
@@ -80,6 +84,7 @@ impl Phase {
     pub fn spinners(&self) -> &'static [&'static str] {
         match self {
             Phase::DownloadImage | Phase::DownloadUefi => &["⬇️", "📥", "📦", "✅"],
+            Phase::ExtractImage => &["📦", "🗜️", "📤", "✅"],
             // Disk operations.
             Phase::Partition | Phase::Format => &["💿", "📀", "💾", "🖴"],
             // Copy operations.
@@ -117,6 +122,8 @@ pub enum ProgressUpdate {
         files_done: u64,
         files_total: u64,
     },
+    /// Decompression progress update (bytes processed / total).
+    DecompressProgress { bytes_done: u64, bytes_total: u64 },
     /// Disk I/O rate update.
     DiskIo { mbps: f64 },
     /// Status message.
@@ -250,6 +257,18 @@ impl ProgressState {
                 self.average_speed =
                     self.speed_samples.iter().sum::<f64>() / self.speed_samples.len() as f64;
 
+                self.update_overall_progress();
+            }
+            ProgressUpdate::DecompressProgress {
+                bytes_done,
+                bytes_total,
+            } => {
+                self.bytes_done = bytes_done;
+                self.bytes_total = bytes_total;
+                if bytes_total > 0 {
+                    self.phase_percent =
+                        (bytes_done as f64 / bytes_total as f64).clamp(0.0, 1.0) * 100.0;
+                }
                 self.update_overall_progress();
             }
             ProgressUpdate::DiskIo { mbps } => {
@@ -422,5 +441,19 @@ mod tests {
         assert_eq!(ProgressState::format_bytes(1536), "1.5 KB");
         assert_eq!(ProgressState::format_bytes(1_500_000), "1.4 MB");
         assert_eq!(ProgressState::format_bytes(2_500_000_000), "2.3 GB");
+    }
+
+    #[test]
+    fn extract_phase_is_after_download() {
+        let phases = Phase::all();
+        let download_idx = phases
+            .iter()
+            .position(|p| *p == Phase::DownloadImage)
+            .unwrap();
+        let extract_idx = phases
+            .iter()
+            .position(|p| *p == Phase::ExtractImage)
+            .unwrap();
+        assert!(download_idx < extract_idx);
     }
 }
