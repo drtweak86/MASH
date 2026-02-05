@@ -117,6 +117,7 @@ pub fn run() -> anyhow::Result<()> {
                 efi_size: efi_size.clone(),
                 boot_size: boot_size.clone(),
                 root_end: root_end.clone(),
+                disk_stable_id: None,
                 partition_approval_mode: mash_core::flash::PartitionApprovalMode::Global,
             };
 

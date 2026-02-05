@@ -178,6 +178,7 @@ pub struct TuiFlashConfig {
     pub image_source_selection: ImageSource, // New field to indicate image source
     pub image_version: String,        // New field for selected Fedora version
     pub image_edition: String,        // New field for selected Fedora edition
+    pub disk_stable_id: Option<String>,
     pub partition_approval_mode: PartitionApprovalMode,
     /// Best-effort target disk identity (for reporting).
     pub disk_identity: Option<mash_core::install_report::DiskIdentityReport>,
@@ -213,6 +214,7 @@ impl TryFrom<TuiFlashConfig> for mash_core::flash::FlashConfig {
             efi_size: cfg.efi_size,
             boot_size: cfg.boot_size,
             root_end: cfg.root_end,
+            disk_stable_id: cfg.disk_stable_id.clone(),
             partition_approval_mode: cfg.partition_approval_mode,
         };
         flash.validate()?;

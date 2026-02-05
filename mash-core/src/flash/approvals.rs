@@ -230,6 +230,7 @@ mod tests {
             boot_size: "2048MiB".to_string(),
             root_end: "1800GiB".to_string(),
             partition_approval_mode: PartitionApprovalMode::Global,
+            disk_stable_id: Some("serial:ABC123".to_string()),
         }
     }
 
