@@ -2,8 +2,8 @@ use anyhow::Context;
 use clap::Parser;
 
 pub fn run() -> anyhow::Result<()> {
-    mash_core::logging::init();
     let cli = mash_core::cli::Cli::parse();
+    mash_core::logging::init_with(cli.log_file.clone());
 
     if cli.dump_tui {
         mash_tui::dojo::dump_all_steps()?;
