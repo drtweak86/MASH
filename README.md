@@ -118,9 +118,25 @@ Refer to `CONTRIBUTING.md` for detailed instructions on setting up your developm
 
 ---
 
-## 🧪 Maelstrom Test Isolation
+## 🧪 Test Isolation with Maelstrom
 
-MASH uses Maelstrom to run tests in an isolated environment (required in CI).
+MASH uses [Maelstrom](https://github.com/maelstrom-software/maelstrom) to run tests in isolated environments, ensuring CI parity and preventing destructive operations from affecting the host system.
+
+### What Isolation Means
+
+Maelstrom runs each test in a minimal container with:
+- **Network disabled** — No external connections (safety-critical for installer tests)
+- **Minimal `/dev`** — Only `/dev/null`, `/dev/random`, `/dev/urandom`, `/dev/zero`, `/dev/full`
+- **Isolated filesystem** — Tests can't access or modify host files outside `/tmp`
+- **Process isolation** — Each test runs in its own namespace
+
+Configuration: `/work/cargo-maelstrom.toml` (canonical config)
+
+### When to Use Maelstrom
+
+- **CI testing** — Ensures tests behave identically in CI and locally
+- **Safety verification** — Confirms destructive operations are properly gated
+- **Integration testing** — Tests HAL operations without risking host system
 
 ### Install (one-time)
 
@@ -128,18 +144,26 @@ MASH uses Maelstrom to run tests in an isolated environment (required in CI).
 cargo install cargo-maelstrom
 ```
 
-Alternatively, you can download a prebuilt `cargo-maelstrom` binary from the Maelstrom releases.
+Or download a prebuilt binary from [Maelstrom releases](https://github.com/maelstrom-software/maelstrom/releases).
 
-### Run
-
-From the repo root:
+### Run with Make
 
 ```bash
-cargo maelstrom --all-features
+make maelstrom                  # Run all tests (isolated)
+make maelstrom-workspace        # Run all workspace tests
+make maelstrom-mash-hal         # Run mash-hal tests only
+make maelstrom-mash-tui         # Run mash-tui tests only
+make maelstrom-mash-workflow    # Run mash-workflow tests only
 ```
 
-Notes:
-- Maelstrom relies on Linux user namespaces and `clone3`. Running inside restricted containers (e.g., Docker default seccomp) may block required syscalls.
+### Direct Cargo Usage
+
+```bash
+cargo maelstrom --all-features                      # All tests
+cargo maelstrom --package mash-tui --all-features   # Single package
+```
+
+**Note:** Maelstrom requires Linux user namespaces and `clone3`. Running inside restricted containers (e.g., Docker with default seccomp) may block these syscalls.
 
 ---
 

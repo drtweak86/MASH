@@ -276,6 +276,29 @@ sudo passwd yourusername
 
 ---
 
+## 🧪 Testing with Maelstrom (Developers)
+
+For CI parity and safety verification, MASH uses Maelstrom to run tests in isolated environments:
+
+```bash
+# Install once
+cargo install cargo-maelstrom
+
+# Run isolated tests
+make maelstrom
+```
+
+**Why use Maelstrom?**
+- Network disabled (safety-critical)
+- Isolated filesystem (no host access)
+- CI parity (tests behave identically everywhere)
+
+Configuration: `/work/cargo-maelstrom.toml`
+
+See [README](../README.md#-test-isolation-with-maelstrom) for full details.
+
+---
+
 ## 📚 More Information
 
 - [Main README](../README.md) — Project overview

@@ -1,4 +1,4 @@
-.PHONY: all build-cli build-qt install clean test help
+.PHONY: all build-cli build-qt install clean test maelstrom maelstrom-workspace maelstrom-mash-hal maelstrom-mash-tui maelstrom-mash-workflow help
 
 # Configuration
 PREFIX ?= /usr/local
@@ -54,6 +54,57 @@ test:
 	@echo "🧪 Running tests..."
 	cd mash-installer && $(CARGO) test
 	@echo "✅ Tests passed"
+
+# Run tests with Maelstrom (isolated environments)
+maelstrom:
+	@echo "🧪 Running tests with Maelstrom (isolated)..."
+	@if ! command -v cargo-maelstrom >/dev/null 2>&1; then \
+		echo "❌ cargo-maelstrom not found. Install with:"; \
+		echo "   cargo install cargo-maelstrom"; \
+		exit 1; \
+	fi
+	$(CARGO) maelstrom --all-features
+	@echo "✅ Maelstrom tests passed"
+
+maelstrom-workspace:
+	@echo "🧪 Running workspace tests with Maelstrom..."
+	@if ! command -v cargo-maelstrom >/dev/null 2>&1; then \
+		echo "❌ cargo-maelstrom not found. Install with:"; \
+		echo "   cargo install cargo-maelstrom"; \
+		exit 1; \
+	fi
+	$(CARGO) maelstrom --all-features --workspace
+	@echo "✅ Workspace Maelstrom tests passed"
+
+maelstrom-mash-hal:
+	@echo "🧪 Running mash-hal tests with Maelstrom..."
+	@if ! command -v cargo-maelstrom >/dev/null 2>&1; then \
+		echo "❌ cargo-maelstrom not found. Install with:"; \
+		echo "   cargo install cargo-maelstrom"; \
+		exit 1; \
+	fi
+	$(CARGO) maelstrom --package mash-hal --all-features
+	@echo "✅ mash-hal Maelstrom tests passed"
+
+maelstrom-mash-tui:
+	@echo "🧪 Running mash-tui tests with Maelstrom..."
+	@if ! command -v cargo-maelstrom >/dev/null 2>&1; then \
+		echo "❌ cargo-maelstrom not found. Install with:"; \
+		echo "   cargo install cargo-maelstrom"; \
+		exit 1; \
+	fi
+	$(CARGO) maelstrom --package mash-tui --all-features
+	@echo "✅ mash-tui Maelstrom tests passed"
+
+maelstrom-mash-workflow:
+	@echo "🧪 Running mash-workflow tests with Maelstrom..."
+	@if ! command -v cargo-maelstrom >/dev/null 2>&1; then \
+		echo "❌ cargo-maelstrom not found. Install with:"; \
+		echo "   cargo install cargo-maelstrom"; \
+		exit 1; \
+	fi
+	$(CARGO) maelstrom --package mash-workflow --all-features
+	@echo "✅ mash-workflow Maelstrom tests passed"
 
 # Clean build artifacts
 clean:
@@ -138,24 +189,29 @@ help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all            Build both CLI and Qt GUI (default)"
-	@echo "  build-cli      Build Rust CLI only"
-	@echo "  build-qt       Build Qt GUI only"
-	@echo "  install        Install both to $(PREFIX)/bin"
-	@echo "  install-cli    Install CLI only"
-	@echo "  install-qt     Install Qt GUI only"
-	@echo "  test           Run tests"
-	@echo "  clean          Remove build artifacts"
-	@echo "  dev-cli        Build CLI (debug mode)"
-	@echo "  dev-qt         Build Qt GUI (debug mode)"
-	@echo "  preflight      Run preflight check"
-	@echo "  format         Format code"
-	@echo "  lint           Lint code"
-	@echo "  dist           Create distribution tarball"
-	@echo "  bump-major     Bump major version (X.0.0) via mash-tools"
-	@echo "  bump-minor     Bump minor version (0.X.0) via mash-tools"
-	@echo "  bump-patch     Bump patch version (0.0.X) via mash-tools"
-	@echo "  help           Show this help"
+	@echo "  all                      Build both CLI and Qt GUI (default)"
+	@echo "  build-cli                Build Rust CLI only"
+	@echo "  build-qt                 Build Qt GUI only"
+	@echo "  install                  Install both to $(PREFIX)/bin"
+	@echo "  install-cli              Install CLI only"
+	@echo "  install-qt               Install Qt GUI only"
+	@echo "  test                     Run tests"
+	@echo "  maelstrom                Run tests with Maelstrom (isolated)"
+	@echo "  maelstrom-workspace      Run all workspace tests with Maelstrom"
+	@echo "  maelstrom-mash-hal       Run mash-hal tests with Maelstrom"
+	@echo "  maelstrom-mash-tui       Run mash-tui tests with Maelstrom"
+	@echo "  maelstrom-mash-workflow  Run mash-workflow tests with Maelstrom"
+	@echo "  clean                    Remove build artifacts"
+	@echo "  dev-cli                  Build CLI (debug mode)"
+	@echo "  dev-qt                   Build Qt GUI (debug mode)"
+	@echo "  preflight                Run preflight check"
+	@echo "  format                   Format code"
+	@echo "  lint                     Lint code"
+	@echo "  dist                     Create distribution tarball"
+	@echo "  bump-major               Bump major version (X.0.0) via mash-tools"
+	@echo "  bump-minor               Bump minor version (0.X.0) via mash-tools"
+	@echo "  bump-patch               Bump patch version (0.0.X) via mash-tools"
+	@echo "  help                     Show this help"
 	@echo ""
 	@echo "Variables:"
 	@echo "  PREFIX         Installation prefix (default: /usr/local)"
