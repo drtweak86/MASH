@@ -9,6 +9,8 @@ pub struct RsyncOptions {
     pub preserve_xattrs: bool,
     pub preserve_acls: bool,
     pub numeric_ids: bool,
+    pub prefer_native: bool,
+    pub allow_rsync_fallback: bool,
     /// rsync `--info` value (e.g. `progress2`).
     pub info: Option<String>,
     /// Extra rsync args (verbatim).
@@ -22,6 +24,8 @@ impl RsyncOptions {
             preserve_xattrs: true,
             preserve_acls: true,
             numeric_ids: true,
+            prefer_native: true,
+            allow_rsync_fallback: true,
             info: Some("progress2".to_string()),
             extra_args: Vec::new(),
         }
@@ -33,6 +37,8 @@ impl RsyncOptions {
             preserve_xattrs: false,
             preserve_acls: false,
             numeric_ids: false,
+            prefer_native: true,
+            allow_rsync_fallback: true,
             info: None,
             extra_args: vec![
                 "-rltD".to_string(),

@@ -1,9 +1,9 @@
 //! Linux HAL implementation using real system calls.
 
 use super::{
-    BtrfsOps, FlashOps, FlashOptions, FormatOps, FormatOptions, HostInfoOps, LoopOps, MountOps,
-    MountOptions, OsReleaseInfo, PartedOp, PartedOptions, PartitionOps, ProbeOps, ProcessOps,
-    RsyncOps, RsyncOptions, SystemOps, WipeFsOptions,
+    BtrfsOps, CopyOps, CopyOptions, CopyProgress, FlashOps, FlashOptions, FormatOps, FormatOptions,
+    HostInfoOps, LoopOps, MountOps, MountOptions, OsReleaseInfo, PartedOp, PartedOptions,
+    PartitionOps, ProbeOps, ProcessOps, RsyncOps, RsyncOptions, SystemOps, WipeFsOptions,
 };
 use crate::{HalError, HalResult};
 use fatfs::{format_volume, FatType, FormatVolumeOptions};
@@ -16,6 +16,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use wait_timeout::ChildExt;
+use walkdir::WalkDir;
 #[cfg(unix)]
 use {
     std::ffi::CString, std::os::unix::ffi::OsStrExt, std::os::unix::fs::FileTypeExt,
@@ -494,6 +495,128 @@ impl SystemOps for LinuxHal {
     }
 }
 
+impl CopyOps for LinuxHal {
+    fn copy_tree_native(
+        &self,
+        src: &Path,
+        dst: &Path,
+        _opts: &CopyOptions,
+        on_progress: &mut dyn FnMut(CopyProgress) -> bool,
+    ) -> HalResult<()> {
+        if !src.exists() {
+            return Err(HalError::Other(format!(
+                "source path does not exist: {}",
+                src.display()
+            )));
+        }
+        fs::create_dir_all(dst)?;
+
+        // First pass: collect totals.
+        let mut bytes_total = 0u64;
+        let mut files_total = 0u64;
+        for entry in WalkDir::new(src) {
+            let entry = entry.map_err(|e| HalError::Other(e.to_string()))?;
+            if entry.path().is_file() {
+                bytes_total = bytes_total
+                    .saturating_add(entry.metadata().map_err(|e| HalError::Other(e.to_string()))?.len());
+                files_total += 1;
+            } else if entry.path().is_symlink() {
+                files_total += 1;
+            }
+        }
+
+        let mut bytes_copied = 0u64;
+        let mut files_copied = 0u64;
+
+        for entry in WalkDir::new(src) {
+            let entry = entry.map_err(|e| HalError::Other(e.to_string()))?;
+            let rel = entry
+                .path()
+                .strip_prefix(src)
+                .map_err(|e| HalError::Other(e.to_string()))?;
+            let dest_path = dst.join(rel);
+
+            if entry.file_type().is_dir() {
+                fs::create_dir_all(&dest_path)?;
+                let perms = entry
+                    .metadata()
+                    .map_err(|e| HalError::Other(e.to_string()))?
+                    .permissions();
+                fs::set_permissions(&dest_path, perms)?;
+                continue;
+            }
+
+            if entry.file_type().is_symlink() {
+                let target = fs::read_link(entry.path())?;
+                if dest_path.exists() {
+                    fs::remove_file(&dest_path)?;
+                }
+                std::os::unix::fs::symlink(&target, &dest_path)?;
+                files_copied += 1;
+                let progress = CopyProgress {
+                    bytes_copied,
+                    bytes_total,
+                    files_copied,
+                    files_total,
+                };
+                if !on_progress(progress) {
+                    return Err(HalError::Other("copy cancelled".into()));
+                }
+                continue;
+            }
+
+            if let Some(parent) = dest_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+
+            let mut src_file = fs::File::open(entry.path())?;
+            let mut dst_file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&dest_path)?;
+
+            let mut buf = [0u8; 128 * 1024];
+            loop {
+                let read = src_file.read(&mut buf)?;
+                if read == 0 {
+                    break;
+                }
+                dst_file.write_all(&buf[..read])?;
+                bytes_copied = bytes_copied.saturating_add(read as u64);
+                let progress = CopyProgress {
+                    bytes_copied,
+                    bytes_total,
+                    files_copied,
+                    files_total,
+                };
+                if !on_progress(progress) {
+                    return Err(HalError::Other("copy cancelled".into()));
+                }
+            }
+            dst_file.sync_all().ok();
+
+            let perms = entry
+                .metadata()
+                .map_err(|e| HalError::Other(e.to_string()))?
+                .permissions();
+            fs::set_permissions(&dest_path, perms)?;
+            files_copied += 1;
+            let progress = CopyProgress {
+                bytes_copied,
+                bytes_total,
+                files_copied,
+                files_total,
+            };
+            if !on_progress(progress) {
+                return Err(HalError::Other("copy cancelled".into()));
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl ProbeOps for LinuxHal {
     fn lsblk_mountpoints(&self, disk: &Path) -> HalResult<Vec<std::path::PathBuf>> {
         let content = fs::read_to_string("/proc/self/mountinfo")?;
@@ -914,6 +1037,34 @@ impl RsyncOps for LinuxHal {
         opts: &RsyncOptions,
         on_stdout_line: &mut dyn FnMut(&str) -> bool,
     ) -> HalResult<()> {
+        if opts.prefer_native {
+            match self.copy_tree_native(src, dst, &CopyOptions::archive(), &mut |progress| {
+                let percent = if progress.bytes_total > 0 {
+                    (progress.bytes_copied as f64 / progress.bytes_total as f64) * 100.0
+                } else {
+                    0.0
+                };
+                let remaining = progress.files_total.saturating_sub(progress.files_copied);
+                let speed_mbps = 0.0; // Speed is not tracked in native path.
+                let line = format!(
+                    "{} {:.1}% {:.2}MB/s xfr#{}, to-chk={}/{}",
+                    progress.bytes_copied,
+                    percent,
+                    speed_mbps,
+                    progress.files_copied,
+                    remaining,
+                    progress.files_total
+                );
+                on_stdout_line(&line)
+            }) {
+                Ok(_) => return Ok(()),
+                Err(err) if opts.allow_rsync_fallback => {
+                    log::warn!("native copy_tree failed, falling back to rsync: {}", err);
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
         let mut args: Vec<String> = Vec::new();
 
         if opts.archive && opts.extra_args.is_empty() {
