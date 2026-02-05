@@ -1,9 +1,12 @@
-name: Release (tag)
+name: build
 
 on:
   push:
     tags:
       - "v*"
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -65,17 +68,30 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
-            mash-installer -> target
+            . -> target
 
       - name: Build (release)
         env:
+          TARGET: ${{ matrix.target }}
           # aarch64 cross-linking
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
           CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
           set -euo pipefail
-          cargo build --release --locked --target "${{ matrix.target }}" -p mash-installer --bin mash
+          cargo build --release --locked --target "${TARGET}" -p mash-installer --bin mash
+
+      - name: Debug build outputs
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          echo "PWD=$(pwd)"
+          echo "Listing target/${TARGET}/release:"
+          ls -lah "target/${TARGET}/release" || true
+          echo "Executable candidates:"
+          find "target/${TARGET}/release" -maxdepth 1 -type f -perm -111 -print || true
+          test -f "target/${TARGET}/release/mash"
 
       - name: Debug build outputs
         env:
@@ -91,23 +107,27 @@ jobs:
           find "target/${TARGET}/release" -maxdepth 1 -type f -perm -111 -print || true
 
       - name: Stage artifact folder layout
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          mkdir -p "dist/mash-installer-${{ matrix.target }}"
-          cp "target/${{ matrix.target }}/release/mash" \
-             "dist/mash-installer-${{ matrix.target }}/mash-${{ matrix.target }}"
-          chmod +x "dist/mash-installer-${{ matrix.target }}/mash-${{ matrix.target }}"
+          mkdir -p "dist/mash-${TARGET}"
+          cp "target/${TARGET}/release/mash" \
+             "dist/mash-${TARGET}/mash-${TARGET}"
+          chmod +x "dist/mash-${TARGET}/mash-${TARGET}"
+          (cd "dist/mash-${TARGET}" && sha256sum "mash-${TARGET}" > "mash-${TARGET}.sha256")
 
       - name: Upload build output (per-target)
         uses: actions/upload-artifact@v4
         with:
-          name: mash-installer-${{ matrix.target }}
-          path: dist/mash-installer-${{ matrix.target }}/
+          name: mash-${{ matrix.target }}
+          path: dist/mash-${{ matrix.target }}/*
 
   release:
     name: Package + Release
     needs: build
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
       - name: Checkout
@@ -124,43 +144,9 @@ jobs:
           echo "== dist tree =="
           find dist -maxdepth 3 -type f -o -type d | sed 's#^\./##' || true
 
-      - name: Create tarball + checksums
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-
-          # Create a single tarball with both arch folders.
-          # Layout inside tar.gz:
-          #   mash-installer-aarch64-unknown-linux-gnu/mash-installer-aarch64-unknown-linux-gnu
-          #   mash-installer-x86_64-unknown-linux-gnu/mash-installer-x86_64-unknown-linux-gnu
-          #
-          # NOTE: dist/<artifactName>/ already contains mash-installer-<target>/...
-          mkdir -p out
-
-          tar -C dist -czf "out/mash-installer-${TAG}.tar.gz" \
-            mash-installer-aarch64-unknown-linux-gnu \
-            mash-installer-x86_64-unknown-linux-gnu
-
-          (cd out && sha256sum "mash-installer-${TAG}.tar.gz" > "mash-installer-${TAG}.tar.gz.sha256")
-
-      - name: Generate changelog (simple)
-        id: notes
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          echo "## ${TAG}" > RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-          echo "- Rust installer builds for x86_64 + aarch64" >> RELEASE_NOTES.md
-          echo "- Packaged as mash-installer-${TAG}.tar.gz" >> RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-          echo "### Commits" >> RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-          git log -n 50 --pretty=format:'- %s (%h)' >> RELEASE_NOTES.md || true
-
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          body_path: RELEASE_NOTES.md
           files: |
-            out/mash-installer-${{ github.ref_name }}.tar.gz
-            out/mash-installer-${{ github.ref_name }}.tar.gz.sha256
+            dist/**/mash-*
+            dist/**/mash-*.sha256
