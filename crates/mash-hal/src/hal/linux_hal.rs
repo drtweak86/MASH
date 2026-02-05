@@ -940,7 +940,8 @@ fn normalize_vfat_label(label: &str) -> [u8; 11] {
 impl LoopOps for LinuxHal {
     fn losetup_attach(&self, image: &Path, scan_partitions: bool) -> HalResult<String> {
         // Get a free loop device.
-        let ctl_path = CString::new("/dev/loop-control").unwrap();
+        let ctl_path = CString::new("/dev/loop-control")
+            .map_err(|_| HalError::Other("invalid loop path".into()))?;
         let ctl_fd = unsafe { libc::open(ctl_path.as_ptr(), libc::O_RDONLY) };
         if ctl_fd < 0 {
             return Err(HalError::Io(io::Error::last_os_error()));
