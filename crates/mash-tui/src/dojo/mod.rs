@@ -5,7 +5,7 @@
 //! - Live progress dashboard
 
 mod data_sources;
-mod dojo_app;
+pub mod dojo_app;
 mod dojo_ui;
 
 pub mod flash_config; // Declare the new module
