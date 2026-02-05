@@ -85,6 +85,7 @@ struct PreflightEnv {
     _path_guard: PathGuard,
     _skip_network: EnvVarGuard,
     _os_release: EnvVarGuard,
+    _min_disk: EnvVarGuard,
     bin_dir: PathBuf,
 }
 
@@ -123,6 +124,7 @@ fn prepare_preflight_env(tmp: &TempDir) -> PreflightEnv {
         _path_guard: PathGuard::new(&bin_dir),
         _skip_network: EnvVarGuard::new("MASH_TEST_SKIP_NETWORK_CHECK", "1"),
         _os_release: EnvVarGuard::new("MASH_OS_RELEASE_PATH", &os_release_path),
+        _min_disk: EnvVarGuard::new("MASH_TEST_MIN_DISK_GB", "1"),
         bin_dir,
     }
 }

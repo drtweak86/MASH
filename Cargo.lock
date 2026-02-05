@@ -1708,7 +1708,7 @@ dependencies = [
  "log",
  "mash-error",
  "mash-hal",
- "nix 0.27.1",
+ "nix",
  "once_cell",
  "ratatui",
  "reqwest",
@@ -1728,7 +1728,7 @@ dependencies = [
 name = "mash-error"
 version = "0.1.0"
 dependencies = [
- "nix 0.29.0",
+ "nix",
  "thiserror 1.0.69",
 ]
 
@@ -1743,7 +1743,7 @@ dependencies = [
  "log",
  "mash-error",
  "mbrman",
- "nix 0.29.0",
+ "nix",
  "tempfile",
  "wait-timeout",
  "walkdir",
@@ -1764,7 +1764,7 @@ dependencies = [
  "mash-hal",
  "mash-tui",
  "mash-workflow",
- "nix 0.27.1",
+ "nix",
  "ratatui",
  "reqwest",
  "serde",
@@ -1883,17 +1883,6 @@ name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
-
-[[package]]
-name = "nix"
-version = "0.27.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2eb04e9c688eff1c89d72b407f168cf79bb9e867a9d3323ed6c01519eb9cc053"
-dependencies = [
- "bitflags 2.10.0",
- "cfg-if",
- "libc",
-]
 
 [[package]]
 name = "nix"
@@ -3670,7 +3659,7 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "hex",
- "nix 0.29.0",
+ "nix",
  "ordered-stream",
  "rand 0.8.5",
  "serde",
