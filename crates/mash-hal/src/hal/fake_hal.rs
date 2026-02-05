@@ -601,13 +601,19 @@ impl RsyncOps for FakeHal {
         &self,
         src: &Path,
         dst: &Path,
-        _opts: &RsyncOptions,
-        _on_stdout_line: &mut dyn FnMut(&str) -> bool,
+        opts: &RsyncOptions,
+        on_stdout_line: &mut dyn FnMut(&str) -> bool,
     ) -> HalResult<()> {
-        self.record_operation(Operation::Rsync {
-            src: src.to_path_buf(),
-            dst: dst.to_path_buf(),
-        });
+        if opts.prefer_native {
+            self.copy_tree_native(src, dst, &CopyOptions::archive(), &mut |_p| {
+                on_stdout_line("")
+            })?;
+        } else {
+            self.record_operation(Operation::Rsync {
+                src: src.to_path_buf(),
+                dst: dst.to_path_buf(),
+            });
+        }
         Ok(())
     }
 }

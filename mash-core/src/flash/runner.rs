@@ -944,6 +944,11 @@ fn create_dest_subvols(
 fn rsync_with_progress(ctx: &FlashContext, src: &Path, dst: &Path, label: &str) -> Result<()> {
     ctx.status(&format!("📦 Copying {}...", label));
 
+    let mut opts = RsyncOptions::progress2_archive();
+    if std::env::var("MASH_RSYNC_FALLBACK").is_ok() {
+        opts.prefer_native = false;
+    }
+
     let mut on_line = |line: &str| -> bool {
         if cancel_requested() {
             return false;
@@ -960,7 +965,7 @@ fn rsync_with_progress(ctx: &FlashContext, src: &Path, dst: &Path, label: &str) 
     };
 
     ctx.hal
-        .rsync_stream_stdout(src, dst, &RsyncOptions::progress2_archive(), &mut on_line)
+        .rsync_stream_stdout(src, dst, &opts, &mut on_line)
         .map_err(anyhow::Error::new)
         .with_context(|| format!("rsync failed for {}", label))?;
     Ok(())
@@ -969,8 +974,12 @@ fn rsync_with_progress(ctx: &FlashContext, src: &Path, dst: &Path, label: &str) 
 fn rsync_vfat_safe(ctx: &FlashContext, src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
     let mut on_line = |_line: &str| -> bool { true };
+    let mut opts = RsyncOptions::vfat_safe();
+    if std::env::var("MASH_RSYNC_FALLBACK").is_ok() {
+        opts.prefer_native = false;
+    }
     ctx.hal
-        .rsync_stream_stdout(src, dst, &RsyncOptions::vfat_safe(), &mut on_line)
+        .rsync_stream_stdout(src, dst, &opts, &mut on_line)
         .map_err(anyhow::Error::new)
 }
 

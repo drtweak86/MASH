@@ -1746,6 +1746,7 @@ dependencies = [
  "nix 0.29.0",
  "tempfile",
  "wait-timeout",
+ "walkdir",
  "xz2",
 ]
 
