@@ -106,7 +106,7 @@ pub struct FlashConfig {
     pub efi_size: String,
     pub boot_size: String,
     pub root_end: String,
-    /// Stable identifier for the selected disk (wwn/serial fallback).
+    /// Stable identifier for the selected disk (wwn/serial only).
     pub disk_stable_id: Option<String>,
     pub partition_approval_mode: PartitionApprovalMode,
 }

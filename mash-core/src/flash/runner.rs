@@ -1655,20 +1655,35 @@ fn show_lsblk(hal: &dyn InstallerHal, disk: &str) -> Result<()> {
 }
 
 fn verify_target_disk(ctx: &FlashContext) -> Result<()> {
-    let Some(expected) = ctx.disk_stable_id.as_ref() else {
-        return Ok(()); // No stored identity; retain existing behavior.
+    verify_disk_identity(
+        ctx.disk_stable_id.as_ref(),
+        current_disk_stable_id(&ctx.disk)?,
+        &ctx.disk,
+    )
+}
+
+fn verify_disk_identity(
+    expected: Option<&String>,
+    current: Option<String>,
+    disk: &str,
+) -> Result<()> {
+    let Some(expected) = expected else {
+        anyhow::bail!(
+            "Disk identity unavailable (no WWN/serial recorded). Reselect the target disk to capture a stable hardware ID."
+        );
     };
-    let current = current_disk_stable_id(&ctx.disk)?;
-    if let Some(current_id) = current {
-        if &current_id != expected {
-            anyhow::bail!(
-                "Target disk identity mismatch. Expected {}, found {}. Aborting to avoid flashing the wrong disk.",
-                expected,
-                current_id
-            );
-        }
-    } else {
-        anyhow::bail!("Unable to verify target disk identity for {}.", ctx.disk);
+    let Some(current_id) = current else {
+        anyhow::bail!(
+            "Unable to verify target disk identity for {} (no WWN/serial).",
+            disk
+        );
+    };
+    if &current_id != expected {
+        anyhow::bail!(
+            "Target disk identity mismatch. Expected hardware ID {}, found {}. Fallback identifiers are rejected to avoid flashing the wrong disk.",
+            expected,
+            current_id
+        );
     }
     Ok(())
 }
@@ -1679,26 +1694,26 @@ fn current_disk_stable_id(disk: &str) -> Result<Option<String>> {
     let devices = mash_hal::sysfs::block::scan_block_devices()?;
     for dev in devices {
         if dev.dev_path == normalized_path {
-            return Ok(Some(stable_id_for(&dev)));
+            return Ok(stable_disk_id_for(&dev));
         }
     }
     Ok(None)
 }
 
-fn stable_id_for(dev: &mash_hal::sysfs::block::BlockDeviceInfo) -> String {
-    if let Some(wwn) = &dev.wwn {
-        return format!("wwn:{}", wwn);
+/// Preferred stable disk identifier used for selection + reverify.
+/// Returns None when no WWN/serial is available (callers must block or prompt).
+pub fn stable_disk_id(wwn: Option<&str>, serial: Option<&str>) -> Option<String> {
+    if let Some(wwn) = wwn.filter(|s| !s.is_empty()) {
+        return Some(format!("wwn:{}", wwn));
     }
-    if let Some(serial) = &dev.serial {
-        return format!("serial:{}", serial);
+    if let Some(serial) = serial.filter(|s| !s.is_empty()) {
+        return Some(format!("serial:{}", serial));
     }
-    let transport = mash_hal::sysfs::block::detect_transport_type(&dev.name, &dev.sysfs_path);
-    format!(
-        "fallback:{}:{}:{:?}",
-        dev.dev_path.display(),
-        dev.size_bytes,
-        transport
-    )
+    None
+}
+
+pub fn stable_disk_id_for(dev: &mash_hal::sysfs::block::BlockDeviceInfo) -> Option<String> {
+    stable_disk_id(dev.wwn.as_deref(), dev.serial.as_deref())
 }
 
 #[cfg(test)]
@@ -1738,8 +1753,8 @@ mod tests {
     }
 
     #[test]
-    fn stable_id_prefers_wwn_then_serial_then_fallback() {
-        use mash_hal::sysfs::block::{BlockDeviceInfo, TransportType};
+    fn stable_id_prefers_wwn_then_serial_then_none() {
+        use mash_hal::sysfs::block::BlockDeviceInfo;
         let mut info = BlockDeviceInfo {
             name: "sda".to_string(),
             dev_path: PathBuf::from("/dev/sda"),
@@ -1752,29 +1767,44 @@ mod tests {
             removable: false,
         };
         assert_eq!(
-            stable_id_for(&info),
-            "wwn:5000cca123".to_string(),
+            stable_disk_id_for(&info),
+            Some("wwn:5000cca123".to_string()),
             "wwn wins"
         );
 
         info.wwn = None;
         info.serial = Some("ABC123".to_string());
         assert_eq!(
-            stable_id_for(&info),
-            "serial:ABC123".to_string(),
+            stable_disk_id_for(&info),
+            Some("serial:ABC123".to_string()),
             "serial falls back when no wwn"
         );
 
         info.serial = None;
-        let fallback = stable_id_for(&info);
+        let fallback = stable_disk_id_for(&info);
+        assert!(fallback.is_none(), "no stable id without wwn/serial");
+    }
+
+    #[test]
+    fn verify_disk_identity_passes_on_match() {
+        let expected = "wwn:123".to_string();
+        assert!(super::verify_disk_identity(
+            Some(&expected),
+            Some("wwn:123".to_string()),
+            "/dev/sda"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn verify_disk_identity_fails_on_mismatch() {
+        let expected = "wwn:123".to_string();
+        let err =
+            super::verify_disk_identity(Some(&expected), Some("wwn:999".to_string()), "/dev/sda")
+                .unwrap_err();
         assert!(
-            fallback.starts_with("fallback:/dev/sda:1000000"),
-            "fallback includes path and size"
-        );
-        // Ensure transport hint is stable.
-        assert!(
-            fallback.contains(&format!("{:?}", TransportType::Scsi)),
-            "transport hint included"
+            err.to_string().contains("mismatch"),
+            "expected mismatch error"
         );
     }
 }
