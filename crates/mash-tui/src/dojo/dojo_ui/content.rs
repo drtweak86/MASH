@@ -198,7 +198,16 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
                     items.push("".to_string());
                 }
 
-                items.push(format!("Input: {}", app.wipe_confirmation));
+                let required_text = if is_boot_disk {
+                    "DESTROY BOOT DISK"
+                } else {
+                    "DESTROY"
+                };
+                let (display, progress, total) =
+                    confirmation_progress(required_text, &app.wipe_confirmation);
+                items.push(format!("Required: {}", required_text));
+                items.push(format!("Typed   : {}", display));
+                items.push(format!("Progress: {}/{}", progress, total));
             } else {
                 items.push("No disk selected.".to_string());
             }
@@ -703,7 +712,11 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
             items.push("  Esc — Cancel and go back".to_string());
             items.push("  ? — Help".to_string());
             items.push("".to_string());
-            items.push(format!("Input: {}", app.safe_mode_disarm_input));
+            let (display, progress, total) =
+                confirmation_progress("DESTROY", &app.safe_mode_disarm_input);
+            items.push("Required: DESTROY".to_string());
+            items.push(format!("Typed   : {}", display));
+            items.push(format!("Progress: {}/{}", progress, total));
             if let Some(error) = &app.error_message {
                 items.push(format!("❌ {}", error));
             }
@@ -814,6 +827,16 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
     }
 
     items
+}
+
+fn confirmation_progress(required: &str, typed: &str) -> (String, usize, usize) {
+    let total = required.chars().count();
+    let typed_normalized: String = typed.chars().take(total).collect();
+    let progress = typed_normalized.chars().count().min(total);
+    let remaining = total.saturating_sub(progress);
+    let mut display = typed_normalized;
+    display.push_str(&"_".repeat(remaining));
+    (display, progress, total)
 }
 
 fn push_options(
