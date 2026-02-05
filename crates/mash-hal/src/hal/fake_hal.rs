@@ -120,6 +120,26 @@ pub struct FakeHal {
 }
 
 impl FakeHal {
+    fn with_state<R>(&self, f: impl FnOnce(&mut FakeHalState) -> R) -> R {
+        match self.state.lock() {
+            Ok(mut guard) => f(&mut guard),
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                f(&mut guard)
+            }
+        }
+    }
+
+    fn with_state_ref<R>(&self, f: impl FnOnce(&FakeHalState) -> R) -> R {
+        match self.state.lock() {
+            Ok(guard) => f(&guard),
+            Err(poisoned) => {
+                let guard = poisoned.into_inner();
+                f(&guard)
+            }
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(FakeHalState::default())),
@@ -128,58 +148,64 @@ impl FakeHal {
 
     /// Configure a deterministic failure for the next operation.
     pub fn set_failure(&self, failure: InjectedFailure) {
-        self.state.lock().unwrap().failure = Some(failure);
+        self.with_state(|state| state.failure = Some(failure));
     }
 
     /// Get all recorded operations.
     pub fn operations(&self) -> Vec<Operation> {
-        self.state.lock().unwrap().operations.clone()
+        self.with_state_ref(|state| state.operations.clone())
     }
 
     /// Get the number of operations recorded.
     pub fn operation_count(&self) -> usize {
-        self.state.lock().unwrap().operations.len()
+        self.with_state_ref(|state| state.operations.len())
     }
 
     /// Check if a specific operation was recorded.
     pub fn has_operation(&self, check: impl Fn(&Operation) -> bool) -> bool {
-        self.state.lock().unwrap().operations.iter().any(check)
+        self.with_state_ref(|state| state.operations.iter().any(check))
     }
 
     /// Clear all recorded operations.
     pub fn clear(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.operations.clear();
-        state.mounted_paths.clear();
-        state.failure = None;
+        self.with_state(|state| {
+            state.operations.clear();
+            state.mounted_paths.clear();
+            state.failure = None;
+        });
     }
 
     /// Simulate a mount by adding it to the mounted set.
     fn record_mount(&self, target: PathBuf) {
-        self.state.lock().unwrap().mounted_paths.insert(target);
+        self.with_state(|state| {
+            state.mounted_paths.insert(target);
+        });
     }
 
     /// Simulate an unmount by removing it from the mounted set.
     fn record_unmount(&self, target: &Path) {
-        self.state.lock().unwrap().mounted_paths.remove(target);
+        self.with_state(|state| {
+            state.mounted_paths.remove(target);
+        });
     }
 
     fn record_operation(&self, op: Operation) {
-        self.state.lock().unwrap().operations.push(op);
+        self.with_state(|state| state.operations.push(op));
     }
 
     fn take_failure(&self) -> Option<InjectedFailure> {
-        self.state.lock().unwrap().failure.take()
+        self.with_state(|state| state.failure.take())
     }
 
     fn take_failure_if(&self, pred: impl Fn(&InjectedFailure) -> bool) -> bool {
-        let mut state = self.state.lock().unwrap();
-        if state.failure.as_ref().is_some_and(&pred) {
-            state.failure.take();
-            true
-        } else {
-            false
-        }
+        self.with_state(|state| {
+            if state.failure.as_ref().is_some_and(&pred) {
+                state.failure.take();
+                true
+            } else {
+                false
+            }
+        })
     }
 }
 
@@ -236,7 +262,9 @@ impl ProcessOps for FakeHal {
         #[cfg(unix)]
         let status = std::process::ExitStatus::from_raw(0);
         #[cfg(not(unix))]
-        let status = std::process::Command::new("true").status().unwrap();
+        let status = std::process::Command::new("true")
+            .status()
+            .map_err(HalError::Io)?;
 
         Ok(Output {
             status,
@@ -334,7 +362,7 @@ impl MountOps for FakeHal {
     }
 
     fn is_mounted(&self, path: &Path) -> HalResult<bool> {
-        let is_mounted = self.state.lock().unwrap().mounted_paths.contains(path);
+        let is_mounted = self.with_state_ref(|state| state.mounted_paths.contains(path));
         log::info!("FAKE HAL: is_mounted({}) = {}", path.display(), is_mounted);
         Ok(is_mounted)
     }
