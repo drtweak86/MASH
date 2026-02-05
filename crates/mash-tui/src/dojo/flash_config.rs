@@ -1,4 +1,5 @@
 use mash_core::cli::PartitionScheme;
+use mash_core::flash::PartitionApprovalMode;
 use mash_core::locale::LocaleConfig;
 use std::path::PathBuf;
 use std::sync::mpsc::SyncSender;
@@ -177,6 +178,7 @@ pub struct TuiFlashConfig {
     pub image_source_selection: ImageSource, // New field to indicate image source
     pub image_version: String,        // New field for selected Fedora version
     pub image_edition: String,        // New field for selected Fedora edition
+    pub partition_approval_mode: PartitionApprovalMode,
     /// Best-effort target disk identity (for reporting).
     pub disk_identity: Option<mash_core::install_report::DiskIdentityReport>,
     /// Human label for reporting / completion messaging.
@@ -211,6 +213,7 @@ impl TryFrom<TuiFlashConfig> for mash_core::flash::FlashConfig {
             efi_size: cfg.efi_size,
             boot_size: cfg.boot_size,
             root_end: cfg.root_end,
+            partition_approval_mode: cfg.partition_approval_mode,
         };
         flash.validate()?;
         Ok(flash)

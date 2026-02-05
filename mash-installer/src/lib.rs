@@ -117,6 +117,7 @@ pub fn run() -> anyhow::Result<()> {
                 efi_size: efi_size.clone(),
                 boot_size: boot_size.clone(),
                 root_end: root_end.clone(),
+                partition_approval_mode: mash_core::flash::PartitionApprovalMode::Global,
             };
 
             mash_core::flash::run_with_progress(&cli_flash_config, *yes_i_know)?;

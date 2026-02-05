@@ -6,6 +6,7 @@ use crate::progress::ProgressState;
 use clap::ValueEnum;
 use crossterm::event::{KeyCode, KeyEvent};
 use mash_core::cli::PartitionScheme;
+use mash_core::flash::PartitionApprovalMode;
 use mash_core::locale::{LocaleConfig, LOCALES};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -77,6 +78,7 @@ pub struct App {
     pub downloaded_fedora: bool,
     pub downloaded_uefi: bool,
     pub destructive_armed: bool,
+    pub partition_approval_mode: PartitionApprovalMode,
     pub flash_start_time: Option<Instant>,
     pub is_running: bool,
     pub status_message: String,
@@ -349,6 +351,7 @@ impl App {
             downloaded_fedora: false,
             downloaded_uefi: false,
             destructive_armed: false,
+            partition_approval_mode: PartitionApprovalMode::Global,
             flash_start_time: None,
             is_running: false,
             status_message: "👋 Welcome to MASH!".to_string(),
@@ -1653,6 +1656,7 @@ impl App {
                 .map(|v| v.label.clone())
                 .unwrap_or_else(|| "Unknown".to_string()),
             typed_execute_confirmation: self.execute_confirmation_confirmed,
+            partition_approval_mode: self.partition_approval_mode,
         })
     }
 }
@@ -2441,5 +2445,504 @@ mod tests {
         app.adjust_disk_index(-1);
         assert_eq!(app.disk_index, 3);
         assert!(!app.disks[app.disk_index].boot_confidence.is_boot());
+    }
+
+    // =========================================================================
+    // Black-box State Transition Tests
+    // =========================================================================
+    //
+    // These tests validate the Dojo TUI state machine as a black box,
+    // focusing on observable state transitions without internal knowledge.
+
+    /// Complete workflow: Welcome → ... → Confirmation
+    #[test]
+    fn blackbox_full_workflow_welcome_to_confirmation() {
+        let mut app = App::new();
+        assert_eq!(app.current_step_type, InstallStepType::Welcome);
+
+        // Welcome → ImageSelection
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::ImageSelection);
+
+        // ImageSelection → VariantSelection
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::VariantSelection);
+
+        // VariantSelection → DownloadSourceSelection
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(
+            app.current_step_type,
+            InstallStepType::DownloadSourceSelection
+        );
+
+        // DownloadSourceSelection → DiskSelection
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::DiskSelection);
+
+        // DiskSelection → DiskConfirmation
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::DiskConfirmation);
+
+        // DiskConfirmation requires "DESTROY" → BackupConfirmation
+        app.wipe_confirmation = "DESTROY".to_string();
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::BackupConfirmation);
+
+        // BackupConfirmation → PartitionScheme (requires backup_confirmed)
+        app.backup_confirmed = true;
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::PartitionScheme);
+
+        // PartitionScheme → PartitionLayout
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::PartitionLayout);
+
+        // PartitionLayout (manual) → PartitionCustomize
+        app.layout_selected = app.partition_layouts.len();
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::PartitionCustomize);
+
+        // PartitionCustomize → EfiImage
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::EfiImage);
+
+        // EfiImage → LocaleSelection
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::LocaleSelection);
+
+        // LocaleSelection → Options
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::Options);
+
+        // Options → PlanReview
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::PlanReview);
+
+        // PlanReview → Confirmation
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::Confirmation);
+    }
+
+    /// SAFE → ARMED state transition via full arming sequence.
+    #[test]
+    fn blackbox_safe_to_armed_requires_full_sequence() {
+        let mut app = App::new();
+        app.dry_run = false;
+        app.destructive_armed = false;
+
+        assert!(!app.destructive_armed, "App should start in SAFE MODE");
+        app.current_step_type = InstallStepType::Confirmation;
+
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(
+            app.current_step_type,
+            InstallStepType::ExecuteConfirmationGate
+        );
+        assert!(!app.destructive_armed);
+
+        for ch in "I UNDERSTAND THIS WILL ERASE THE SELECTED DISK".chars() {
+            app.handle_input(key(KeyCode::Char(ch)));
+        }
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::DisarmSafeMode);
+        assert!(!app.destructive_armed);
+
+        for ch in "DESTROY".chars() {
+            app.handle_input(key(KeyCode::Char(ch)));
+        }
+        let result = app.handle_input(key(KeyCode::Enter));
+        assert!(app.destructive_armed, "Should now be in ARMED MODE");
+        assert_eq!(app.current_step_type, InstallStepType::Flashing);
+        assert!(matches!(result, InputResult::StartFlash(_)));
+    }
+
+    /// Dry-run mode bypasses the SAFE→ARMED gate.
+    #[test]
+    fn blackbox_dry_run_bypasses_arming_sequence() {
+        let mut app = App::new();
+        app.dry_run = true;
+        app.destructive_armed = false;
+        app.current_step_type = InstallStepType::Confirmation;
+
+        let result = app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::Flashing);
+        assert!(matches!(result, InputResult::StartFlash(_)));
+    }
+
+    /// Back navigation via Esc works from configuration steps.
+    #[test]
+    fn blackbox_esc_navigates_back() {
+        let mut app = App::new();
+
+        app.current_step_type = InstallStepType::ImageSelection;
+        app.handle_input(key(KeyCode::Esc));
+        assert_eq!(app.current_step_type, InstallStepType::Welcome);
+
+        app.current_step_type = InstallStepType::VariantSelection;
+        app.handle_input(key(KeyCode::Esc));
+        assert_eq!(app.current_step_type, InstallStepType::ImageSelection);
+
+        app.current_step_type = InstallStepType::DiskSelection;
+        app.handle_input(key(KeyCode::Esc));
+        assert_eq!(
+            app.current_step_type,
+            InstallStepType::DownloadSourceSelection
+        );
+
+        app.current_step_type = InstallStepType::PartitionScheme;
+        app.handle_input(key(KeyCode::Esc));
+        assert_eq!(app.current_step_type, InstallStepType::BackupConfirmation);
+
+        app.current_step_type = InstallStepType::Confirmation;
+        app.handle_input(key(KeyCode::Esc));
+        assert_eq!(app.current_step_type, InstallStepType::PlanReview);
+    }
+
+    /// Esc from Welcome quits the application.
+    #[test]
+    fn blackbox_esc_from_welcome_quits() {
+        let mut app = App::new();
+        app.current_step_type = InstallStepType::Welcome;
+
+        let result = app.handle_input(key(KeyCode::Esc));
+        assert!(matches!(result, InputResult::Quit));
+    }
+
+    /// Esc during Flashing requests cancellation.
+    #[test]
+    fn blackbox_esc_during_flashing_requests_cancel() {
+        let mut app = App::new();
+        app.dry_run = true;
+        app.destructive_armed = true;
+        app.is_running = true;
+        app.current_step_type = InstallStepType::Flashing;
+
+        app.handle_input(key(KeyCode::Esc));
+        assert!(app
+            .cancel_requested
+            .load(std::sync::atomic::Ordering::Relaxed));
+        assert!(app.status_message.contains("Cancel"));
+    }
+
+    /// No dead-end steps: config steps have back path or quit.
+    #[test]
+    fn blackbox_no_dead_end_steps() {
+        let app = App::new();
+        let config_steps = [
+            InstallStepType::Welcome,
+            InstallStepType::ImageSelection,
+            InstallStepType::VariantSelection,
+            InstallStepType::DownloadSourceSelection,
+            InstallStepType::DiskSelection,
+            InstallStepType::DiskConfirmation,
+            InstallStepType::BackupConfirmation,
+            InstallStepType::PartitionScheme,
+            InstallStepType::PartitionLayout,
+            InstallStepType::PartitionCustomize,
+            InstallStepType::EfiImage,
+            InstallStepType::LocaleSelection,
+            InstallStepType::Options,
+            InstallStepType::PlanReview,
+            InstallStepType::Confirmation,
+        ];
+
+        for step in config_steps {
+            let can_go_back = app.prev_step_for(step).is_some();
+            let can_quit = step == InstallStepType::Welcome;
+            assert!(can_go_back || can_quit, "Step {:?} has no escape", step);
+        }
+    }
+
+    /// Safety gate navigation behavior.
+    #[test]
+    fn blackbox_safety_gates_navigation() {
+        let mut app = App::new();
+
+        // ExecuteConfirmationGate blocks Esc
+        app.current_step_type = InstallStepType::ExecuteConfirmationGate;
+        app.handle_input(key(KeyCode::Esc));
+        assert_eq!(
+            app.current_step_type,
+            InstallStepType::ExecuteConfirmationGate
+        );
+
+        // DisarmSafeMode allows Esc back to Confirmation
+        app.current_step_type = InstallStepType::DisarmSafeMode;
+        app.handle_input(key(KeyCode::Esc));
+        assert_eq!(app.current_step_type, InstallStepType::Confirmation);
+    }
+
+    /// Disk → Partition → Review workflow.
+    #[test]
+    fn blackbox_disk_partition_review_workflow() {
+        let mut app = App::new();
+        app.current_step_type = InstallStepType::DiskSelection;
+
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::DiskConfirmation);
+
+        app.wipe_confirmation = "DESTROY".to_string();
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::BackupConfirmation);
+
+        app.backup_confirmed = true;
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::PartitionScheme);
+
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::PartitionLayout);
+
+        app.layout_selected = 0;
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::EfiImage);
+
+        app.handle_input(key(KeyCode::Enter));
+        app.handle_input(key(KeyCode::Enter));
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::PlanReview);
+
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::Confirmation);
+    }
+
+    /// Partial DESTROY text doesn't advance.
+    #[test]
+    fn blackbox_disk_confirmation_rejects_partial_destroy() {
+        let mut app = App::new();
+        app.current_step_type = InstallStepType::DiskConfirmation;
+
+        for ch in "DEST".chars() {
+            app.handle_input(key(KeyCode::Char(ch)));
+        }
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::DiskConfirmation);
+        assert!(app.error_message.is_some());
+    }
+
+    /// Backspace works in confirmation inputs.
+    #[test]
+    fn blackbox_backspace_in_confirmation_inputs() {
+        let mut app = App::new();
+        app.current_step_type = InstallStepType::DiskConfirmation;
+
+        for ch in "DESTROYXXX".chars() {
+            app.handle_input(key(KeyCode::Char(ch)));
+        }
+        assert_eq!(app.wipe_confirmation, "DESTROYXXX");
+
+        app.handle_input(key(KeyCode::Backspace));
+        app.handle_input(key(KeyCode::Backspace));
+        app.handle_input(key(KeyCode::Backspace));
+        assert_eq!(app.wipe_confirmation, "DESTROY");
+
+        app.handle_input(key(KeyCode::Enter));
+        assert_eq!(app.current_step_type, InstallStepType::BackupConfirmation);
+    }
+
+    /// Help overlay can be toggled with '?' key.
+    #[test]
+    fn blackbox_help_overlay_toggle() {
+        let mut app = App::new();
+        assert!(!app.help_open);
+
+        app.handle_input(key(KeyCode::Char('?')));
+        assert!(app.help_open);
+
+        app.handle_input(key(KeyCode::Char('?')));
+        assert!(!app.help_open);
+
+        app.handle_input(key(KeyCode::Char('?')));
+        assert!(app.help_open);
+        app.handle_input(key(KeyCode::Esc));
+        assert!(!app.help_open);
+    }
+
+    // =========================================================================
+    // UX Contract Enforcement Tests (docs/UX_CONTRACT.md)
+    // =========================================================================
+    //
+    // These tests enforce the key binding contract defined in UX_CONTRACT.md.
+    // If any test fails, the UX contract has been violated.
+
+    /// UX Contract: Arrow keys and j/k move cursor without selecting.
+    /// Contract: ↑/↓ or k/j = move cursor only
+    #[test]
+    fn ux_contract_arrow_and_jk_move_cursor() {
+        let mut app = App::new();
+
+        // Test in PartitionScheme step (list with multiple items)
+        app.current_step_type = InstallStepType::PartitionScheme;
+        let initial_cursor = app.scheme_index;
+        let initial_selected = app.scheme_selected;
+
+        // Arrow Down moves cursor
+        app.handle_input(key(KeyCode::Down));
+        assert_ne!(app.scheme_index, initial_cursor, "Down should move cursor");
+        assert_eq!(
+            app.scheme_selected, initial_selected,
+            "Down should NOT change selection"
+        );
+
+        // Reset cursor
+        app.scheme_index = 0;
+
+        // j (vi-style down) moves cursor
+        app.handle_input(key(KeyCode::Char('j')));
+        assert_ne!(app.scheme_index, 0, "j should move cursor down");
+        assert_eq!(
+            app.scheme_selected, initial_selected,
+            "j should NOT change selection"
+        );
+
+        // Arrow Up moves cursor
+        let before_up = app.scheme_index;
+        app.handle_input(key(KeyCode::Up));
+        assert_ne!(app.scheme_index, before_up, "Up should move cursor");
+        assert_eq!(
+            app.scheme_selected, initial_selected,
+            "Up should NOT change selection"
+        );
+
+        // k (vi-style up) moves cursor
+        app.scheme_index = 1;
+        app.handle_input(key(KeyCode::Char('k')));
+        assert_eq!(app.scheme_index, 0, "k should move cursor up");
+        assert_eq!(
+            app.scheme_selected, initial_selected,
+            "k should NOT change selection"
+        );
+    }
+
+    /// UX Contract: Space selects the highlighted item.
+    /// Contract: Space = select current item
+    #[test]
+    fn ux_contract_space_selects_item() {
+        let mut app = App::new();
+
+        // Test in PartitionScheme step
+        app.current_step_type = InstallStepType::PartitionScheme;
+        app.scheme_index = 1; // Cursor on second item
+        app.scheme_selected = 0; // First item selected
+
+        // Space should select cursor position
+        app.handle_input(key(KeyCode::Char(' ')));
+        assert_eq!(
+            app.scheme_selected, 1,
+            "Space should select the item at cursor"
+        );
+
+        // Test toggle behavior in Options step
+        app.current_step_type = InstallStepType::Options;
+        let before_toggle = app.options[0].enabled;
+        app.options_index = 0;
+
+        app.handle_input(key(KeyCode::Char(' ')));
+        assert_ne!(
+            app.options[0].enabled, before_toggle,
+            "Space should toggle options"
+        );
+
+        // Toggle back
+        app.handle_input(key(KeyCode::Char(' ')));
+        assert_eq!(
+            app.options[0].enabled, before_toggle,
+            "Space should toggle options back"
+        );
+    }
+
+    /// UX Contract: Enter and Tab advance the workflow.
+    /// Contract: Enter/Tab = proceed to next step
+    #[test]
+    fn ux_contract_enter_and_tab_advance() {
+        // Test Enter advances
+        let mut app1 = App::new();
+        app1.current_step_type = InstallStepType::Welcome;
+        app1.handle_input(key(KeyCode::Enter));
+        assert_eq!(
+            app1.current_step_type,
+            InstallStepType::ImageSelection,
+            "Enter should advance from Welcome"
+        );
+
+        // Test Tab advances (same behavior as Enter)
+        let mut app2 = App::new();
+        app2.current_step_type = InstallStepType::Welcome;
+        app2.handle_input(key(KeyCode::Tab));
+        assert_eq!(
+            app2.current_step_type,
+            InstallStepType::ImageSelection,
+            "Tab should advance from Welcome (same as Enter)"
+        );
+
+        // Both should behave identically in other steps too
+        app1.handle_input(key(KeyCode::Enter));
+        app2.handle_input(key(KeyCode::Tab));
+        assert_eq!(
+            app1.current_step_type, app2.current_step_type,
+            "Enter and Tab must behave identically"
+        );
+    }
+
+    /// UX Contract: Esc navigates back or quits.
+    /// Contract: Esc = back/quit
+    #[test]
+    fn ux_contract_esc_navigates_back_or_quits() {
+        let mut app = App::new();
+
+        // Esc from Welcome should quit
+        app.current_step_type = InstallStepType::Welcome;
+        let result = app.handle_input(key(KeyCode::Esc));
+        assert!(
+            matches!(result, InputResult::Quit),
+            "Esc from Welcome must quit"
+        );
+
+        // Esc from other steps should go back
+        app.current_step_type = InstallStepType::ImageSelection;
+        app.handle_input(key(KeyCode::Esc));
+        assert_eq!(
+            app.current_step_type,
+            InstallStepType::Welcome,
+            "Esc from ImageSelection must go to Welcome"
+        );
+
+        // Esc from Confirmation should go to PlanReview
+        app.current_step_type = InstallStepType::Confirmation;
+        app.handle_input(key(KeyCode::Esc));
+        assert_eq!(
+            app.current_step_type,
+            InstallStepType::PlanReview,
+            "Esc from Confirmation must go to PlanReview"
+        );
+    }
+
+    /// UX Contract: ? toggles help overlay.
+    /// Contract: ? = toggle help
+    #[test]
+    fn ux_contract_question_mark_toggles_help() {
+        let mut app = App::new();
+        assert!(!app.help_open, "Help should start closed");
+
+        // ? opens help
+        app.handle_input(key(KeyCode::Char('?')));
+        assert!(app.help_open, "? must open help overlay");
+
+        // While help is open, other inputs should be ignored (except close)
+        let before_step = app.current_step_type;
+        app.handle_input(key(KeyCode::Enter)); // Should be ignored
+        assert_eq!(
+            app.current_step_type, before_step,
+            "Input should be blocked while help is open"
+        );
+        assert!(app.help_open, "Help should still be open");
+
+        // ? closes help
+        app.handle_input(key(KeyCode::Char('?')));
+        assert!(!app.help_open, "? must close help overlay");
+
+        // Esc also closes help
+        app.help_open = true;
+        app.handle_input(key(KeyCode::Esc));
+        assert!(!app.help_open, "Esc must close help overlay");
     }
 }
