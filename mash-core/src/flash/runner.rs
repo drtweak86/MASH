@@ -69,6 +69,7 @@ pub fn run(
         efi_size: efi_size.to_string(),
         boot_size: boot_size.to_string(),
         root_end: root_end.to_string(),
+        partition_approval_mode: crate::flash::approvals::PartitionApprovalMode::Global,
     };
 
     run_with_progress(

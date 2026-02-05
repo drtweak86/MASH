@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 
+use super::approvals::PartitionApprovalMode;
 use crate::cli::PartitionScheme;
 use crate::config_states::{HasRunMode, ValidateConfig};
 use crate::install_report::{DiskIdentityReport, InstallReportWriter};
@@ -104,6 +105,7 @@ pub struct FlashConfig {
     pub efi_size: String,
     pub boot_size: String,
     pub root_end: String,
+    pub partition_approval_mode: PartitionApprovalMode,
 }
 
 impl FlashConfig {

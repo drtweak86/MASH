@@ -1,5 +1,5 @@
 //! Partition approval scaffolding (design stubs, no behavior change).
-use crate::flash::config::FlashConfig;
+use crate::{cli::PartitionScheme, flash::config::FlashConfig};
 use anyhow::Result;
 use mash_hal::PartedOp;
 
@@ -87,15 +87,16 @@ pub fn apply_approvals(plan: Vec<PartedOp>, _approvals: &[ApprovalState]) -> Res
 
 fn plan_ops(cfg: &FlashConfig) -> Vec<PartedOp> {
     match cfg.scheme {
-        mash_core::cli::PartitionScheme::Mbr => plan_mbr(cfg),
-        mash_core::cli::PartitionScheme::Gpt => plan_gpt(cfg),
+        PartitionScheme::Mbr => plan_mbr(cfg),
+        PartitionScheme::Gpt => plan_gpt(cfg),
     }
 }
 
 fn plan_mbr(cfg: &FlashConfig) -> Vec<PartedOp> {
     let boot_end = format!(
         "{}MiB",
-        parse_size_to_mib(&cfg.efi_size).unwrap_or(0) + parse_size_to_mib(&cfg.boot_size).unwrap_or(0)
+        parse_size_to_mib(&cfg.efi_size).unwrap_or(0)
+            + parse_size_to_mib(&cfg.boot_size).unwrap_or(0)
     );
     vec![
         PartedOp::MkLabel {
@@ -137,7 +138,8 @@ fn plan_mbr(cfg: &FlashConfig) -> Vec<PartedOp> {
 fn plan_gpt(cfg: &FlashConfig) -> Vec<PartedOp> {
     let boot_end = format!(
         "{}MiB",
-        parse_size_to_mib(&cfg.efi_size).unwrap_or(0) + parse_size_to_mib(&cfg.boot_size).unwrap_or(0)
+        parse_size_to_mib(&cfg.efi_size).unwrap_or(0)
+            + parse_size_to_mib(&cfg.boot_size).unwrap_or(0)
     );
     vec![
         PartedOp::MkLabel {
@@ -205,8 +207,8 @@ fn parse_size_to_mib(raw: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::PartitionScheme;
     use crate::flash::config::FlashConfig;
-    use mash_core::cli::PartitionScheme;
     use std::path::PathBuf;
 
     fn base_config(scheme: PartitionScheme) -> FlashConfig {

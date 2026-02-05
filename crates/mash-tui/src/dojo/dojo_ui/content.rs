@@ -1,6 +1,7 @@
 use super::super::dojo_app::{App, CustomizeField, DiskOption, InstallStepType};
 use super::super::{data_sources, flash_config};
 use crate::progress::{Phase, ProgressState};
+use mash_core::flash::PartitionApprovalMode;
 use std::path::PathBuf;
 
 pub(super) fn build_info_panel(app: &App, progress_state: &ProgressState) -> String {
@@ -70,6 +71,10 @@ pub(super) fn build_dojo_lines(app: &App) -> Vec<String> {
     items.push(format!("🧭 Step: {}", current_step_title));
     let progress_state = app.progress_state_snapshot();
 
+    if app.partition_approval_mode != PartitionApprovalMode::Global {
+        items.push("⚠️ Approvals not implemented (stub only)".to_string());
+        items.push("".to_string());
+    }
     match app.current_step_type {
         InstallStepType::Welcome => {
             items.push("👋 Welcome to MASH: a safe, guided installer.".to_string());
