@@ -60,10 +60,6 @@ pub struct Cli {
     /// Developer mode - allows selecting the source/boot disk (dangerous; for debugging only)
     #[arg(long, global = true)]
     pub developer_mode: bool,
-
-    /// Write logs to a file (TUI-safe; defaults to stderr when unavailable)
-    #[arg(long, global = true)]
-    pub log_file: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
