@@ -82,7 +82,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "dist/mash-installer-${{ matrix.target }}"
-          cp "mash-installer/target/${{ matrix.target }}/release/mash" \
+          cp "target/${{ matrix.target }}/release/mash" \
              "dist/mash-installer-${{ matrix.target }}/mash-${{ matrix.target }}"
           chmod +x "dist/mash-installer-${{ matrix.target }}/mash-${{ matrix.target }}"
 
