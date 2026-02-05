@@ -276,7 +276,9 @@ impl InstallReportWriter {
                 ProgressUpdate::Complete => {
                     report.ended_at_unix_ms = Some(now_unix_ms());
                 }
-                ProgressUpdate::RsyncProgress { .. } | ProgressUpdate::DiskIo { .. } => {}
+                ProgressUpdate::RsyncProgress { .. }
+                | ProgressUpdate::DecompressProgress { .. }
+                | ProgressUpdate::DiskIo { .. } => {}
             }
         }
         let _ = self.persist();
@@ -412,6 +414,6 @@ mod tests {
         assert_eq!(parsed.report_version, 1);
         assert!(parsed.started_at_unix_ms > 0);
         assert!(parsed.ended_at_unix_ms.is_some());
-        assert!(parsed.phases.contains_key("03_partition"));
+        assert!(parsed.phases.contains_key("04_partition"));
     }
 }

@@ -1,3 +1,6 @@
+use log::info;
+
 fn main() {
-    println!("mash-core placeholder");
+    env_logger::init();
+    info!("mash-core placeholder");
 }
