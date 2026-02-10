@@ -58,6 +58,10 @@ sudo pacman -S parted rsync xz dosfstools e2fsprogs btrfs-progs
 
 ---
 
+## 🧭 Optional OS downloads
+
+Fedora remains the default and most thoroughly tested image for MASH, but curious users can explore other supported OSs. See [docs/OS_IMAGE_LINKS.md](./OS_IMAGE_LINKS.md) for the verified Ubuntu, Manjaro, and Raspberry Pi OS download pages, plus a note about the GitHub Actions link health job that watches those URLs.
+
 ## 🎯 Step 1: Identify Your Target Disk
 
 Connect your SD card or USB drive and identify it:
