@@ -174,6 +174,7 @@ cargo maelstrom --package mash-tui --all-features   # Single package
 - [Deployment](docs/DEPLOYMENT.md) — Packaging and distribution
 - [Releasing](docs/RELEASING.md) — Release workflow and tooling
 - [Development Principles](docs/DOJO.md) — Code philosophy and rules
+- [v1.3.1 Release Notes](docs/v1.3.1-release-notes.md) — Ferrari polish summary
 
 ---
 

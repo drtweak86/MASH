@@ -192,6 +192,10 @@ When in doubt, ask: "Would I trust this tool with my data?"
 
 ---
 
+## Dojo Program Catalogue
+
+The Training Ground entry point now surfaces the curated catalogue described in `docs/dojo/catalogue_content_proposal.md`. Each category highlights a trusted default and a set of alternatives so users can choose intent-driven software without guessing trade-offs. The `v1.3.1` release notes (`docs/v1.3.1-release-notes.md`) capture how this catalogue fits into the larger Dojo narrative.
+
 ## See Also
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — Technical design
